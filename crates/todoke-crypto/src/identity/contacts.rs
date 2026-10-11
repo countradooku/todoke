@@ -2346,6 +2346,92 @@ mod tests {
         Ok(())
     }
 
+    /// Every enum byte, range, and history-kind combination in a stored
+    /// contact is validated; counts that claim more data than remains are
+    /// rejected up front.
+    #[test]
+    fn decode_rejects_invalid_contact_fields() -> TestResult {
+        // Offsets within `count:u32 || contact || revocation set`.
+        const SERIAL: usize = 4 + 32 * 3 + KEM_STATIC_LEN;
+        const ORIGIN: usize = SERIAL + 8;
+        const STATE: usize = ORIGIN + 1;
+        const HISTORY_COUNT: usize = STATE + 1 + 8 + PSK_LEN;
+        const EVENT: usize = HISTORY_COUNT + 1;
+        const KIND: usize = EVENT + 8;
+        const CHANGED: usize = KIND + 1;
+        const EVENT_SERIAL: usize = CHANGED + 1;
+        const PREVIOUS: usize = EVENT_SERIAL + 8 + 32;
+
+        let device = indexed_key(1)?;
+        let mut contacts = BTreeMap::new();
+        contacts.insert(device, fixed_contact(indexed_key(0)?, device, 1)?);
+        let valid = encode(&contacts, &RevocationSet::new()).to_vec();
+        assert_eq!(valid.len(), 4 + CONTACT_FIXED_LEN + HISTORY_LEN + 4);
+        assert_eq!(valid[KIND], 2);
+        let with = |changes: &[(usize, &[u8])]| {
+            let mut bytes = valid.clone();
+            for (offset, value) in changes {
+                bytes[*offset..*offset + value.len()].copy_from_slice(value);
+            }
+            decode(&bytes).map(|_| ())
+        };
+        let malformed = Err(LocalFormatError::Malformed);
+        assert_eq!(with(&[]), Ok(()));
+        assert_eq!(with(&[(SERIAL, &[0; 8])]), malformed);
+        for origin in [0, 3, 0xff] {
+            assert_eq!(with(&[(ORIGIN, &[origin])]), malformed);
+        }
+        assert_eq!(with(&[(ORIGIN, &[2])]), Ok(()));
+        for state in [0, 4, 0xff] {
+            assert_eq!(with(&[(STATE, &[state])]), malformed);
+        }
+        assert_eq!(with(&[(STATE, &[3])]), Ok(()));
+        let too_late = (todoke_proto::time::MAX_UNIX_TIME + 1).to_be_bytes();
+        assert_eq!(with(&[(EVENT, &too_late)]), malformed);
+        assert_eq!(with(&[(EVENT_SERIAL, &[0; 8])]), malformed);
+        // kind, changed, previous: only the defined combinations decode.
+        let nonzero = [0x2c; 32];
+        for (kind, changed, previous, accepted) in [
+            (1, 0, &[0; 32], true),
+            (1, 1, &[0; 32], false),
+            (2, 0, &nonzero, false),
+            (3, 0, &[0; 32], false),
+            (3, 15, &[0; 32], true),
+            (3, 16, &[0; 32], false),
+            (3, 1, &nonzero, false),
+            (4, 0, &nonzero, true),
+            (4, 1, &nonzero, false),
+            (0, 0, &[0; 32], false),
+            (5, 0, &[0; 32], false),
+        ] {
+            let result = with(&[(KIND, &[kind]), (CHANGED, &[changed]), (PREVIOUS, previous)]);
+            assert_eq!(result.is_ok(), accepted, "kind {kind} changed {changed}");
+        }
+        // Counts that claim more data than remains.
+        assert_eq!(decode(&[0, 0, 0, 1]).map(|_| ()), malformed);
+        assert_eq!(with(&[(HISTORY_COUNT, &[5])]), malformed);
+        Ok(())
+    }
+
+    #[test]
+    fn revocation_set_decode_rejects_counts_beyond_the_data() -> TestResult {
+        let root = indexed_key(0)?;
+        let record = unsigned_revoke(&root, 1, 1)?;
+        let records = core::slice::from_ref(&record);
+        let mut bytes = set_bytes(&root, true, records, &[]);
+        assert!(decode_set(&bytes).is_some());
+        // The conflict count claims one record that is not there.
+        let length = bytes.len();
+        bytes[length - 2..].copy_from_slice(&1u16.to_be_bytes());
+        assert!(decode_set(&bytes).is_none());
+        // The record count claims one record that is not there.
+        let mut bytes = set_bytes(&root, true, &[], &[]);
+        bytes.truncate(4 + 32 + 1);
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        assert!(decode_set(&bytes).is_none());
+        Ok(())
+    }
+
     /// Bounds, ordering, and consistency checks of the local revocation-set
     /// format (each case differs from a valid encoding in one respect).
     #[test]

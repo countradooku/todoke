@@ -261,6 +261,41 @@ fn issued_binding_verifies_and_round_trips() -> TestResult {
 }
 
 #[test]
+fn verified_binding_ids_and_unknown_issuer_keys() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let verified = enrolled.bind(1)?;
+    let device = enrolled.store.public_key(&enrolled.device)?;
+    let root = enrolled.store.public_key(&enrolled.root)?;
+    assert_eq!(verified.device_id(), DeviceId::of(&device));
+    assert_eq!(verified.person_id(), PersonId::of(&root));
+    assert_ne!(
+        verified.device_id().as_bytes(),
+        verified.person_id().as_bytes()
+    );
+    // A key handle the store does not hold surfaces as a key store error.
+    let unknown = super::KeyId::from_bytes([0xee; 16]).ok_or("zero key id")?;
+    assert_eq!(
+        issue_device_binding(
+            &enrolled.store,
+            &unknown,
+            &enrolled.device,
+            request(1, 2, 1, T0, T0 + DAY)?
+        ),
+        Err(IssueError::KeyStore(KeyStoreError::UnknownKey))
+    );
+    assert_eq!(
+        issue_device_binding(
+            &enrolled.store,
+            &enrolled.root,
+            &unknown,
+            request(1, 2, 1, T0, T0 + DAY)?
+        ),
+        Err(IssueError::KeyStore(KeyStoreError::UnknownKey))
+    );
+    Ok(())
+}
+
+#[test]
 fn binding_chain_rejects_wrong_root_and_any_tampering() -> TestResult {
     let enrolled = Enrolled::new()?;
     let other = Enrolled::new()?;
