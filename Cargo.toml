@@ -19,6 +19,7 @@ ed25519-dalek = "=3.0.0"
 getrandom = "=0.4.3"
 hex = "=0.4.3"
 libcrux-chacha20poly1305 = "=0.0.10"
+libcrux-curve25519 = "=0.0.9"
 libcrux-ed25519 = "=0.0.10"
 libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
 # Property tests only. 1.12 requires Rust 1.88, above the 1.85 MSRV.

@@ -1069,6 +1069,7 @@ dependencies = [
  "getrandom 0.4.3",
  "hex",
  "libcrux-chacha20poly1305",
+ "libcrux-curve25519",
  "libcrux-ed25519",
  "libcrux-ml-kem",
  "proptest",

@@ -39,7 +39,8 @@ pub fn sealed_envelope(data: &[u8]) -> bool {
 }
 
 /// Ed25519 public-key validation and, for valid keys, binding verification
-/// against that key as a trusted root (key, ML-KEM, and signature checks).
+/// against that key as a trusted root (Ed25519, X25519, ML-KEM, and signature
+/// checks).
 pub fn binding_verification(data: &[u8]) {
     let Some((root, rest)) = data.split_first_chunk::<32>() else {
         return;

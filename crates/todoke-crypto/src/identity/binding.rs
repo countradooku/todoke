@@ -48,7 +48,8 @@ impl PersonIdentity {
     /// this root at `now`.
     ///
     /// Checks, in order: the binding names this exact root; every key is valid
-    /// (Ed25519 canonical and not small order, ML-KEM-768 FIPS 203 input check);
+    /// (Ed25519 canonical and not small order, X25519 not all zero or small
+    /// order, ML-KEM-768 FIPS 203 input check);
     /// both signatures verify strictly; `now` is within
     /// `[not_before, not_after)` allowing [`CLOCK_SKEW_SECONDS`]; the root is
     /// not disabled; and no retained revocation covers the binding's serial.
@@ -87,7 +88,7 @@ impl PersonIdentity {
         }
         let device_public = Ed25519PublicKey::from_bytes(body.device_public())
             .map_err(|_| BindingError::InvalidKey)?;
-        if !kem_static_is_valid(body.kem_static()) {
+        if !noise_static_is_valid(body.noise_static()) || !kem_static_is_valid(body.kem_static()) {
             return Err(BindingError::InvalidKey);
         }
         self.root
@@ -108,6 +109,66 @@ impl PersonIdentity {
             device_public,
         })
     }
+}
+
+/// The X25519 u-coordinates of small order (dividing 8), reduced mod
+/// p = 2^255 - 19, little-endian. Same list and comparison as libsodium's
+/// `has_small_order` (`crypto_scalarmult/curve25519/ref10/x25519_ref10.c`);
+/// see also <https://cr.yp.to/ecdh.html#validate>.
+///
+/// A blocklist rather than a DH check with a fixed clamped scalar (whose
+/// output is all zero exactly for these inputs): it needs no runtime X25519
+/// dependency and no curve arithmetic here. The DH equivalence is checked in
+/// tests against libcrux-curve25519.
+const SMALL_ORDER_X25519: [[u8; 32]; 7] = [
+    // 0: order 4.
+    [0; 32],
+    // 1: order 1 in libsodium's labelling (order dividing 8 either way).
+    [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ],
+    // 325606250916557431795983626356110631294008115727848805560023387167927233504: order 8.
+    [
+        0xe0, 0xeb, 0x7a, 0x7c, 0x3b, 0x41, 0xb8, 0xae, 0x16, 0x56, 0xe3, 0xfa, 0xf1, 0x9f, 0xc4,
+        0x6a, 0xda, 0x09, 0x8d, 0xeb, 0x9c, 0x32, 0xb1, 0xfd, 0x86, 0x62, 0x05, 0x16, 0x5f, 0x49,
+        0xb8, 0x00,
+    ],
+    // 39382357235489614581723060781553021112529911719440698176882885853963445705823: order 8.
+    [
+        0x5f, 0x9c, 0x95, 0xbc, 0xa3, 0x50, 0x8c, 0x24, 0xb1, 0xd0, 0xb1, 0x55, 0x9c, 0x83, 0xef,
+        0x5b, 0x04, 0x44, 0x5c, 0xc4, 0x58, 0x1c, 0x8e, 0x86, 0xd8, 0x22, 0x4e, 0xdd, 0xd0, 0x9f,
+        0x11, 0x57,
+    ],
+    // p - 1: order 2.
+    [
+        0xec, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // p: noncanonical 0.
+    [
+        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+    // p + 1: noncanonical 1.
+    [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ],
+];
+
+/// Rejects the all-zero and every small-order X25519 encoding (§1 key
+/// validation, §2 `noise_static`). X25519 ignores bit 255 (RFC 7748 §5), so
+/// it is masked before comparing; values in [p, 2^255) that reduce to a
+/// small-order point are listed explicitly (only 0 and 1 have such forms).
+/// The input is public, so the comparison need not be constant time.
+pub(crate) fn noise_static_is_valid(noise_static: &[u8; 32]) -> bool {
+    let mut masked = *noise_static;
+    masked[31] &= 0x7f;
+    !SMALL_ORDER_X25519.contains(&masked)
 }
 
 fn kem_static_is_valid(kem_static: &[u8; KEM_STATIC_LEN]) -> bool {
@@ -180,8 +241,8 @@ impl VerifiedDeviceBinding {
         PersonId::of(&self.person_root)
     }
 
-    /// The certified X25519 Noise static key. PROTOCOL v1 defines no validity
-    /// check for it beyond rejecting all-zero DH output in the handshake.
+    /// The certified X25519 Noise static key. Verified not to be all zero or
+    /// of small order; the handshake must still reject all-zero DH output.
     #[must_use]
     pub fn noise_static(&self) -> &[u8; 32] {
         self.binding.body().noise_static()
@@ -224,8 +285,8 @@ pub struct BindingRequest {
 ///
 /// # Errors
 ///
-/// [`IssueError`] if either key is missing or has the wrong role, the KEM key
-/// is invalid, the validity window is empty or too long, or signing fails.
+/// [`IssueError`] if either key is missing or has the wrong role, the Noise
+/// or KEM key is invalid, the validity window is empty or too long, or signing fails.
 pub fn issue_device_binding<K: KeyStore>(
     store: &K,
     root: &KeyId,
@@ -235,7 +296,7 @@ pub fn issue_device_binding<K: KeyStore>(
     if store.role(root)? != KeyRole::PersonRoot || store.role(device)? != KeyRole::Device {
         return Err(IssueError::WrongRole);
     }
-    if !kem_static_is_valid(&request.kem_static) {
+    if !noise_static_is_valid(&request.noise_static) || !kem_static_is_valid(&request.kem_static) {
         return Err(IssueError::InvalidKey);
     }
     let root_public = store.public_key(root)?;
@@ -272,7 +333,7 @@ pub fn issue_device_binding<K: KeyStore>(
 pub enum BindingError {
     /// The binding names a different person root.
     UntrustedRoot,
-    /// A device or KEM key is invalid.
+    /// A device, Noise, or KEM key is invalid.
     InvalidKey,
     /// A signature does not verify.
     InvalidSignature,

@@ -400,6 +400,133 @@ fn issuance_validates_roles_keys_and_window() -> TestResult {
     Ok(())
 }
 
+/// The canonical small-order X25519 u-coordinates (as in libsodium) plus
+/// their encodings with the ignored high bit set. Independently checked
+/// against libcrux X25519 in `noise_static_blocklist_matches_x25519`.
+fn small_order_encodings() -> Vec<[u8; 32]> {
+    let mut canonical = vec![[0; 32], [0; 32]];
+    canonical[1][0] = 1;
+    canonical.push(
+        bytes::<32>("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+            .unwrap_or_default(),
+    );
+    canonical.push(
+        bytes::<32>("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157")
+            .unwrap_or_default(),
+    );
+    for low in [0xec, 0xed, 0xee] {
+        let mut value = [0xff; 32];
+        value[0] = low;
+        value[31] = 0x7f;
+        canonical.push(value);
+    }
+    let mut all = canonical.clone();
+    for mut value in canonical {
+        value[31] |= 0x80;
+        all.push(value);
+    }
+    all
+}
+
+/// Signs a binding body directly, bypassing issuance checks.
+fn sign_binding_with_noise(
+    enrolled: &Enrolled,
+    noise_static: [u8; 32],
+) -> Result<DeviceBinding, Box<dyn std::error::Error>> {
+    let body = todoke_proto::identity::DeviceBindingBody::new(
+        *enrolled.store.public_key(&enrolled.root)?.as_bytes(),
+        *enrolled.store.public_key(&enrolled.device)?.as_bytes(),
+        noise_static,
+        kem_static(0x44),
+        nz(1)?,
+        time(T0)?,
+        time(T0 + DAY)?,
+    )?;
+    let root_signature = enrolled
+        .store
+        .sign(&enrolled.root, SigningDomain::DeviceBinding, &body.encode())?
+        .to_bytes();
+    let possession = enrolled
+        .store
+        .sign(
+            &enrolled.device,
+            SigningDomain::DevicePossession,
+            &[body.encode(), root_signature.to_vec()].concat(),
+        )?
+        .to_bytes();
+    Ok(DeviceBinding::from_parts(body, root_signature, possession))
+}
+
+/// §1 "Public keys MUST be validated before use"; §2 `noise_static` is a
+/// valid X25519 public key. All-zero and small-order points are not.
+#[test]
+fn small_order_noise_static_is_rejected() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let root = PersonIdentity::new(enrolled.store.public_key(&enrolled.root)?);
+    let encodings = small_order_encodings();
+    assert_eq!(encodings.len(), 14);
+    for noise in encodings {
+        let mut request = request(1, 2, 1, T0, T0 + DAY)?;
+        request.noise_static = noise;
+        assert_eq!(
+            issue_device_binding(&enrolled.store, &enrolled.root, &enrolled.device, request),
+            Err(IssueError::InvalidKey),
+            "{noise:02x?}"
+        );
+        let binding = sign_binding_with_noise(&enrolled, noise)?;
+        assert_eq!(
+            root.verify_binding(&binding, time(T0)?, &RevocationSet::new()),
+            Err(BindingError::InvalidKey),
+            "{noise:02x?}"
+        );
+    }
+    // A real X25519 public key is accepted on both paths.
+    let mut public = [0; 32];
+    libcrux_curve25519::secret_to_public(&mut public, &[0x42; 32]);
+    let binding = sign_binding_with_noise(&enrolled, public)?;
+    assert!(
+        root.verify_binding(&binding, time(T0)?, &RevocationSet::new())
+            .is_ok()
+    );
+    Ok(())
+}
+
+/// The blocklist agrees with an independent X25519 implementation: with a
+/// clamped scalar (a multiple of the cofactor 8) the shared output is all zero
+/// exactly for small-order inputs, which libcrux reports as an error.
+#[test]
+fn noise_static_blocklist_matches_x25519() {
+    let mut shared = [0; 32];
+    for noise in small_order_encodings() {
+        assert!(!super::binding::noise_static_is_valid(&noise));
+        assert!(libcrux_curve25519::ecdh(&mut shared, &noise, &[0x42; 32]).is_err());
+    }
+    // Generated public keys, and their high-bit variants, are valid.
+    for seed in 0..=255u8 {
+        let mut public = [0; 32];
+        libcrux_curve25519::secret_to_public(&mut public, &[seed; 32]);
+        for high in [0, 0x80] {
+            let mut encoding = public;
+            encoding[31] |= high;
+            assert!(super::binding::noise_static_is_valid(&encoding));
+            assert!(libcrux_curve25519::ecdh(&mut shared, &encoding, &[0x42; 32]).is_ok());
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+
+    #[test]
+    fn noise_static_validity_is_x25519_nonzero_output(noise in any::<[u8; 32]>()) {
+        let mut shared = [0; 32];
+        prop_assert_eq!(
+            super::binding::noise_static_is_valid(&noise),
+            libcrux_curve25519::ecdh(&mut shared, &noise, &[0x42; 32]).is_ok()
+        );
+    }
+}
+
 fn revoke(
     enrolled: &Enrolled,
     sequence: u64,

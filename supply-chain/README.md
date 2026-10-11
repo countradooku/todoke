@@ -104,6 +104,12 @@ so library zeroization review remains open (O6). `libcrux-ed25519` is now only a
 development dependency of `todoke-crypto` (an independent reference in signing
 tests) and of `todoke-proto` (vector tools).
 
+`noise_static` is checked against libsodium's list of small-order X25519
+encodings, so no runtime X25519 dependency is needed. `libcrux-curve25519 0.0.9`
+moved to `[workspace.dependencies]` because it is now a development dependency
+of both crates; `todoke-crypto`'s tests use it to check that list against
+X25519 output.
+
 The maintainer approved re-scoping the dev-only guard on 2026-10-11. The policy
 changes are:
 

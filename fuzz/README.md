@@ -8,7 +8,7 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | --- | --- |
 | `proto_device_binding` | `todoke_proto::identity::DeviceBinding::decode` (PROTOCOL §2) |
 | `proto_revoke` | `todoke_proto::identity::Revoke::decode` (PROTOCOL §2) |
-| `crypto_binding_verification` | Ed25519 public-key validation, then binding key, ML-KEM, and strict signature checks under that key as root |
+| `crypto_binding_verification` | Ed25519 public-key validation, then binding key (Ed25519, X25519 small-order, ML-KEM) and strict signature checks under that key as root |
 | `crypto_keystore_plaintext` | Software key store blob plaintext (local format) |
 | `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations (local format) |
 | `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
