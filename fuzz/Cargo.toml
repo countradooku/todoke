@@ -58,3 +58,17 @@ path = "fuzz_targets/crypto_sealed_envelope.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "proto_session_prelude"
+path = "fuzz_targets/proto_session_prelude.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_session_frames"
+path = "fuzz_targets/proto_session_frames.rs"
+test = false
+doc = false
+bench = false

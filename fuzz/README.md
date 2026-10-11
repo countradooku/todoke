@@ -12,6 +12,8 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_keystore_plaintext` | Software key store blob plaintext (local format) |
 | `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations (local format) |
 | `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
+| `proto_session_prelude` | Prelude length prefix and record split, `ClientHello`/`ServerHello` (echo check on a split input), and `NoiseHandshake` records for every mode (PROTOCOL §4.1, §4.2.5) |
+| `proto_session_frames` | Transport length prefix, decrypted frame header, and `Identity`, ratchet, `Error`, `KeyUpdate`, and `Ping` bodies (PROTOCOL §4.3, §4.4, §5, §12, §13) |
 
 The `crypto_*` targets call `todoke_crypto::identity::fuzzing`, which exists
 only under `--cfg fuzzing` (set by cargo-fuzz). Each of its functions wraps the
