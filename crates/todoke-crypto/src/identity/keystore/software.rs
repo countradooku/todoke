@@ -296,7 +296,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<BTreeMap<KeyId, Entry>, LocalFormat
         if role == KeyRole::Device && export != ExportPolicy::NonExportable {
             return Err(LocalFormatError::Malformed);
         }
-        let seed = Zeroizing::new(reader.array::<SEED_LEN>()?);
+        let mut seed = Zeroizing::new([0; SEED_LEN]);
+        reader.read_into(seed.as_mut())?;
         keys.insert(id, Entry::from_seed(role, export, seed)?);
     }
     reader.finish()?;

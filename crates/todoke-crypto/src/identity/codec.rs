@@ -90,6 +90,15 @@ impl<'a> Reader<'a> {
         Ok(head)
     }
 
+    /// Copies exactly `out.len()` bytes into `out`. Secrets are read this way
+    /// into a caller-owned `Zeroizing` buffer, so no unwiped temporary copy is
+    /// returned by value as with [`Self::array`]. On error nothing is consumed.
+    pub(crate) fn read_into(&mut self, out: &mut [u8]) -> Result<(), LocalFormatError> {
+        out.copy_from_slice(self.bytes(out.len())?);
+        Ok(())
+    }
+
+    /// Reads public fixed-size data. Use [`Self::read_into`] for secrets.
     pub(crate) fn array<const N: usize>(&mut self) -> Result<[u8; N], LocalFormatError> {
         let (head, rest) = self
             .0
@@ -121,5 +130,29 @@ impl<'a> Reader<'a> {
         } else {
             Err(LocalFormatError::Malformed)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_into_reads_exactly_and_fails_without_consuming() {
+        let mut reader = Reader::new(&[1, 2, 3, 4, 5]);
+        let mut secret = Zeroizing::new([0u8; 3]);
+        assert_eq!(reader.read_into(secret.as_mut()), Ok(()));
+        assert_eq!(*secret, [1, 2, 3]);
+        assert_eq!(reader.remaining(), 2);
+        let mut long = Zeroizing::new([0xaau8; 3]);
+        assert_eq!(
+            reader.read_into(long.as_mut()),
+            Err(LocalFormatError::Malformed)
+        );
+        assert_eq!(reader.remaining(), 2);
+        assert_eq!(*long, [0xaa; 3]);
+        assert_eq!(reader.read_into(&mut []), Ok(()));
+        assert_eq!(reader.u16(), Ok(0x0405));
+        assert_eq!(reader.finish(), Ok(()));
     }
 }

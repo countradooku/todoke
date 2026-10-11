@@ -986,7 +986,8 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, LocalFormatError> {
         let origin = TrustOrigin::from_u8(reader.u8()?).ok_or(LocalFormatError::Malformed)?;
         let state = VerificationState::from_u8(reader.u8()?).ok_or(LocalFormatError::Malformed)?;
         let generation = reader.u64()?;
-        let psk = PairPsk(Zeroizing::new(reader.array()?));
+        let mut psk = PairPsk(Zeroizing::new([0; PSK_LEN]));
+        reader.read_into(psk.0.as_mut())?;
         let history_count = usize::from(reader.u8()?);
         if history_count > MAX_HISTORY || reader.remaining() < history_count * HISTORY_LEN {
             return Err(LocalFormatError::Malformed);
