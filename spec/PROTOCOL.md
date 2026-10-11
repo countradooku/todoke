@@ -151,6 +151,12 @@ requires a reviewed core/platform interface that preserves this boundary (§16).
 Total: 1312 bytes. QR text is exactly `TODOKE:` followed by
 [RFC 9285 Base45](https://www.rfc-editor.org/rfc/rfc9285) encoding of the binary
 payload, without padding or whitespace normalization: 1975 ASCII characters.
+
+| QR text field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| prefix | 7 | ASCII `TODOKE:`, exact case |
+| base45 | 1968 | 656 three-character groups, one per two payload bytes; RFC 9285 alphabet only |
+
 Spaces in the Base45 alphabet are significant. A decoder MUST enforce both lengths,
 the exact prefix, canonical Base45, version, suite, key validation, and expiry.
 Future formats MUST use a new version; permissive suffixes/optional fields are forbidden.
@@ -1091,7 +1097,16 @@ key = HKDF(manifest_hash, file_master, "todoke/v1/content-key\0" || context, 32)
 prefix = HKDF(manifest_hash, file_master, "todoke/v1/content-nonce\0" || context, N)
 ```
 
-N=7 for AES-256-GCM and N=19 for XChaCha20-Poly1305. Both use a 16-byte tag and
+| Context field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| transfer_id | 16 | Manifest transfer ID |
+| file_id | 4 | u32, selected regular file |
+| content_suite | 2 | u16, 1 or 2, exact manifest suite |
+| content_epoch | 4 | u32, 0..1023 |
+
+Total context: 26 bytes; the HKDF info is the domain string followed by this
+context, with no separator. N=7 for AES-256-GCM and N=19 for XChaCha20-Poly1305.
+Both use a 16-byte tag and
 [RustCrypto STREAM BE32](https://github.com/RustCrypto/traits/blob/aead-v0.5.2/aead/src/stream.rs)
 semantics. Do not substitute LE31 or native-endian counters.
 
@@ -1177,8 +1192,15 @@ QR or code pairing. Enumeration/matching is untrusted and rate-limited.
 mDNS uses service `_todoke._tcp.local.`, an ephemeral instance name of 16 lowercase
 hex characters from 8 random bytes, SRV port 1..65535, and exactly one TXT string
 `v1=` plus 38 lowercase hex characters encoding DiscoveryRecord. No other todoke
-TXT metadata is permitted. IP/SRV routing data is untrusted. Instance labels rotate
-with the discovery epoch; cached data MUST expire within 120 seconds. Implementations
+TXT metadata is permitted. IP/SRV routing data is untrusted.
+
+| TXT string field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| key | 3 | ASCII `v1=`, exact |
+| record | 38 | Lowercase hex of the 19-byte DiscoveryRecord; uppercase MUST be rejected |
+
+The TXT string is 41 bytes, carried with its standard DNS length octet. Instance
+labels rotate with the discovery epoch; cached data MUST expire within 120 seconds. Implementations
 MUST NOT put the device name into this service's instance label.
 
 BLE uses this same 19-byte application record as service data. Its service UUID,
@@ -1383,6 +1405,7 @@ codes are a generic failure, never a retry/fallback instruction.
 
 | Code | Name | Scope / action |
 | --- | --- | --- |
+| 0x0000 | Reserved | MUST NOT be sent; receipt is MALFORMED |
 | 0x0001 | MALFORMED | Session; length, canonical encoding, reserved field, overflow |
 | 0x0002 | UNSUPPORTED | Session; version/suite/type unsupported, no downgrade |
 | 0x0003 | AUTHENTICATION | Session; use indistinguishable close when oracle risk exists |
