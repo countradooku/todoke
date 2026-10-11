@@ -617,6 +617,11 @@ impl SessionCore {
     pub(crate) fn transport(&self) -> &FrameTransport {
         &self.transport
     }
+
+    #[cfg(test)]
+    pub(crate) fn close_for_tests(&mut self) {
+        self.transport.close();
+    }
 }
 
 impl fmt::Debug for SessionCore {

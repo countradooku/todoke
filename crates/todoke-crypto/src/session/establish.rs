@@ -111,6 +111,12 @@ impl Establishment {
         self.phase
     }
 
+    /// For tests that forge records under the established keys.
+    #[cfg(test)]
+    pub(crate) fn transport_mut(&mut self) -> &mut FrameTransport {
+        &mut self.transport
+    }
+
     pub(crate) fn deadline(&self) -> Duration {
         self.deadline
     }
@@ -441,3 +447,6 @@ impl fmt::Debug for Establishment {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -311,3 +311,111 @@ impl<S: Sealer, B: BlobStorage> fmt::Debug for ContactAuthority<'_, S, B> {
             .finish_non_exhaustive()
     }
 }
+
+/// A pairing-mode authority for tests: no stored contact, an optional pin
+/// of the peer's full keys, and an in-memory journal with failure injection.
+#[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+    use crate::identity::{Ed25519PublicKey, PersonIdentity, RevocationSet};
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(crate) enum Journal {
+        Clean,
+        Journaled,
+        Committed,
+        Cleared,
+        Abandoned,
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct PairingAuthority {
+        pub(crate) pinned_device: Option<Ed25519PublicKey>,
+        pub(crate) journal: Journal,
+        pub(crate) committed_psk: Option<Zeroizing<[u8; 32]>>,
+        pub(crate) committed_generation: Option<u64>,
+        /// Fail the step with this index (0 confirm, 1 journal, 2 commit,
+        /// 3 clear) with a storage error.
+        pub(crate) fail_step: Option<u8>,
+    }
+
+    impl PairingAuthority {
+        pub(crate) fn new(pinned_device: Option<Ed25519PublicKey>) -> Self {
+            Self {
+                pinned_device,
+                journal: Journal::Clean,
+                committed_psk: None,
+                committed_generation: None,
+                fail_step: None,
+            }
+        }
+
+        fn step(&self, index: u8) -> Result<(), SessionError> {
+            if self.fail_step == Some(index) {
+                Err(SessionError::Storage(ContactError::Storage(
+                    crate::identity::storage::StorageError::Io(std::io::ErrorKind::Other),
+                )))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    impl sealed::Sealed for PairingAuthority {}
+
+    impl PeerAuthority for PairingAuthority {
+        fn confirm_peer(
+            &mut self,
+            presented: &PeerPresentation<'_>,
+        ) -> Result<VerifiedDeviceBinding, SessionError> {
+            self.step(0)?;
+            // Trust in the root comes from the authenticated pairing itself
+            // (§2); the binding must still verify under the root it names.
+            let root = Ed25519PublicKey::from_bytes(presented.binding.body().person_root())
+                .map_err(|_| SessionError::Identity(IdentityError::AuthenticationFailed))?;
+            let verified = PersonIdentity::new(root)
+                .verify_binding(presented.binding, presented.now, &RevocationSet::new())
+                .map_err(|error| SessionError::Identity(IdentityError::Binding(error)))?;
+            if self
+                .pinned_device
+                .is_some_and(|pinned| pinned != *verified.device_public())
+            {
+                return Err(SessionError::Identity(IdentityError::AuthenticationFailed));
+            }
+            Ok(verified)
+        }
+
+        fn journal(&mut self, _pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.step(1)?;
+            if self.journal != Journal::Clean {
+                return Err(SessionError::RatchetUncertain);
+            }
+            self.journal = Journal::Journaled;
+            Ok(())
+        }
+
+        fn commit(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.step(2)?;
+            if self.journal != Journal::Journaled {
+                return Err(SessionError::RatchetUncertain);
+            }
+            self.journal = Journal::Committed;
+            self.committed_psk = Some(Zeroizing::new(*pending.psk_next));
+            self.committed_generation = Some(pending.generation_next);
+            Ok(())
+        }
+
+        fn clear(&mut self, _pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.step(3)?;
+            if self.journal != Journal::Committed {
+                return Err(SessionError::RatchetUncertain);
+            }
+            self.journal = Journal::Cleared;
+            Ok(())
+        }
+
+        fn abandon(&mut self, _pending: &PendingRatchet) {
+            self.journal = Journal::Abandoned;
+        }
+    }
+}

@@ -306,3 +306,5 @@ impl<K: KeyStore> fmt::Debug for LocalIdentity<'_, K> {
 
 #[cfg(test)]
 mod test_vectors;
+#[cfg(test)]
+mod tests;

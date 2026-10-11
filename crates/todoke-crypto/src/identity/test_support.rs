@@ -85,6 +85,18 @@ impl Enrolled {
         self.bind_with(serial, 0x33, 0x44)
     }
 
+    /// Issues a 30-day binding from T0 certifying an actual X25519 key.
+    pub(crate) fn bind_noise(
+        &self,
+        serial: u64,
+        noise_static: [u8; 32],
+    ) -> Result<VerifiedDeviceBinding, Box<dyn std::error::Error>> {
+        let mut request = request(0x33, 0x44, serial, T0, T0 + 30 * DAY)?;
+        request.noise_static = noise_static;
+        issue_device_binding(&self.store, &self.root, &self.device, request)
+            .map_err(|error: IssueError| error.into())
+    }
+
     pub(crate) fn bind_with(
         &self,
         serial: u64,
