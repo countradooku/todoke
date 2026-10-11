@@ -1,0 +1,46 @@
+name: Nightly mutation tests
+
+on:
+  schedule:
+    - cron: "23 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  MUTATION_TOOLCHAIN: nightly-2026-08-20
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  mutants:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned tools
+        run: |
+          rustup show
+          rustup toolchain install "$MUTATION_TOOLCHAIN" --profile minimal
+          cargo install cargo-mutants --version 27.1.0 --locked
+      - name: Test every viable mutation
+        run: rustup run "$MUTATION_TOOLCHAIN" cargo mutants --workspace --in-place --timeout 120 --cargo-arg=--locked
+      - name: Preserve mutation results
+        if: ${{ always() && hashFiles('mutants.out/**') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mutation-results
+          path: mutants.out/
+          if-no-files-found: error
+          retention-days: 14
