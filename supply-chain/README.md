@@ -1,7 +1,7 @@
 # Dependency review
 
 This store was initialized with `cargo-vet 0.10.2` against the scaffold's empty
-third-party dependency graph. The protocol-vector example now introduces pinned
+third-party dependency graph. The protocol-vector examples now introduce pinned
 reference development dependencies. `audits.toml` and `imports.lock` remain empty;
 `config.toml` contains no exemptions or trusted publishers. These new dependencies
 have not received cargo-vet audits. Running reference vectors does not certify
@@ -48,8 +48,14 @@ source checks but does **not** pass its advisory or duplicate-version policies:
   `hax-lib-macros`. The `cfg(hax)` dependency is still part of the all-target audit
   graph even though the fixture executable does not enable that verification mode.
 - Conflicting versions of `hax-lib`, `hax-lib-macros`, `hax-lib-macros-types`
-  (0.3.7 / 0.4.2), `syn` (2.0.119 / 3.0.7), and `shlex` (1.3.0 / 2.0.1).
-- `cargo vet --locked` reports 109 dependencies missing `safe-to-run` evidence.
+  (0.3.7 / 0.4.2), `syn` (2.0.119 / 3.0.7), `shlex` (1.3.0 / 2.0.1),
+  `getrandom` (0.2.17 / 0.4.3), and `rand_core` (0.6.4 / 0.10.1).
+- `cargo vet --locked` reports 115 dependencies missing `safe-to-run` evidence.
+  The handshake fixture tool adds six packages to the previous 109-package graph:
+  `snow 0.9.6`, `rand_core 0.6.4`, `getrandom 0.2.17`,
+  `wasi 0.11.1+wasi-snapshot-preview1`, `libcrux-chacha20poly1305 0.0.10`, and
+  `libcrux-poly1305 0.0.7`. `libcrux-sha2 0.0.9` was already transitive and is now
+  also a direct development dependency.
 
 Current upstream features/releases were inspected; disabling ML-KEM default/SIMD
 features does not remove the older verification graph. No advisory ignore, version
@@ -57,3 +63,10 @@ skip, blanket vet exemption, or dependency source patch was added. CI supply-cha
 checks therefore remain failing until upstream resolution and actual audit evidence
 are available, or narrowly justified exceptions receive review. The generator takes
 only public fixed fixtures and is not a production secret-handling approval.
+
+The [O1 decision](../spec/decisions/O1-HYBRID-NOISE.md) cites a real independent
+review of an older Snow revision as evidence for the existing HFS+PSK construction.
+That is not a cargo-vet audit of the current resolved packages, this adapter, or
+the whole dependency graph. No audit-store entries or exemptions were fabricated.
+Snow's raw Split export and the KEM resolver compatibility slot are confined to
+the public-fixture example; production integration and zeroization remain open.

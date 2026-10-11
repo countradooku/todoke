@@ -127,7 +127,7 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
         "fixture_notice": PUBLIC_FIXTURE_NOTICE,
         "protocol_version": 1,
         "hybrid_suite": 1,
-        "hybrid_suite_status": "reserved-unreleased; encoding fixture, not a deployable handshake",
+        "hybrid_suite_status": "assigned-unreleased; encoding fixture, not a deployable handshake",
         "device_ed25519_seed_hex": hex::encode([0x11; 32]),
         "noise_x25519_seed_hex": hex::encode(noise_seed.as_slice()),
         "mlkem768_keygen_seed_hex": hex::encode(kem_seed.as_slice()),

@@ -1,7 +1,8 @@
 # todoke v1 deterministic test vectors
 
 These JSON files are generated from [the normative protocol](../PROTOCOL.md) by
-[`generate_vectors.rs`](../../crates/todoke-proto/examples/generate_vectors.rs).
+[`generate_vectors.rs`](../../crates/todoke-proto/examples/generate_vectors.rs) and
+[`generate_handshake_vectors.rs`](../../crates/todoke-proto/examples/generate_handshake_vectors.rs).
 All signing seeds, PSKs, and derived values are **public, fixed test fixtures**.
 Never use them in production. The timestamps deliberately remain fixed; an
 expired fixture does not authorize bypassing expiry validation.
@@ -12,26 +13,35 @@ From the repository root:
 cargo run --locked -p todoke-proto --example generate_vectors
 cargo run --locked -p todoke-proto --example generate_vectors -- --check
 cargo test --locked -p todoke-proto --example generate_vectors
+cargo run --locked -p todoke-proto --example generate_handshake_vectors
+cargo run --locked -p todoke-proto --example generate_handshake_vectors -- --check
+cargo test --locked -p todoke-proto --example generate_handshake_vectors
 ```
 
-The first command replaces the six JSON files. `--check` regenerates them in
+Each generator's command without `--check` replaces its own JSON files (six
+standalone fixtures or three handshake fixtures). `--check` regenerates them in
 memory and compares every byte, including formatting and the final newline,
 without writing files. Missing or changed files fail the check. There is no
-clock, RNG, network access, or platform-dependent serialization in generation.
+clock, network access, or platform-dependent serialization in generation. The
+handshake generator rejects accidental RNG use; all randomness inputs are fixed.
 Cargo may need network access to download the locked dependencies on first use.
 The only accepted argument is `--check`; the tool takes no keys or peer input.
 
 | File | Contents |
 | --- | --- |
-| `qr-payload.json` | A 1,312-byte QR payload, RFC 9285 Base45 text, Ed25519 device ID, and actual X25519/ML-KEM-768 public keys derived from fixed seeds. Suite 1 remains **reserved and unreleased**; this verifies encoding, not an interoperable hybrid handshake. |
+| `qr-payload.json` | A 1,312-byte QR payload, RFC 9285 Base45 text, Ed25519 device ID, and actual X25519/ML-KEM-768 public keys derived from fixed seeds. Suite 1 is **assigned but unreleased**; this fixture verifies QR encoding, not an interoperable hybrid handshake. |
 | `discovery-token.json` | HMAC-BLAKE3 full outputs and eight-byte tokens at epoch boundaries, including two timestamps within each of the first two 15-minute epochs. This is standard HMAC over unkeyed BLAKE3, with a 64-byte block and 32-byte digest; it is not BLAKE3 keyed mode. |
 | `psk-ratchet.json` | HKDF-SHA-256 inputs, domain bytes, and 32-byte output with the handshake hash as Extract salt. The handshake hash is a fixed fixture, not a generated hybrid transcript. |
 | `stream-nonces.json` | AES and XChaCha STREAM-BE32 nonce layouts for counters 0, 1, 65,535, and `u32::MAX`, each with both final-flag values. `v1_counter_and_final_permitted` is false for counter 65,535 without final and for all wider counters. True only permits that counter/flag combination; file length, epoch, and final-position checks still apply. `u32::MAX` cases describe the primitive layout only and are forbidden in live v1. Counter 0/final 1 is the empty-file final segment nonce. |
 | `manifest-hash.json` | Canonical 182-byte one-file manifest (108-byte header), the six public bytes `hello\n`, plaintext root, domain, and manifest hash. |
 | `accept-signature.json` | 178-byte Accept payload, signature input including the domain, 64-byte receiver signature, complete 242-byte signed record, and Accept hash. |
+| `handshake-ikpsk2.json` | Exact IKpsk2+hfs Noise transcript: inner messages of 1296 and 1152 bytes, todoke Hello/prologue bytes, framed handshake records, public seeds, per-message/final hashes, Split keys, and initial bidirectional transport KATs. |
+| `handshake-kkpsk2.json` | Exact KKpsk2+hfs Noise transcript: 1248 and 1152 bytes, with both static X25519 keys pinned and public fixture generation 7. Includes the same kinds of outputs as the IK fixture. |
+| `handshake-xxpsk3.json` | Exact XXpsk3+hfs Noise-layer transcript: 1248, 1200, and 64 bytes. Uses a clearly marked **synthetic prologue and PSK**, not a valid todoke CPace/code prelude or a code-pairing integration vector. |
 
 `*_hex` fields use lowercase hexadecimal without separators. JSON numbers are
-decimal. All protocol integers use unsigned big-endian encoding. Literal
+decimal. Protocol integers use unsigned big-endian encoding except the Noise
+AEAD nonce's little-endian u64 counter. Literal
 domain strings end in a single NUL byte; their hex forms remove ambiguity.
 The JSON wrapper is descriptive metadata, not a wire format.
 
@@ -68,6 +78,45 @@ provide an audited zeroization guarantee. A production wrapper must resolve that
 requirement before processing real secrets. The tool logs only completion or
 file/error information, never key bytes.
 
-These six fixture groups do not settle the open hybrid Noise/PAKE profiles and do
-not provide handshake, AEAD ciphertext, Bao proof, or ratchet crash-recovery
-interoperability vectors. Those are separate release gates in the protocol.
+## Handshake reference engine
+
+The handshake example uses [Snow 0.9.6](https://docs.rs/snow/0.9.6/) with
+`default-features = false`, `hfs`, and `risky-raw-split`, solely as a development
+dependency. The last feature exposes public-fixture Split outputs; production
+code MUST NOT expose traffic keys. All primitives are provided by libcrux through
+its public resolver interface, including
+[ChaCha20-Poly1305 0.0.10](https://docs.rs/libcrux-chacha20poly1305/0.0.10/) and
+[SHA-256 0.0.9](https://docs.rs/libcrux-sha2/0.0.9/). The example implements no
+cryptographic primitive or replacement Noise state machine.
+
+The [O1 decision](../decisions/O1-HYBRID-NOISE.md) pins the construction to the
+Trail of Bits–reviewed Snow revision `009411d2035a77ece57b0a6873169de7693a0aa0`.
+The release used by the tool is `a4be73faa042c5967f39662aa66919f774831a9a` (0.9.6).
+Its successful handshake operations, HFS insertion rule, and symmetric state match
+the reviewed source; later changes include validation and failed-decrypt nonce
+handling. That audit did not cover this ML-KEM adapter or todoke integration.
+
+Snow 0.9.6 predates an MLKEM768 enum variant. The fixture's public `NoiseParams`
+constructor sets the **actual MLKEM768 protocol name**, which Snow hashes verbatim,
+and uses `KemChoice::Kyber1024` only to route to our libcrux ML-KEM-768 resolver.
+There is no Kyber algorithm call, Kyber protocol-name alias, or runtime negotiation.
+This offline workaround is not a proposed production API.
+
+Static and ephemeral X25519 inputs, ML-KEM `d || z` and `m`, PSK, and prologue are
+published in each JSON. The fixture adapter supplies them directly. Any unexpected
+Snow RNG call makes generation fail. Both peers verify every message and transcript
+hash. Tests include wrong PSKs, corrupted key/ciphertext/tag bytes, changed prologues,
+all-zero X25519 outputs, and independent upstream classical PSK known-answer hashes
+for the primitive adapters. The synthetic initial transport plaintexts test Noise
+AEAD only: they are not valid todoke Identity records and authorize nothing.
+
+Snow owns additional secret state that lacks the required production zeroization
+guarantee. Public-fixture tests do not certify erasure, constant-time behavior,
+hostile-input robustness, CPace, or the new backend integration. No production
+parser/state machine is introduced; fuzzing and state-machine property tests remain
+mandatory when those implementations are added.
+
+The nine fixture groups do not provide independent hybrid interoperability,
+CPace integration, content-encryption/Bao, or ratchet crash-recovery conformance.
+These remain release gates. O1 now selects the reviewed construction; it does not
+claim that the whole protocol is implemented or audited.

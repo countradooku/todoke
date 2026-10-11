@@ -15,6 +15,10 @@ workspace = true
 name = "generate_vectors"
 test = true
 
+[[example]]
+name = "generate_handshake_vectors"
+test = true
+
 # Reference implementations for the offline, public-fixture generator only.
 [dev-dependencies]
 base45 = "=3.2.0"
@@ -23,9 +27,14 @@ ed25519-dalek = "=3.0.0"
 hex = "=0.4.3"
 hmac = { version = "=0.13.0", features = ["zeroize"] }
 libcrux-curve25519 = "=0.0.9"
+libcrux-chacha20poly1305 = "=0.0.10"
 libcrux-ed25519 = "=0.0.10"
 libcrux-hkdf = "=0.0.9"
 libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
 libcrux-secrets = "=0.0.7"
+libcrux-sha2 = "=0.0.9"
+rand_core = "=0.6.4"
 serde_json = "=1.0.152"
+# Offline public-fixture engine only; never enable raw key export in runtime crates.
+snow = { version = "=0.9.6", default-features = false, features = ["hfs", "risky-raw-split"] }
 zeroize = "=1.9.1"
