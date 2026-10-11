@@ -201,4 +201,10 @@ mod tests {
         assert!(!rendered.contains("42"));
         assert!(rendered.contains("REDACTED"));
     }
+
+    #[test]
+    fn storage_key_debug_is_redacted() {
+        let key = StorageKey::from_bytes(Zeroizing::new([0x42; 32]));
+        assert_eq!(format!("{key:?}"), "StorageKey([REDACTED])");
+    }
 }
