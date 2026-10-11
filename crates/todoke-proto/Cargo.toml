@@ -31,10 +31,10 @@ hmac = { version = "=0.13.0", features = ["zeroize"] }
 libcrux-curve25519.workspace = true
 libcrux-chacha20poly1305.workspace = true
 libcrux-ed25519.workspace = true
-libcrux-hkdf = "=0.0.9"
+libcrux-hkdf.workspace = true
 libcrux-ml-kem.workspace = true
-libcrux-secrets = "=0.0.7"
-libcrux-sha2 = "=0.0.9"
+libcrux-secrets.workspace = true
+libcrux-sha2.workspace = true
 rand_core = "=0.6.4"
 serde_json.workspace = true
 # Offline public-fixture engine only; never enable raw key export in runtime crates.

@@ -175,7 +175,7 @@ fn kem_static_is_valid(kem_static: &[u8; KEM_STATIC_LEN]) -> bool {
     mlkem768::validate_public_key(&MlKem768PublicKey::from(kem_static))
 }
 
-fn check_validity(body: &DeviceBindingBody, now: UnixTime) -> Result<(), BindingError> {
+pub(crate) fn check_validity(body: &DeviceBindingBody, now: UnixTime) -> Result<(), BindingError> {
     let now = now.seconds();
     if now.saturating_add(CLOCK_SKEW_SECONDS) < body.not_before().seconds() {
         return Err(BindingError::NotYetValid);

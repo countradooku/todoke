@@ -19,9 +19,22 @@ blake3.workspace = true
 # Canonical Ed25519 point-encoding check required alongside strict dalek verification (§1).
 curve25519-dalek = "=5.0.0"
 ed25519-dalek.workspace = true
+# Async I/O traits only (no runtime) for the session adapter.
+futures-io = { version = "=0.3.34", default-features = false, features = ["std"] }
 getrandom.workspace = true
 libcrux-chacha20poly1305.workspace = true
+libcrux-curve25519.workspace = true
+libcrux-hkdf.workspace = true
+# HMAC-SHA-256 for the §4.4 ratchet confirmation; libcrux-hkdf depends on it.
+libcrux-hmac = "=0.0.9"
 libcrux-ml-kem.workspace = true
+libcrux-secrets.workspace = true
+libcrux-sha2.workspace = true
+# The reviewed HFS+PSK Noise state machine (O1, docs/adr/0001-noise-crate.md).
+# No default resolver or crypto: every primitive comes from libcrux. Never
+# enable `risky-raw-split` here; traffic keys must not leave the state machine.
+snow = { version = "=0.10.0", default-features = false, features = ["hfs"] }
+subtle = { version = "=2.6.1", default-features = false }
 zeroize.workspace = true
 
 # Browsers expose their CSPRNG only through Web Crypto; getrandom 0.4 has no
@@ -31,8 +44,6 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 hex.workspace = true
-# Independent X25519 implementation for checking the small-order blocklist.
-libcrux-curve25519.workspace = true
 # Independent reference for signing tests only. Not a runtime dependency: its
 # 0.0.10 signer leaves the expanded secret key on the stack unwiped (§14.2).
 libcrux-ed25519.workspace = true

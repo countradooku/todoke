@@ -156,3 +156,49 @@ unvetted packages at the root, now including `safe-to-deploy` requirements for
 the runtime crates above, and fails in the same way for `fuzz/`. No audits or
 exemptions were recorded. Reference-fixture use and passing tests are not a
 review of these crates for production secrets (O6).
+
+## Session runtime dependency status
+
+The session work (PROTOCOL §4–§5, [ADR 0001](../docs/adr/0001-noise-crate.md))
+adds these packages to `todoke-crypto`'s **runtime** graph, each pinned to an
+exact version published more than two weeks before 2026-10-11:
+
+| Package | Why | Notes |
+| --- | --- | --- |
+| `snow 0.10.0` (2025-07-19) | Reviewed HFS+PSK Noise state machine (O1) | `default-features = false`, `hfs` only: no Snow crypto, no RNG, no raw split. Its only other dependencies are `subtle` and, at build time, `rustc_version`/`semver`, all already present. Apache-2.0 OR MIT. |
+| `futures-io 0.3.34` (2026-08-11) | `AsyncRead`/`AsyncWrite` traits for the session adapter | Trait definitions only, no dependencies. MIT OR Apache-2.0. |
+| `libcrux-curve25519 0.0.9` | X25519 for Noise | Previously a development dependency only. |
+| `libcrux-sha2 0.0.9` | SHA-256 for Noise | Previously development/transitive only. |
+| `libcrux-hkdf 0.0.9`, `libcrux-hmac 0.0.9` | §4.4 ratchet HKDF and confirmation HMAC | Previously development only. |
+
+`libcrux-secrets 0.0.7` and `subtle 2.6.1` were already transitive runtime
+dependencies and are now direct pins. Pins shared with `todoke-proto`
+(`libcrux-hkdf`, `libcrux-sha2`, `libcrux-secrets`) moved to
+`[workspace.dependencies]`. No new license, source, or advisory exception was
+needed.
+
+`todoke-proto`'s offline handshake fixture generator still pins `snow 0.9.6`,
+so the graph holds two Snow versions. `deny.toml` gains one exact-version
+dev-only skip, `snow@0.9.6`, **pending maintainer sign-off**. The guard script
+enforces that it never reaches shipped code. The alternative is to migrate the
+generator to 0.10.0, which would also drop the `rand_core 0.6.4` and
+`getrandom 0.2.17` skips but would change the provenance fields of the
+committed handshake fixtures; that is left as a separate decision.
+
+Test data added with provenance recorded inside each file:
+`crates/todoke-crypto/testdata/acvp-mlkem768.json` (NIST ACVP-Server ML-KEM
+vectors, ML-KEM-768 groups) and `noise-classical-cacophony.json` (three
+Cacophony vectors from Snow's test suite). They are test inputs, not code.
+
+On 2026-10-11, `cargo deny --locked check -D unmatched-skip`, the guard
+script and its tests, and the fuzz-workspace deny check passed. `cargo vet
+--locked` reports 130 unvetted packages at the root and 110 in `fuzz/`; no
+audits or exemptions were recorded. The fuzz lock was updated from the root
+lock and adds no package the root lock lacks.
+
+Two pre-existing CI failures were observed and not changed here: the MSRV job
+(`cargo check --workspace --all-targets` on 1.85) fails in the `base45 3.2.0`
+development dependency, which uses `slice::as_chunks` (stable since 1.88), and
+`--all-targets` on `wasm32-unknown-unknown` fails in the development-only
+`getrandom 0.2`/`0.3` copies. Both reproduce on the base commit. The library
+targets and every `todoke-crypto` target pass on 1.85 and wasm32.

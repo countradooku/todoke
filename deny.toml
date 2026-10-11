@@ -61,6 +61,7 @@ skip = [
     { crate = "hax-lib-macros-types@0.3.7", reason = "Never compiled. Types crate of hax-lib-macros 0.3.7 in the same cfg(hax) split." },
     { crate = "syn@2.0.119", reason = "Build-time only. Compiled for curve25519-dalek-derive, the proc macro of curve25519-dalek's x86_64 SIMD backend (runtime dependency of todoke-crypto). Also reachable through never-compiled bindgen/hax-lib-macros edges. libcrux-macros and serde_derive use syn 3." },
     { crate = "shlex@1.3.0", reason = "Never compiled. Build dependency of bindgen 0.72.1 via crabgrind, declared by libcrux-secrets only under cfg(valgrind_ct_test); cc 1.7 uses shlex 2." },
+    { crate = "snow@0.9.6", reason = "Dev-only. todoke-proto's offline handshake fixture generator pins snow 0.9.6, the engine named in spec/test-vectors and decision O1. Runtime todoke-crypto uses snow 0.10.0 (docs/adr/0001-noise-crate.md), which reproduces those fixtures byte for byte. Pending maintainer sign-off (added 2026-10-11)." },
     { crate = "rand_core@0.6.4", reason = "Dev-only. Required by the pinned snow 0.9.6 handshake fixture engine and its RNG adapter; libcrux uses rand_core 0.10." },
     { crate = "getrandom@0.2.17", reason = "Dev-only. Pulled by rand_core 0.6.4 for snow 0.9.6; libcrux's uuid/rand use getrandom 0.4." },
     { crate = "rand@0.9.5", reason = "Dev-only. proptest 1.11.0 uses rand 0.9; proptest 1.12 moves to rand 0.10 but requires Rust 1.88, above the 1.85 MSRV." },

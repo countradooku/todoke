@@ -284,6 +284,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "92d699e522242e69e3003b94ecc1f960f3a5e015aa7c5d7486e65ad01dd94f5e"
 
 [[package]]
+name = "futures-io"
+version = "0.3.34"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53c0fa8157de1303bfffdaa1cc2a673bfffb60102f76b0ef4441659124373fed"
+
+[[package]]
 name = "futures-task"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1024,6 +1030,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "snow"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "599b506ccc4aff8cf7844bc42cf783009a434c1e26c964432560fb6d6ad02d82"
+dependencies = [
+ "rustc_version",
+ "subtle",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1066,14 +1082,21 @@ dependencies = [
  "blake3",
  "curve25519-dalek",
  "ed25519-dalek",
+ "futures-io",
  "getrandom 0.4.3",
  "hex",
  "libcrux-chacha20poly1305",
  "libcrux-curve25519",
  "libcrux-ed25519",
+ "libcrux-hkdf",
+ "libcrux-hmac",
  "libcrux-ml-kem",
+ "libcrux-secrets",
+ "libcrux-sha2",
  "proptest",
  "serde_json",
+ "snow 0.10.0",
+ "subtle",
  "todoke-proto",
  "zeroize",
 ]
@@ -1121,7 +1144,7 @@ dependencies = [
  "proptest",
  "rand_core 0.6.4",
  "serde_json",
- "snow",
+ "snow 0.9.6",
  "zeroize",
 ]
 

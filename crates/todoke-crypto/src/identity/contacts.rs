@@ -55,8 +55,8 @@ const KEYSET_DOMAIN: &[u8] = b"todoke/local/keyset\0";
 
 /// The current pair PSK. Zeroized on drop; `Debug` is redacted; it has no
 /// public constructor or accessor and never leaves this crate. It is produced
-/// by pairing (not implemented yet) and by the §4.4 ratchet in the session
-/// layer.
+/// by pairing (not implemented yet) and by the §4.4 ratchet in
+/// [`crate::session`].
 pub struct PairPsk(Zeroizing<[u8; PSK_LEN]>);
 
 impl PairPsk {
@@ -420,6 +420,14 @@ impl Contact {
         }
         self.history.push_back(event);
     }
+}
+
+/// What a contact session's handshake needs: a copy of the current pair
+/// PSK, its generation, and the pinned Noise static key.
+pub(crate) struct ContactHandshake {
+    pub(crate) psk: Zeroizing<[u8; PSK_LEN]>,
+    pub(crate) generation: u64,
+    pub(crate) noise_static: [u8; 32],
 }
 
 /// Result of [`ContactStore::pair`].
@@ -817,6 +825,23 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
         Ok(verified)
     }
 
+    /// The handshake inputs of an available contact.
+    pub(crate) fn handshake_inputs(
+        &self,
+        device: &Ed25519PublicKey,
+    ) -> Result<ContactHandshake, ContactError> {
+        let contact = self
+            .availability(device)?
+            .map_err(|_| ContactError::RatchetMismatch)?;
+        let mut psk = Zeroizing::new([0; PSK_LEN]);
+        psk.copy_from_slice(contact.psk.expose());
+        Ok(ContactHandshake {
+            psk,
+            generation: contact.generation,
+            noise_static: contact.pinned.noise_static,
+        })
+    }
+
     /// §4.4 steps 1–2: durably journals `generation_next`, `h`, `psk_next`,
     /// and the pinned keys. The contact must be available and
     /// `generation_next` must be its generation plus one. While journaled,
@@ -826,10 +851,6 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// On a persistence error the journal stays in memory (fail closed):
     /// the contact is unavailable until reopened from what was durably
     /// stored.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by todoke-crypto::session, added next")
-    )]
     pub(crate) fn journal_ratchet(
         &mut self,
         device: &Ed25519PublicKey,
@@ -858,10 +879,6 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// the journaled ones (dropping, and so zeroizing, the old PSK) and keeps
     /// the marker until [`Self::clear_ratchet`]. On a persistence error the
     /// contact stays blocked in memory.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by todoke-crypto::session, added next")
-    )]
     pub(crate) fn commit_ratchet(
         &mut self,
         device: &Ed25519PublicKey,
@@ -896,10 +913,6 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// §4.4 steps 4–5: clears the committed marker, which makes the contact
     /// available again. Rolled back on a persistence error, so the contact
     /// stays blocked.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by todoke-crypto::session, added next")
-    )]
     pub(crate) fn clear_ratchet(
         &mut self,
         device: &Ed25519PublicKey,
@@ -935,10 +948,6 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// [`VerificationState::RatchetUncertain`] and drops the journal
     /// (zeroizing any journaled PSK). Neither generation is retried (§4.4).
     /// The block stays in effect in memory even if persisting it fails.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by todoke-crypto::session, added next")
-    )]
     pub(crate) fn abandon_ratchet(
         &mut self,
         device: &Ed25519PublicKey,

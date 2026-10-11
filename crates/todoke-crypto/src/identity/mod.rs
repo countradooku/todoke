@@ -21,7 +21,7 @@
 //! guarantee (O6). The local storage formats in [`keystore`] and [`contacts`]
 //! are versioned and sealed; they are not protocol wire formats.
 
-mod binding;
+pub(crate) mod binding;
 mod codec;
 pub mod contacts;
 mod ed25519;
@@ -70,6 +70,6 @@ impl fmt::Debug for Hex<'_> {
 }
 
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 #[cfg(test)]
 mod tests;
