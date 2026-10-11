@@ -308,6 +308,91 @@ mod tests {
         Ok(())
     }
 
+    /// Only a missing file means "nothing stored"; any other open failure
+    /// is an error, never an empty store.
+    #[test]
+    fn load_reports_errors_other_than_absence() -> TestResult {
+        let scratch = Scratch::new()?;
+        let file = scratch.0.join("file");
+        fs::write(&file, b"not a directory")?;
+        let storage = FileStorage::new(file.join("blob"));
+        assert!(matches!(storage.load(64), Err(StorageError::Io(_))));
+        Ok(())
+    }
+
+    #[test]
+    fn load_accepts_exactly_max_len() -> TestResult {
+        let scratch = Scratch::new()?;
+        let mut storage = FileStorage::new(scratch.0.join("blob"));
+        storage.store(b"12345")?;
+        assert_eq!(storage.load(5)?.as_deref(), Some(&b"12345"[..]));
+        assert_eq!(storage.load(4), Err(StorageError::TooLarge));
+        assert_eq!(storage.load(0), Err(StorageError::TooLarge));
+        Ok(())
+    }
+
+    /// A stale `.tmp` that cannot be removed fails the store at the removal
+    /// step (not later at `create_new`) and leaves the stored blob intact.
+    #[cfg(unix)]
+    #[test]
+    fn unremovable_temporary_path_fails_store() -> TestResult {
+        let scratch = Scratch::new()?;
+        let path = scratch.0.join("blob");
+        let mut storage = FileStorage::new(&path);
+        storage.store(b"kept")?;
+        let temporary = scratch.0.join("blob.tmp");
+        fs::create_dir(&temporary)?;
+        fs::write(temporary.join("inside"), b"x")?;
+        let result = storage.store(b"replacement");
+        assert!(matches!(result, Err(StorageError::Io(_))));
+        assert_ne!(
+            result,
+            Err(StorageError::Io(io::ErrorKind::AlreadyExists)),
+            "failure must come from removing the stale path"
+        );
+        assert_eq!(storage.load(64)?.as_deref(), Some(&b"kept"[..]));
+        assert!(temporary.join("inside").exists());
+        Ok(())
+    }
+
+    /// The pre-rename check accepts only the very file that was opened.
+    #[cfg(unix)]
+    #[test]
+    fn ensure_same_file_rejects_substitutes() -> TestResult {
+        let scratch = Scratch::new()?;
+        let opened_path = scratch.0.join("opened");
+        let other_path = scratch.0.join("other");
+        fs::write(&opened_path, b"a")?;
+        fs::write(&other_path, b"b")?;
+        let opened = File::open(&opened_path)?;
+        assert_eq!(ensure_same_file(&opened, &opened_path), Ok(()));
+        let substituted = Err(StorageError::Io(io::ErrorKind::AlreadyExists));
+        // Another regular file on the same device.
+        assert_eq!(ensure_same_file(&opened, &other_path), substituted);
+        // A symlink to the opened file is not the file itself.
+        let link = scratch.0.join("link");
+        std::os::unix::fs::symlink(&opened_path, &link)?;
+        assert_eq!(ensure_same_file(&opened, &link), substituted);
+        // A directory is not a regular file.
+        assert_eq!(ensure_same_file(&opened, &scratch.0), substituted);
+        Ok(())
+    }
+
+    /// The parent of a bare file name is the current directory; a missing
+    /// parent is an error rather than silently syncing something else.
+    #[cfg(unix)]
+    #[test]
+    fn sync_parent_resolves_the_parent_directory() -> TestResult {
+        sync_parent(Path::new("blob"))?;
+        let scratch = Scratch::new()?;
+        sync_parent(&scratch.0.join("blob"))?;
+        assert!(matches!(
+            sync_parent(&scratch.0.join("missing").join("blob")),
+            Err(StorageError::Io(_))
+        ));
+        Ok(())
+    }
+
     #[test]
     fn memory_storage_enforces_limit() -> TestResult {
         let mut storage = MemoryStorage::new();
