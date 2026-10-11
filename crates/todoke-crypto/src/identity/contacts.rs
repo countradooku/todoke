@@ -24,9 +24,15 @@ pub const MAX_CONTACTS: usize = 1024;
 pub const MAX_HISTORY: usize = 32;
 
 const PSK_LEN: usize = 32;
+/// `pending_state:u8 || generation_next:u64 || handshake_hash[32] ||
+/// psk_next[32] || keyset[32]`: the §4.4 ratchet journal, all zero when none.
+const PENDING_LEN: usize = 1 + 8 + 32 + PSK_LEN + 32;
 /// `person_root || device_public || noise_static || kem_static || serial:u64 ||
-/// origin:u8 || state:u8 || generation:u64 || psk[32] || history_count:u8`.
-const CONTACT_FIXED_LEN: usize = 32 * 3 + KEM_STATIC_LEN + 8 + 1 + 1 + 8 + PSK_LEN + 1;
+/// origin:u8 || state:u8 || generation:u64 || psk[32] || history_count:u8`,
+/// plus the trailing pending journal block. History events sit between
+/// `history_count` and the journal block.
+const CONTACT_FIXED_LEN: usize =
+    32 * 3 + KEM_STATIC_LEN + 8 + 1 + 1 + 8 + PSK_LEN + 1 + PENDING_LEN;
 /// `at:u64 || kind:u8 || changed:u8 || serial:u64 || keyset[32] || previous[32]`.
 const HISTORY_LEN: usize = 8 + 1 + 1 + 8 + 32 + 32;
 const MAX_BLOB_LEN: usize = 6
@@ -38,23 +44,35 @@ const MAX_BLOB_LEN: usize = 6
     + super::revocation::MAX_TOTAL_RECORDS * todoke_proto::identity::REVOKE_LEN;
 
 /// Version 2 added retained conflicting revocation records to the revocation
-/// set layout. Version 1 blobs are rejected; that format never shipped.
+/// set layout; version 3 added the per-contact §4.4 ratchet journal. Older
+/// blobs are rejected; those formats never shipped.
 const ENVELOPE: Envelope = Envelope {
     magic: *b"TDKC",
-    version: 2,
+    version: 3,
     context: b"todoke/local/contacts\0",
 };
 const KEYSET_DOMAIN: &[u8] = b"todoke/local/keyset\0";
 
 /// The current pair PSK. Zeroized on drop; `Debug` is redacted; it has no
 /// public constructor or accessor and never leaves this crate. It is produced
-/// by pairing and the §4.4 ratchet, neither of which is implemented yet.
+/// by pairing (not implemented yet) and by the §4.4 ratchet in the session
+/// layer.
 pub struct PairPsk(Zeroizing<[u8; PSK_LEN]>);
 
 impl PairPsk {
     #[cfg(test)]
     pub(crate) fn new(bytes: [u8; PSK_LEN]) -> Self {
         Self(Zeroizing::new(bytes))
+    }
+
+    pub(crate) fn from_secret(bytes: &[u8; PSK_LEN]) -> Self {
+        let mut psk = Zeroizing::new([0; PSK_LEN]);
+        psk.copy_from_slice(bytes);
+        Self(psk)
+    }
+
+    pub(crate) fn expose(&self) -> &[u8; PSK_LEN] {
+        &self.0
     }
 }
 
@@ -99,7 +117,8 @@ pub enum VerificationState {
     /// The peer presented a validly signed binding with different keys (§4.3:
     /// unknown identity changes fail closed).
     KeyChanged,
-    /// A ratchet transaction was interrupted with a pending journal (§4.4).
+    /// A ratchet transaction was interrupted with a pending journal, or
+    /// failed after journaling (§4.4).
     RatchetUncertain,
 }
 
@@ -308,6 +327,25 @@ pub enum HistoryKind {
     },
 }
 
+/// The durable §4.4 ratchet journal of one contact.
+#[derive(Debug)]
+enum PendingJournal {
+    /// Step 1/2: the next generation and PSK are journaled; the current
+    /// PSK is still the old one.
+    Journaled {
+        generation_next: u64,
+        handshake_hash: [u8; 32],
+        psk_next: PairPsk,
+        keyset: KeysetDigest,
+    },
+    /// Step 3/4: the new PSK and generation are committed; the marker stays
+    /// until the acknowledgment step clears it.
+    Committed {
+        handshake_hash: [u8; 32],
+        keyset: KeysetDigest,
+    },
+}
+
 /// A paired device.
 #[derive(Debug)]
 pub struct Contact {
@@ -318,6 +356,7 @@ pub struct Contact {
     generation: u64,
     psk: PairPsk,
     history: VecDeque<HistoryEvent>,
+    pending: Option<PendingJournal>,
 }
 
 impl Contact {
@@ -362,6 +401,19 @@ impl Contact {
         self.history.iter()
     }
 
+    /// Whether a §4.4 ratchet transaction is journaled for this contact in
+    /// this process. A journal found when opening the store is converted to
+    /// [`VerificationState::RatchetUncertain`] instead.
+    #[must_use]
+    pub fn ratchet_pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn psk(&self) -> &PairPsk {
+        &self.psk
+    }
+
     fn record(&mut self, event: HistoryEvent) {
         if self.history.len() >= MAX_HISTORY {
             self.history.pop_front();
@@ -384,7 +436,9 @@ pub enum PairOutcome {
 pub enum Unavailable {
     /// Blocked after a key change; re-pair explicitly.
     KeyChanged,
-    /// Blocked after an interrupted ratchet; re-pair explicitly.
+    /// Blocked after an interrupted ratchet; re-pair explicitly. Also
+    /// reported while a ratchet transaction is journaled in this process,
+    /// which keeps a concurrent session from starting (§4.4 step 1).
     RatchetUncertain,
     /// The contact's root is disabled by conflicting revocations or quota.
     RootDisabled,
@@ -410,6 +464,9 @@ pub enum ContactError {
     Corrupt,
     /// The storage backend failed.
     Storage(StorageError),
+    /// A §4.4 ratchet step does not match the journaled transaction: wrong
+    /// generation, handshake hash, or step order, or generation overflow.
+    RatchetMismatch,
 }
 
 impl fmt::Display for ContactError {
@@ -422,6 +479,7 @@ impl fmt::Display for ContactError {
             Self::Seal => f.write_str("contact store sealing failed"),
             Self::Corrupt => f.write_str("contact store data is malformed"),
             Self::Storage(error) => write!(f, "contact store storage failed: {error}"),
+            Self::RatchetMismatch => f.write_str("ratchet step does not match the journal"),
         }
     }
 }
@@ -494,14 +552,25 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// # Errors
     ///
     /// [`ContactError::Seal`], [`ContactError::Corrupt`], or a storage error.
+    ///
+    /// A ratchet journal found here belongs to a transaction that was
+    /// interrupted by a crash or shutdown. Its contact is blocked as
+    /// [`VerificationState::RatchetUncertain`] and the journal is dropped
+    /// (zeroizing its PSK): neither generation is restored or tried (§4.4).
+    /// The block is persisted with the next mutation.
     pub fn open(sealer: S, storage: B) -> Result<Self, ContactError> {
-        let (contacts, revocations) = match storage.load(MAX_BLOB_LEN)? {
+        let (mut contacts, revocations) = match storage.load(MAX_BLOB_LEN)? {
             None => (BTreeMap::new(), RevocationSet::new()),
             Some(blob) => {
                 let plaintext = ENVELOPE.open(&sealer, &blob).map_err(map_format)?;
                 decode(&plaintext).map_err(map_format)?
             }
         };
+        for contact in contacts.values_mut() {
+            if contact.pending.take().is_some() {
+                contact.state = VerificationState::RatchetUncertain;
+            }
+        }
         Ok(Self {
             sealer,
             storage,
@@ -565,6 +634,9 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     }
 
     fn check_available(&self, contact: &Contact) -> Result<(), Unavailable> {
+        if contact.pending.is_some() {
+            return Err(Unavailable::RatchetUncertain);
+        }
         match contact.state {
             VerificationState::Verified => {}
             VerificationState::KeyChanged => return Err(Unavailable::KeyChanged),
@@ -625,6 +697,7 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
             generation,
             psk,
             history: VecDeque::new(),
+            pending: None,
         };
         let outcome = if let Some(previous) = self.contacts.get(&device) {
             contact.history.clone_from(&previous.history);
@@ -742,6 +815,140 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
                 .map_err(IdentityError::Storage)?;
         }
         Ok(verified)
+    }
+
+    /// §4.4 steps 1–2: durably journals `generation_next`, `h`, `psk_next`,
+    /// and the pinned keys. The contact must be available and
+    /// `generation_next` must be its generation plus one. While journaled,
+    /// [`Self::availability`] reports it unavailable, so no concurrent
+    /// session starts.
+    ///
+    /// On a persistence error the journal stays in memory (fail closed):
+    /// the contact is unavailable until reopened from what was durably
+    /// stored.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "called by todoke-crypto::session, added next")
+    )]
+    pub(crate) fn journal_ratchet(
+        &mut self,
+        device: &Ed25519PublicKey,
+        generation_next: u64,
+        handshake_hash: &[u8; 32],
+        psk_next: &[u8; PSK_LEN],
+    ) -> Result<(), ContactError> {
+        let available = self.availability(device)?.is_ok();
+        let contact = self
+            .contacts
+            .get_mut(device)
+            .ok_or(ContactError::UnknownContact)?;
+        if !available || contact.generation.checked_add(1) != Some(generation_next) {
+            return Err(ContactError::RatchetMismatch);
+        }
+        contact.pending = Some(PendingJournal::Journaled {
+            generation_next,
+            handshake_hash: *handshake_hash,
+            psk_next: PairPsk::from_secret(psk_next),
+            keyset: contact.pinned.digest(),
+        });
+        self.persist()
+    }
+
+    /// §4.4 steps 3–4: atomically replaces the pair PSK and generation with
+    /// the journaled ones (dropping, and so zeroizing, the old PSK) and keeps
+    /// the marker until [`Self::clear_ratchet`]. On a persistence error the
+    /// contact stays blocked in memory.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "called by todoke-crypto::session, added next")
+    )]
+    pub(crate) fn commit_ratchet(
+        &mut self,
+        device: &Ed25519PublicKey,
+        handshake_hash: &[u8; 32],
+    ) -> Result<(), ContactError> {
+        let contact = self
+            .contacts
+            .get_mut(device)
+            .ok_or(ContactError::UnknownContact)?;
+        match contact.pending.take() {
+            Some(PendingJournal::Journaled {
+                generation_next,
+                handshake_hash: journaled,
+                psk_next,
+                keyset,
+            }) if journaled == *handshake_hash => {
+                contact.psk = psk_next;
+                contact.generation = generation_next;
+                contact.pending = Some(PendingJournal::Committed {
+                    handshake_hash: journaled,
+                    keyset,
+                });
+            }
+            other => {
+                contact.pending = other;
+                return Err(ContactError::RatchetMismatch);
+            }
+        }
+        self.persist()
+    }
+
+    /// §4.4 steps 4–5: clears the committed marker, which makes the contact
+    /// available again. Rolled back on a persistence error, so the contact
+    /// stays blocked.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "called by todoke-crypto::session, added next")
+    )]
+    pub(crate) fn clear_ratchet(
+        &mut self,
+        device: &Ed25519PublicKey,
+        handshake_hash: &[u8; 32],
+    ) -> Result<(), ContactError> {
+        let contact = self
+            .contacts
+            .get_mut(device)
+            .ok_or(ContactError::UnknownContact)?;
+        let pending = match contact.pending.take() {
+            Some(PendingJournal::Committed {
+                handshake_hash: committed,
+                keyset,
+            }) if committed == *handshake_hash => PendingJournal::Committed {
+                handshake_hash: committed,
+                keyset,
+            },
+            other => {
+                contact.pending = other;
+                return Err(ContactError::RatchetMismatch);
+            }
+        };
+        if let Err(error) = self.persist() {
+            if let Some(contact) = self.contacts.get_mut(device) {
+                contact.pending = Some(pending);
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// A ratchet transaction failed after journaling: blocks the contact as
+    /// [`VerificationState::RatchetUncertain`] and drops the journal
+    /// (zeroizing any journaled PSK). Neither generation is retried (§4.4).
+    /// The block stays in effect in memory even if persisting it fails.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "called by todoke-crypto::session, added next")
+    )]
+    pub(crate) fn abandon_ratchet(
+        &mut self,
+        device: &Ed25519PublicKey,
+    ) -> Result<(), ContactError> {
+        let contact = self
+            .contacts
+            .get_mut(device)
+            .ok_or(ContactError::UnknownContact)?;
+        contact.pending = None;
+        self.block(device, VerificationState::RatchetUncertain, None)
     }
 
     /// Blocks `device` after an interrupted ratchet with a pending journal
@@ -914,6 +1121,7 @@ fn encode(
         for event in &contact.history {
             encode_event(event, &mut out);
         }
+        encode_pending(contact.pending.as_ref(), &mut out);
     }
     revocations.encode_into(&mut out);
     out
@@ -932,6 +1140,77 @@ fn encode_event(event: &HistoryEvent, out: &mut Vec<u8>) {
     out.extend_from_slice(&event.serial.get().to_be_bytes());
     out.extend_from_slice(&event.keyset.0);
     out.extend_from_slice(&previous);
+}
+
+/// `pending_state:u8 || generation_next:u64 || handshake_hash[32] ||
+/// psk_next[32] || keyset[32]`: state 0 is all zero, state 1 (journaled)
+/// fills every field, state 2 (committed) leaves `psk_next` zero.
+fn encode_pending(pending: Option<&PendingJournal>, out: &mut Vec<u8>) {
+    let (state, generation_next, handshake_hash, psk, keyset) = match pending {
+        None => (0, 0, [0; 32], None, [0; 32]),
+        Some(PendingJournal::Journaled {
+            generation_next,
+            handshake_hash,
+            psk_next,
+            keyset,
+        }) => (
+            1,
+            *generation_next,
+            *handshake_hash,
+            Some(psk_next),
+            keyset.0,
+        ),
+        Some(PendingJournal::Committed {
+            handshake_hash,
+            keyset,
+        }) => (2, 0, *handshake_hash, None, keyset.0),
+    };
+    out.push(state);
+    out.extend_from_slice(&generation_next.to_be_bytes());
+    out.extend_from_slice(&handshake_hash);
+    match psk {
+        Some(psk) => out.extend_from_slice(psk.expose()),
+        None => out.extend_from_slice(&[0; PSK_LEN]),
+    }
+    out.extend_from_slice(&keyset);
+}
+
+fn decode_pending(
+    reader: &mut Reader<'_>,
+    generation: u64,
+    keyset: KeysetDigest,
+) -> Result<Option<PendingJournal>, LocalFormatError> {
+    let state = reader.u8()?;
+    let generation_next = reader.u64()?;
+    let handshake_hash = reader.array::<32>()?;
+    let mut psk_next = PairPsk(Zeroizing::new([0; PSK_LEN]));
+    reader.read_into(psk_next.0.as_mut())?;
+    let stored_keyset = KeysetDigest(reader.array()?);
+    let psk_is_zero = psk_next.0.iter().all(|&byte| byte == 0);
+    match state {
+        0 if generation_next == 0
+            && handshake_hash == [0; 32]
+            && psk_is_zero
+            && stored_keyset.0 == [0; 32] =>
+        {
+            Ok(None)
+        }
+        1 if generation.checked_add(1) == Some(generation_next) && stored_keyset == keyset => {
+            Ok(Some(PendingJournal::Journaled {
+                generation_next,
+                handshake_hash,
+                psk_next,
+                keyset,
+            }))
+        }
+        2 if generation_next == 0 && psk_is_zero && stored_keyset == keyset => {
+            Ok(Some(PendingJournal::Committed {
+                handshake_hash,
+                keyset,
+            }))
+        }
+        _ => Err(LocalFormatError::Malformed),
+    }
 }
 
 fn decode_event(reader: &mut Reader<'_>) -> Result<HistoryEvent, LocalFormatError> {
@@ -989,28 +1268,33 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, LocalFormatError> {
         let mut psk = PairPsk(Zeroizing::new([0; PSK_LEN]));
         reader.read_into(psk.0.as_mut())?;
         let history_count = usize::from(reader.u8()?);
-        if history_count > MAX_HISTORY || reader.remaining() < history_count * HISTORY_LEN {
+        if history_count > MAX_HISTORY
+            || reader.remaining() < history_count * HISTORY_LEN + PENDING_LEN
+        {
             return Err(LocalFormatError::Malformed);
         }
         let mut history = VecDeque::with_capacity(history_count);
         for _ in 0..history_count {
             history.push_back(decode_event(&mut reader)?);
         }
+        let pinned = PinnedKeys {
+            person_root,
+            device_public,
+            noise_static,
+            kem_static,
+        };
+        let pending = decode_pending(&mut reader, generation, pinned.digest())?;
         contacts.insert(
             device_public,
             Contact {
-                pinned: PinnedKeys {
-                    person_root,
-                    device_public,
-                    noise_static,
-                    kem_static,
-                },
+                pinned,
                 binding_serial,
                 origin,
                 state,
                 generation,
                 psk,
                 history,
+                pending,
             },
         );
     }
@@ -1661,17 +1945,39 @@ mod tests {
             ),
             any::<[u8; 32]>(),
             proptest::collection::vec(arb_event(), 0..=MAX_HISTORY),
+            (0..3u8, any::<[u8; 32]>(), any::<[u8; 32]>()),
         )
             .prop_filter_map(
                 "contact",
-                |((root, device, noise), (kem, serial, code, state, generation), psk, history)| {
+                |(
+                    (root, device, noise),
+                    (kem, serial, code, state, generation),
+                    psk,
+                    history,
+                    (pending_state, pending_hash, pending_psk),
+                )| {
+                    let pinned = PinnedKeys {
+                        person_root: public_from_seed(root)?,
+                        device_public: public_from_seed(device)?,
+                        noise_static: noise,
+                        kem_static: Box::new([kem; KEM_STATIC_LEN]),
+                    };
+                    let keyset = pinned.digest();
+                    let pending = match pending_state {
+                        0 => None,
+                        1 => Some(PendingJournal::Journaled {
+                            generation_next: generation.checked_add(1)?,
+                            handshake_hash: pending_hash,
+                            psk_next: PairPsk::new(pending_psk),
+                            keyset,
+                        }),
+                        _ => Some(PendingJournal::Committed {
+                            handshake_hash: pending_hash,
+                            keyset,
+                        }),
+                    };
                     Some(Contact {
-                        pinned: PinnedKeys {
-                            person_root: public_from_seed(root)?,
-                            device_public: public_from_seed(device)?,
-                            noise_static: noise,
-                            kem_static: Box::new([kem; KEM_STATIC_LEN]),
-                        },
+                        pinned,
                         binding_serial: NonZeroU64::new(serial)?,
                         origin: if code {
                             TrustOrigin::CodePairing
@@ -1682,6 +1988,7 @@ mod tests {
                         generation,
                         psk: PairPsk::new(psk),
                         history: history.into(),
+                        pending,
                     })
                 },
             )
@@ -1801,6 +2108,204 @@ mod tests {
 
     fn storage_failed<T: fmt::Debug>(result: &Result<T, ContactError>) -> bool {
         matches!(result, Err(ContactError::Storage(_)))
+    }
+
+    /// The §4.4 journal steps under failing storage: journaling and
+    /// committing block in memory even if persisting fails; clearing (which
+    /// grants access again) rolls back; a restart never restores an old PSK
+    /// as usable while a journal was durable.
+    #[test]
+    fn ratchet_journal_persistence_is_fail_closed() -> TestResult {
+        let enrolled = Enrolled::new()?;
+        let key = device(&enrolled)?;
+        let (storage, switch) = SwitchableStorage::new();
+        let mut store = ContactStore::open(sealer(9), storage)?;
+        store.pair(
+            &enrolled.bind(1)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([0x77; 32]),
+            1,
+            time(T0)?,
+        )?;
+        let (hash, next) = ([0x48; 32], [0x99; 32]);
+        // Journal write fails: blocked now, old pairing intact on disk.
+        switch.set(true);
+        assert!(storage_failed(
+            &store.journal_ratchet(&key, 2, &hash, &next)
+        ));
+        assert_eq!(
+            store.availability(&key)?.map(|_| ()),
+            Err(Unavailable::RatchetUncertain)
+        );
+        let restarted = durable(&store)?;
+        assert_eq!(
+            restarted.availability(&key)?.map(Contact::generation),
+            Ok(1)
+        );
+        // A durable journal, then a failing commit: blocked in memory, and a
+        // restart finds the journal and blocks too.
+        let (storage, switch) = SwitchableStorage::new();
+        let mut store = ContactStore::open(sealer(9), storage)?;
+        store.pair(
+            &enrolled.bind(1)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([0x77; 32]),
+            1,
+            time(T0)?,
+        )?;
+        store.journal_ratchet(&key, 2, &hash, &next)?;
+        switch.set(true);
+        assert!(storage_failed(&store.commit_ratchet(&key, &hash)));
+        assert!(store.availability(&key)?.is_err());
+        let restarted = durable(&store)?;
+        let contact = restarted.contact(&key).ok_or("contact")?;
+        assert_eq!(contact.state(), VerificationState::RatchetUncertain);
+        assert!(!contact.ratchet_pending());
+        assert_eq!(
+            restarted.availability(&key)?.map(|_| ()),
+            Err(Unavailable::RatchetUncertain)
+        );
+        // Commit persisted, clear fails: the marker is restored in memory.
+        let (storage, switch) = SwitchableStorage::new();
+        let mut store = ContactStore::open(sealer(9), storage)?;
+        store.pair(
+            &enrolled.bind(1)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([0x77; 32]),
+            1,
+            time(T0)?,
+        )?;
+        store.journal_ratchet(&key, 2, &hash, &next)?;
+        store.commit_ratchet(&key, &hash)?;
+        switch.set(true);
+        assert!(storage_failed(&store.clear_ratchet(&key, &hash)));
+        assert!(store.contact(&key).ok_or("contact")?.ratchet_pending());
+        assert!(store.availability(&key)?.is_err());
+        let restarted = durable(&store)?;
+        let contact = restarted.contact(&key).ok_or("contact")?;
+        assert_eq!(contact.state(), VerificationState::RatchetUncertain);
+        assert_eq!(
+            contact.generation(),
+            2,
+            "committed state is what was durable"
+        );
+        // Abandon blocks in memory even when persisting fails.
+        assert!(storage_failed(&store.abandon_ratchet(&key)));
+        assert_eq!(
+            store.contact(&key).ok_or("contact")?.state(),
+            VerificationState::RatchetUncertain
+        );
+        // Finally a clean run commits and clears.
+        let (storage, _switch) = SwitchableStorage::new();
+        let mut store = ContactStore::open(sealer(9), storage)?;
+        store.pair(
+            &enrolled.bind(1)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([0x77; 32]),
+            1,
+            time(T0)?,
+        )?;
+        store.journal_ratchet(&key, 2, &hash, &next)?;
+        store.commit_ratchet(&key, &hash)?;
+        store.clear_ratchet(&key, &hash)?;
+        let contact = durable(&store)?;
+        let contact = contact.availability(&key)?.map_err(|_| "unavailable")?;
+        assert_eq!((contact.generation(), contact.psk().expose()), (2, &next));
+        Ok(())
+    }
+
+    /// Re-pairing replaces a journaled contact; journaling refuses overflow.
+    #[test]
+    fn repairing_clears_a_journal_and_overflow_is_refused() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        store.journal_ratchet(&key, 2, &[1; 32], &[2; 32])?;
+        assert_eq!(
+            store.journal_ratchet(&key, 2, &[1; 32], &[2; 32]),
+            Err(ContactError::RatchetMismatch)
+        );
+        assert_eq!(
+            store.clear_ratchet(&key, &[1; 32]),
+            Err(ContactError::RatchetMismatch)
+        );
+        store.pair(
+            &enrolled.bind(2)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([3; 32]),
+            u64::MAX,
+            time(T0)?,
+        )?;
+        assert!(!store.contact(&key).ok_or("contact")?.ratchet_pending());
+        assert_eq!(
+            store.journal_ratchet(&key, 0, &[1; 32], &[2; 32]),
+            Err(ContactError::RatchetMismatch)
+        );
+        assert_eq!(
+            store.availability(&key)?.map(Contact::generation),
+            Ok(u64::MAX)
+        );
+        let unknown = Enrolled::new()?;
+        assert_eq!(
+            store.journal_ratchet(&device(&unknown)?, 2, &[1; 32], &[2; 32]),
+            Err(ContactError::UnknownContact)
+        );
+        assert_ne!(ContactError::RatchetMismatch.to_string(), "");
+        Ok(())
+    }
+
+    /// Only the three defined journal encodings decode.
+    #[test]
+    fn decode_validates_the_journal_block() -> TestResult {
+        let device_key = indexed_key(1)?;
+        let mut contact = fixed_contact(indexed_key(0)?, device_key, 0)?;
+        let keyset = contact.pinned.digest();
+        let start = 4 + CONTACT_FIXED_LEN - PENDING_LEN;
+        let encode_with = |contact: Contact| {
+            let mut map = BTreeMap::new();
+            map.insert(device_key, contact);
+            encode(&map, &RevocationSet::new()).to_vec()
+        };
+        let none = encode_with(fixed_contact(indexed_key(0)?, device_key, 0)?);
+        assert_eq!(&none[start..start + PENDING_LEN], &[0; PENDING_LEN][..]);
+        contact.pending = Some(PendingJournal::Journaled {
+            generation_next: 2,
+            handshake_hash: [5; 32],
+            psk_next: PairPsk::new([6; 32]),
+            keyset,
+        });
+        let journaled = encode_with(contact);
+        assert_eq!(journaled[start], 1);
+        let mut committed_contact = fixed_contact(indexed_key(0)?, device_key, 0)?;
+        committed_contact.pending = Some(PendingJournal::Committed {
+            handshake_hash: [5; 32],
+            keyset,
+        });
+        let committed = encode_with(committed_contact);
+        for valid in [&none, &journaled, &committed] {
+            let decoded = decode(valid).map_err(|_| "decode")?;
+            assert_eq!(encode(&decoded.0, &decoded.1).as_slice(), valid.as_slice());
+        }
+        let malformed = |bytes: &[u8], offset: usize, value: u8| {
+            let mut changed = bytes.to_vec();
+            changed[start + offset] = value;
+            decode(&changed).err() == Some(LocalFormatError::Malformed)
+        };
+        // Unknown state; nonzero fields when there is no journal.
+        assert!(malformed(&none, 0, 3));
+        for offset in [1, 9, 41, 73] {
+            assert!(malformed(&none, offset, 1), "offset {offset}");
+        }
+        // A journaled generation that is not generation + 1, or a keyset
+        // that is not the pinned one.
+        assert!(malformed(&journaled, 8, 3));
+        assert!(malformed(&journaled, 73, 0));
+        // A committed marker with a PSK or a generation.
+        assert!(malformed(&committed, 41, 1));
+        assert!(malformed(&committed, 8, 1));
+        assert!(malformed(&committed, 73, 0));
+        // Truncated block.
+        assert!(decode(&none[..none.len() - 5]).is_err());
+        Ok(())
     }
 
     /// Mutations that grant or keep access roll back when persisting fails;
@@ -2144,6 +2649,7 @@ mod tests {
             generation: 1,
             psk: PairPsk::new([0x77; 32]),
             history: core::iter::repeat_n(event, history).collect(),
+            pending: None,
         })
     }
 
@@ -2586,6 +3092,15 @@ mod tests {
         Revoke,
         Reopen,
         Remove,
+        /// §4.4 journal with the expected next generation.
+        Journal,
+        /// Journal with a wrong next generation.
+        JournalWrongGeneration,
+        Commit,
+        /// Commit for another transaction's handshake hash.
+        CommitWrongHash,
+        Clear,
+        Abandon,
     }
 
     fn arb_op() -> impl Strategy<Value = Op> {
@@ -2600,13 +3115,44 @@ mod tests {
             1 => Just(Op::Revoke),
             1 => Just(Op::Reopen),
             1 => Just(Op::Remove),
+            3 => Just(Op::Journal),
+            1 => Just(Op::JournalWrongGeneration),
+            3 => Just(Op::Commit),
+            1 => Just(Op::CommitWrongHash),
+            3 => Just(Op::Clear),
+            1 => Just(Op::Abandon),
         ]
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    enum ModelJournal {
+        Journaled([u8; 32]),
+        Committed,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     struct Model {
         state: VerificationState,
         serial: u64,
+        generation: u64,
+        psk: [u8; 32],
+        journal: Option<ModelJournal>,
+    }
+
+    impl Model {
+        fn paired(serial: u64) -> Self {
+            Self {
+                state: VerificationState::Verified,
+                serial,
+                generation: 1,
+                psk: [3; 32],
+                journal: None,
+            }
+        }
+
+        fn blocked(&self) -> bool {
+            self.state != VerificationState::Verified || self.journal.is_some()
+        }
     }
 
     fn fail(error: impl fmt::Display) -> TestCaseError {
@@ -2614,12 +3160,12 @@ mod tests {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(24))]
+        #![proptest_config(ProptestConfig::with_cases(48))]
 
         /// Model-based state-machine test of the contact verification state,
         /// revocation, and persistence.
         #[test]
-        fn contact_state_machine(ops in proptest::collection::vec(arb_op(), 1..14)) {
+        fn contact_state_machine(ops in proptest::collection::vec(arb_op(), 1..24)) {
             let enrolled = Enrolled::new().map_err(fail)?;
             let key = enrolled.store.public_key(&enrolled.device).map_err(fail)?;
             let mut store = empty_store().map_err(fail)?;
@@ -2627,7 +3173,9 @@ mod tests {
             let mut revoked_through = 0u64;
             let mut next_serial = 1u64;
             let mut next_sequence = 1u64;
+            let mut next_psk = 10u8;
             let now = time(T0).map_err(fail)?;
+            let hash = [0x48; 32];
 
             for op in ops {
                 match op {
@@ -2635,7 +3183,7 @@ mod tests {
                         let binding = enrolled.bind(next_serial).map_err(fail)?;
                         store.pair(&binding, TrustOrigin::QrPairing, PairPsk::new([3; 32]), 1, now)
                             .map_err(fail)?;
-                        model = Some(Model { state: VerificationState::Verified, serial: next_serial });
+                        model = Some(Model::paired(next_serial));
                         next_serial += 1;
                     }
                     Op::ConfirmSame => {
@@ -2643,7 +3191,7 @@ mod tests {
                         let result = store.confirm_identity(&key, &[0x33; 32], binding.binding(), now);
                         match model.as_mut() {
                             None => prop_assert_eq!(result, Err(IdentityError::UnknownContact)),
-                            Some(m) if m.state != VerificationState::Verified => {
+                            Some(m) if m.blocked() => {
                                 prop_assert!(matches!(result, Err(IdentityError::Unavailable(_))));
                             }
                             Some(m) => {
@@ -2659,7 +3207,7 @@ mod tests {
                         let result = store.confirm_identity(&key, &[0x33; 32], binding.binding(), now);
                         match model {
                             None => prop_assert_eq!(result, Err(IdentityError::UnknownContact)),
-                            Some(m) if m.state != VerificationState::Verified => {
+                            Some(m) if m.blocked() => {
                                 prop_assert!(matches!(result, Err(IdentityError::Unavailable(_))));
                             }
                             Some(_) if serial <= revoked_through => {
@@ -2683,7 +3231,7 @@ mod tests {
                         let result = store.confirm_identity(&key, &[0x33; 32], &binding, now);
                         match model.as_mut() {
                             None => prop_assert_eq!(result, Err(IdentityError::UnknownContact)),
-                            Some(m) if m.state != VerificationState::Verified => {
+                            Some(m) if m.blocked() => {
                                 prop_assert!(matches!(result, Err(IdentityError::Unavailable(_))));
                             }
                             Some(m) if matches!(op, Op::ConfirmTampered) => {
@@ -2724,6 +3272,67 @@ mod tests {
                     }
                     Op::Reopen => {
                         store = reopen(&store).map_err(fail)?;
+                        // An interrupted journal blocks the pairing (§4.4).
+                        if let Some(m) = model.as_mut() {
+                            if m.journal.take().is_some() {
+                                m.state = VerificationState::RatchetUncertain;
+                            }
+                        }
+                    }
+                    Op::Journal | Op::JournalWrongGeneration => {
+                        let psk_next = [next_psk; 32];
+                        next_psk = next_psk.wrapping_add(1);
+                        let offset = if matches!(op, Op::Journal) { 1 } else { 2 };
+                        let generation = model.map_or(1, |m| m.generation + offset);
+                        let result = store.journal_ratchet(&key, generation, &hash, &psk_next);
+                        match model.as_mut() {
+                            None => prop_assert_eq!(result, Err(ContactError::UnknownContact)),
+                            Some(m) if m.blocked() || m.serial <= revoked_through || offset == 2 => {
+                                prop_assert_eq!(result, Err(ContactError::RatchetMismatch));
+                            }
+                            Some(m) => {
+                                prop_assert_eq!(result, Ok(()));
+                                m.journal = Some(ModelJournal::Journaled(psk_next));
+                            }
+                        }
+                    }
+                    Op::Commit | Op::CommitWrongHash => {
+                        let presented = if matches!(op, Op::Commit) { hash } else { [0x49; 32] };
+                        let result = store.commit_ratchet(&key, &presented);
+                        match model.as_mut() {
+                            None => prop_assert_eq!(result, Err(ContactError::UnknownContact)),
+                            Some(m) => match m.journal {
+                                Some(ModelJournal::Journaled(psk_next)) if matches!(op, Op::Commit) => {
+                                    prop_assert_eq!(result, Ok(()));
+                                    m.generation += 1;
+                                    m.psk = psk_next;
+                                    m.journal = Some(ModelJournal::Committed);
+                                }
+                                _ => prop_assert_eq!(result, Err(ContactError::RatchetMismatch)),
+                            },
+                        }
+                    }
+                    Op::Clear => {
+                        let result = store.clear_ratchet(&key, &hash);
+                        match model.as_mut() {
+                            None => prop_assert_eq!(result, Err(ContactError::UnknownContact)),
+                            Some(m) if m.journal == Some(ModelJournal::Committed) => {
+                                prop_assert_eq!(result, Ok(()));
+                                m.journal = None;
+                            }
+                            Some(_) => prop_assert_eq!(result, Err(ContactError::RatchetMismatch)),
+                        }
+                    }
+                    Op::Abandon => {
+                        let result = store.abandon_ratchet(&key);
+                        match model.as_mut() {
+                            None => prop_assert_eq!(result, Err(ContactError::UnknownContact)),
+                            Some(m) => {
+                                prop_assert_eq!(result, Ok(()));
+                                m.journal = None;
+                                m.state = VerificationState::RatchetUncertain;
+                            }
+                        }
                     }
                     Op::Remove => {
                         let result = store.remove(&key);
@@ -2746,7 +3355,11 @@ mod tests {
                         let contact = store.contact(&key).ok_or_else(|| fail("missing contact"))?;
                         prop_assert_eq!(contact.state(), m.state);
                         prop_assert_eq!(contact.binding_serial().get(), m.serial);
+                        prop_assert_eq!(contact.generation(), m.generation);
+                        prop_assert_eq!(contact.psk().expose(), &m.psk);
+                        prop_assert_eq!(contact.ratchet_pending(), m.journal.is_some());
                         let expected = match m.state {
+                            _ if m.journal.is_some() => Err(Unavailable::RatchetUncertain),
                             VerificationState::KeyChanged => Err(Unavailable::KeyChanged),
                             VerificationState::RatchetUncertain => Err(Unavailable::RatchetUncertain),
                             VerificationState::Verified if m.serial <= revoked_through => {
