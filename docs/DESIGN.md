@@ -4,7 +4,7 @@
 
 This document records architectural requirements for a free, open-source, cross-platform, end-to-end secure file transfer app. The goal is any-to-any transfers between phones and PCs, with adoption ahead of revenue and the ambition to outperform existing solutions across usability, reliability, performance, and security.
 
-The initial repository is an empty but compiling Rust workspace. It has no transfer implementation, cryptographic dependency, platform integration, or usable application. Requirements here are not claims about implemented behavior. [The protocol baseline](../spec/PROTOCOL.md) lists decisions that must be resolved before relevant implementation begins.
+The runtime crates remain a compiling scaffold with no transfer implementation, platform integration, or usable application. The repository also contains an offline Rust tool and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and identifies release blockers, including the unassigned hybrid Noise construction.
 
 Read both documents before changing behavior. If specification and implementation disagree, stop and report the disagreement.
 
@@ -41,15 +41,15 @@ This is an ownership map, not a dependency graph. Concrete APIs, dependency edge
 
 ## Security requirements
 
-Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The exact hybrid construction, pattern selection, and ratchet protocol are not yet specified. Do not implement them by interpreting the algorithm names as a complete protocol.
+Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The protocol draft assigns pattern selection, transcript requirements, and a conservative ratchet transaction. Its exact hybrid construction remains a blocking open decision; suite 0x0001 is disabled. Do not interpret the algorithm names as a complete protocol.
 
-Per-file content must use AES-256-GCM STREAM encryption, with XChaCha20-Poly1305 as the fallback, and BLAKE3/bao verified chunks. The precise STREAM layout, nonce allocation, negotiation, integrity coverage, and chunk framing remain open. Authenticate and validate according to the eventual specification before treating data as trusted.
+Per-file content must use AES-256-GCM STREAM encryption, with XChaCha20-Poly1305 as the fallback, and BLAKE3/bao verified chunks. The protocol draft specifies STREAM BE32 substreams, nonce allocation, authenticated suite selection, encrypted Bao slices, and chunk framing. Authenticate and validate according to that specification before treating data as trusted; standalone nonce vectors are not complete content-encryption conformance evidence.
 
-Consent is enforced in the core: no file byte is accepted before a signed AcceH. AcceH's full meaning, schema, signing algorithm, authority, and replay handling must be specified before implementing this gate. No pre-consent preview or alternate transport may evade it.
+Consent is enforced in the core: no file byte is accepted before a signed AcceH. The protocol now defines AcceH as the session-bound, Ed25519-signed Accept record and specifies its authority, canonical bytes, selection, expiry, and replay rules. No pre-consent preview or alternate transport may evade it.
 
 Use libcrux wherever it covers the requirements, otherwise appropriate RustCrypto/dalek crates. Never implement cryptographic primitives. Zeroize all secrets, never log them, and never pass them across FFI. Do not collect telemetry. These requirements also apply to diagnostics, errors, examples, tests, and future platform integrations.
 
-All crates outside `todoke-ffi` and `todoke-sys-*` forbid unsafe code. The exception crates initially deny it and contain none. Any future exception must be narrow, reviewed, and documented. Untrusted inputs must produce recoverable errors rather than panics. Resource budgets and failure handling need explicit designs before network-facing features are added.
+All crates outside `todoke-ffi` and `todoke-sys-*` forbid unsafe code. The exception crates initially deny it and contain none. Any future exception must be narrow, reviewed, and documented. Untrusted inputs must produce recoverable errors rather than panics. The protocol assigns wire budgets and failure rules; platform resource management and crash behavior still need implementation evidence before network-facing features are added.
 
 An encrypted authenticated session does not make peer-supplied paths, content, or resource requests safe. The protocol and file boundaries must account for malicious authenticated peers as well as hostile transports. This baseline makes no anonymity or traffic-analysis-resistance claim.
 
@@ -61,4 +61,4 @@ The scaffold's build and policy checks establish repository hygiene only. Cross-
 
 ## Decisions required before implementation
 
-The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, secret storage, and dependency/API boundaries. The initial scaffold intentionally makes none of those choices.
+The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, secret storage, and dependency/API boundaries. The protocol draft resolves wire choices where stated and explicitly gates unresolved construction, platform, and secret-lifecycle questions.
