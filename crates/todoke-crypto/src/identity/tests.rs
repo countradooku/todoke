@@ -3,7 +3,9 @@
 use proptest::prelude::*;
 use todoke_proto::identity::{DeviceBinding, RevocationReason, Revoke};
 
-use super::test_support::{DAY, Enrolled, T0, TestResult, kem_static, nz, request, time};
+use super::test_support::{
+    DAY, Enrolled, T0, TestResult, assert_distinct_messages, kem_static, nz, request, time,
+};
 use super::{
     ApplyOutcome, BindingError, CLOCK_SKEW_SECONDS, DeviceId, DeviceIdentity, Ed25519PublicKey,
     ExportPolicy, IssueError, KeyRole, KeyStore, KeyStoreError, PersonId, PersonIdentity,
@@ -918,4 +920,135 @@ proptest! {
             prop_assert_eq!(forward.is_revoked(&root, &device, serial), serial.get() <= max);
         }
     }
+}
+
+/// Error messages are fixed text that distinguishes the variants; wrapped
+/// errors include the inner message and nothing peer-controlled.
+#[test]
+fn error_messages_are_distinct() {
+    use super::sealing::SealError;
+    use super::storage::StorageError;
+
+    let binding = [
+        BindingError::UntrustedRoot,
+        BindingError::InvalidKey,
+        BindingError::InvalidSignature,
+        BindingError::NotYetValid,
+        BindingError::Expired,
+        BindingError::Revoked,
+        BindingError::RootDisabled,
+    ];
+    assert_distinct_messages(&binding.map(|error| error.to_string()));
+
+    let key_store = [
+        KeyStoreError::UnknownKey,
+        KeyStoreError::WrongRole,
+        KeyStoreError::DomainNotPermitted,
+        KeyStoreError::NotExportable,
+        KeyStoreError::Capacity,
+        KeyStoreError::MessageTooLong,
+        KeyStoreError::Random,
+        KeyStoreError::Seal,
+        KeyStoreError::Corrupt,
+        KeyStoreError::Storage(StorageError::TooLarge),
+    ];
+    assert_distinct_messages(&key_store.map(|error| error.to_string()));
+    assert!(
+        KeyStoreError::Storage(StorageError::TooLarge)
+            .to_string()
+            .ends_with(&StorageError::TooLarge.to_string())
+    );
+
+    let issue = [
+        IssueError::WrongRole,
+        IssueError::InvalidKey,
+        IssueError::InvalidValidity,
+        IssueError::SelfCheck,
+        IssueError::Random,
+        IssueError::KeyStore(KeyStoreError::Capacity),
+    ];
+    assert_distinct_messages(&issue.map(|error| error.to_string()));
+    assert!(
+        IssueError::KeyStore(KeyStoreError::Capacity)
+            .to_string()
+            .ends_with(&KeyStoreError::Capacity.to_string())
+    );
+
+    let revocation = [
+        RevocationError::UntrustedRoot,
+        RevocationError::InvalidKey,
+        RevocationError::InvalidSignature,
+    ];
+    assert_distinct_messages(&revocation.map(|error| error.to_string()));
+
+    let storage = [
+        StorageError::TooLarge,
+        StorageError::Io(std::io::ErrorKind::NotFound),
+        StorageError::Io(std::io::ErrorKind::PermissionDenied),
+    ];
+    assert_distinct_messages(&storage.map(|error| error.to_string()));
+
+    // Single-variant errors: fixed, nonempty, and distinct from each other.
+    assert_distinct_messages(&[
+        super::RandomError.to_string(),
+        SealError.to_string(),
+        super::InvalidPublicKey.to_string(),
+        super::SignatureError.to_string(),
+    ]);
+}
+
+/// Public values render as their full lowercase hex inside a type label;
+/// secret holders render no key bytes.
+#[test]
+fn debug_output_shows_public_values_and_hides_secrets() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let public = enrolled.store.public_key(&enrolled.device)?;
+    let hex_key = hex::encode(public.as_bytes());
+    assert_eq!(
+        format!("{public:?}"),
+        format!("Ed25519PublicKey({hex_key})")
+    );
+    let device_id = DeviceId::of(&public);
+    assert_eq!(
+        format!("{device_id:?}"),
+        format!("DeviceId({})", hex::encode(device_id.as_bytes()))
+    );
+    let person_id = PersonId::of(&public);
+    assert_eq!(
+        format!("{person_id:?}"),
+        format!("PersonId({})", hex::encode(person_id.as_bytes()))
+    );
+    let key_id = super::KeyId::from_bytes([0xc3; 16]).ok_or("zero key id")?;
+    assert_eq!(format!("{key_id:?}"), format!("KeyId({})", "c3".repeat(16)));
+    let signature = Signature::from_bytes([0xd4; 64]);
+    assert_eq!(
+        format!("{signature:?}"),
+        format!("Signature({})", "d4".repeat(64))
+    );
+
+    let mut store = super::test_support::memory_keystore()?;
+    let root = store.generate(KeyRole::PersonRoot, ExportPolicy::Exportable)?;
+    let wrapping = super::WrappingKey::from_bytes(zeroize::Zeroizing::new([0xab; 32]));
+    let wrapped = store.export_wrapped(&root, &wrapping)?;
+    assert_eq!(format!("{wrapping:?}"), "WrappingKey([REDACTED])");
+    assert_eq!(
+        format!("{wrapped:?}"),
+        format!("WrappedKey([{} encrypted bytes])", wrapped.as_bytes().len())
+    );
+    Ok(())
+}
+
+#[test]
+fn revocation_record_accessors_and_set_emptiness() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let record = revoke(&enrolled, 1, 1)?;
+    assert_eq!(record.encode(), record.record().encode());
+    assert_eq!(Revoke::decode(&record.encode())?, *record.record());
+    let mut set = RevocationSet::new();
+    assert!(set.is_empty());
+    assert_eq!(set.len(), 0);
+    set.apply(record);
+    assert!(!set.is_empty());
+    assert_eq!(set.len(), 1);
+    Ok(())
 }

@@ -136,6 +136,74 @@ impl<'a> Reader<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::test_support::{TestResult, sealer};
+
+    const TEST_ENVELOPE: Envelope = Envelope {
+        magic: *b"TDKT",
+        version: 0x0102,
+        context: b"todoke/local/test\0",
+    };
+
+    /// The blob starts with `magic || version`, and the sealed part is bound
+    /// to `context || magic || version` as associated data, so a blob opens
+    /// only under the exact envelope that sealed it.
+    #[test]
+    fn envelope_layout_and_associated_data() -> TestResult {
+        let sealer = sealer(3);
+        let blob = TEST_ENVELOPE
+            .seal(&sealer, b"plaintext")
+            .map_err(|_| "seal")?;
+        assert_eq!(&blob[..6], b"TDKT\x01\x02");
+        let mut aad = b"todoke/local/test\0".to_vec();
+        aad.extend_from_slice(b"TDKT\x01\x02");
+        assert_eq!(sealer.open(&aad, &blob[6..])?.as_slice(), b"plaintext");
+        assert_eq!(
+            TEST_ENVELOPE
+                .open(&sealer, &blob)
+                .map_err(|_| "open")?
+                .as_slice(),
+            b"plaintext"
+        );
+        // Same header, different context: authentication fails.
+        let other_context = Envelope {
+            context: b"todoke/local/other\0",
+            ..TEST_ENVELOPE
+        };
+        assert_eq!(
+            other_context.open(&sealer, &blob).err(),
+            Some(LocalFormatError::Seal)
+        );
+        // A different magic or version is rejected before opening.
+        for other in [
+            Envelope {
+                magic: *b"TDKU",
+                ..TEST_ENVELOPE
+            },
+            Envelope {
+                version: 0x0103,
+                ..TEST_ENVELOPE
+            },
+        ] {
+            assert_eq!(
+                other.open(&sealer, &blob).err(),
+                Some(LocalFormatError::Malformed)
+            );
+        }
+        assert_eq!(
+            TEST_ENVELOPE.open(&sealer, &blob[..5]).err(),
+            Some(LocalFormatError::Malformed)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn finish_rejects_trailing_bytes() {
+        assert_eq!(Reader::new(&[]).finish(), Ok(()));
+        assert_eq!(Reader::new(&[0]).finish(), Err(LocalFormatError::Malformed));
+        let mut reader = Reader::new(&[1, 2, 3]);
+        assert_eq!(reader.u16(), Ok(0x0102));
+        assert_eq!(reader.finish(), Err(LocalFormatError::Malformed));
+    }
 
     #[test]
     fn read_into_reads_exactly_and_fails_without_consuming() {

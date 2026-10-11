@@ -93,3 +93,11 @@ impl Enrolled {
             .map_err(|error: IssueError| error.into())
     }
 }
+
+/// Asserts every message is nonempty and differs from every other one.
+pub(crate) fn assert_distinct_messages(messages: &[String]) {
+    for (index, message) in messages.iter().enumerate() {
+        assert_ne!(message, "");
+        assert!(!messages[..index].contains(message), "{message}");
+    }
+}
