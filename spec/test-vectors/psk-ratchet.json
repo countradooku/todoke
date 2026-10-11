@@ -1,0 +1,9 @@
+{
+  "algorithm": "HKDF-SHA-256",
+  "expand_info_hex": "746f646f6b652f76312f70736b2d7261746368657400",
+  "fixture_notice": "PUBLIC TEST FIXTURE: all seeds, PSKs, and derived values are fixed and must never be used in production",
+  "handshake_hash_and_extract_salt_hex": "7777777777777777777777777777777777777777777777777777777777777777",
+  "next_psk_hex": "31f07f1919fd8b87390d9f829c67c17647243a49de8387ffa812358f425d1fba",
+  "output_length": 32,
+  "psk_hex": "5555555555555555555555555555555555555555555555555555555555555555"
+}

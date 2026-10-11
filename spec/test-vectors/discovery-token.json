@@ -1,0 +1,49 @@
+{
+  "algorithm": "HMAC-BLAKE3 (unkeyed BLAKE3, output 32 bytes, block 64 bytes)",
+  "cases": [
+    {
+      "epoch": 0,
+      "epoch_be_hex": "0000000000000000",
+      "hmac_blake3_hex": "36ed9ce433f7105d00fc89c0b7faef6ac4f174655d17d3a0d67a157a477b182e",
+      "token_hex": "36ed9ce433f7105d",
+      "unix_seconds": 0
+    },
+    {
+      "epoch": 0,
+      "epoch_be_hex": "0000000000000000",
+      "hmac_blake3_hex": "36ed9ce433f7105d00fc89c0b7faef6ac4f174655d17d3a0d67a157a477b182e",
+      "token_hex": "36ed9ce433f7105d",
+      "unix_seconds": 899
+    },
+    {
+      "epoch": 1,
+      "epoch_be_hex": "0000000000000001",
+      "hmac_blake3_hex": "47c36f9892fc94b3aef0056aae090116491b9f79cd11d7d9645e41971dcfeafe",
+      "token_hex": "47c36f9892fc94b3",
+      "unix_seconds": 900
+    },
+    {
+      "epoch": 1,
+      "epoch_be_hex": "0000000000000001",
+      "hmac_blake3_hex": "47c36f9892fc94b3aef0056aae090116491b9f79cd11d7d9645e41971dcfeafe",
+      "token_hex": "47c36f9892fc94b3",
+      "unix_seconds": 1799
+    },
+    {
+      "epoch": 2,
+      "epoch_be_hex": "0000000000000002",
+      "hmac_blake3_hex": "1f83e73dd160a9adb5e3c3416bdf288d1130fc0ffce3367202085460c4a06aae",
+      "token_hex": "1f83e73dd160a9ad",
+      "unix_seconds": 1800
+    },
+    {
+      "epoch": 1955555,
+      "epoch_be_hex": "00000000001dd6e3",
+      "hmac_blake3_hex": "340e847e1dcd692aaf56f39ccdd74ac5fc616bb78264655561311a2d6ba9b6f1",
+      "token_hex": "340e847e1dcd692a",
+      "unix_seconds": 1760000000
+    }
+  ],
+  "fixture_notice": "PUBLIC TEST FIXTURE: all seeds, PSKs, and derived values are fixed and must never be used in production",
+  "pair_key_hex": "6666666666666666666666666666666666666666666666666666666666666666"
+}

@@ -10,3 +10,22 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "generate_vectors"
+test = true
+
+# Reference implementations for the offline, public-fixture generator only.
+[dev-dependencies]
+base45 = "=3.2.0"
+blake3 = { version = "=1.8.7", features = ["traits-preview", "zeroize"] }
+ed25519-dalek = "=3.0.0"
+hex = "=0.4.3"
+hmac = { version = "=0.13.0", features = ["zeroize"] }
+libcrux-curve25519 = "=0.0.9"
+libcrux-ed25519 = "=0.0.10"
+libcrux-hkdf = "=0.0.9"
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+libcrux-secrets = "=0.0.7"
+serde_json = "=1.0.152"
+zeroize = "=1.9.1"

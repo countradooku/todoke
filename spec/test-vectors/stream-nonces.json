@@ -1,0 +1,150 @@
+{
+  "cases": [
+    {
+      "content_suite": 1,
+      "counter": 0,
+      "final_segment": false,
+      "nonce_hex": "888888888888880000000000",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 1,
+      "counter": 0,
+      "final_segment": true,
+      "nonce_hex": "888888888888880000000001",
+      "note": "nonce for an empty file's sole authenticated final segment",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 1,
+      "counter": 1,
+      "final_segment": false,
+      "nonce_hex": "888888888888880000000100",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 1,
+      "counter": 1,
+      "final_segment": true,
+      "nonce_hex": "888888888888880000000101",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 1,
+      "counter": 65535,
+      "final_segment": false,
+      "nonce_hex": "888888888888880000ffff00",
+      "note": "forbidden in todoke v1: the last segment of an epoch must be final",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": false
+    },
+    {
+      "content_suite": 1,
+      "counter": 65535,
+      "final_segment": true,
+      "nonce_hex": "888888888888880000ffff01",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 1,
+      "counter": 4294967295,
+      "final_segment": false,
+      "nonce_hex": "88888888888888ffffffff00",
+      "note": "primitive nonce-layout example only; counter is forbidden by todoke v1",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": false
+    },
+    {
+      "content_suite": 1,
+      "counter": 4294967295,
+      "final_segment": true,
+      "nonce_hex": "88888888888888ffffffff01",
+      "note": "primitive nonce-layout example only; counter is forbidden by todoke v1",
+      "prefix_hex": "88888888888888",
+      "v1_counter_and_final_permitted": false
+    },
+    {
+      "content_suite": 2,
+      "counter": 0,
+      "final_segment": false,
+      "nonce_hex": "999999999999999999999999999999999999990000000000",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 2,
+      "counter": 0,
+      "final_segment": true,
+      "nonce_hex": "999999999999999999999999999999999999990000000001",
+      "note": "nonce for an empty file's sole authenticated final segment",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 2,
+      "counter": 1,
+      "final_segment": false,
+      "nonce_hex": "999999999999999999999999999999999999990000000100",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 2,
+      "counter": 1,
+      "final_segment": true,
+      "nonce_hex": "999999999999999999999999999999999999990000000101",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 2,
+      "counter": 65535,
+      "final_segment": false,
+      "nonce_hex": "999999999999999999999999999999999999990000ffff00",
+      "note": "forbidden in todoke v1: the last segment of an epoch must be final",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": false
+    },
+    {
+      "content_suite": 2,
+      "counter": 65535,
+      "final_segment": true,
+      "nonce_hex": "999999999999999999999999999999999999990000ffff01",
+      "note": "counter/final combination permitted; actual file length, epoch, and final-position checks still apply",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": true
+    },
+    {
+      "content_suite": 2,
+      "counter": 4294967295,
+      "final_segment": false,
+      "nonce_hex": "99999999999999999999999999999999999999ffffffff00",
+      "note": "primitive nonce-layout example only; counter is forbidden by todoke v1",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": false
+    },
+    {
+      "content_suite": 2,
+      "counter": 4294967295,
+      "final_segment": true,
+      "nonce_hex": "99999999999999999999999999999999999999ffffffff01",
+      "note": "primitive nonce-layout example only; counter is forbidden by todoke v1",
+      "prefix_hex": "99999999999999999999999999999999999999",
+      "v1_counter_and_final_permitted": false
+    }
+  ],
+  "construction": "STREAM-BE32",
+  "fixture_notice": "PUBLIC TEST FIXTURE: all seeds, PSKs, and derived values are fixed and must never be used in production"
+}

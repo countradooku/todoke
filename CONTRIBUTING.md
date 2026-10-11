@@ -6,7 +6,7 @@ todoke prioritizes broad adoption, usability, interoperability, and security. Ke
 
 Read [docs/DESIGN.md](docs/DESIGN.md) and [spec/PROTOCOL.md](spec/PROTOCOL.md). If the code and specification disagree, stop the behavior change and report the discrepancy. Do not silently resolve the disagreement in code. Resolve any relevant open protocol decision in the specification before implementing it.
 
-The current workspace contains only documented crate boundaries. It intentionally does not contain placeholder protocol implementations, invented wire messages, or tests that assert no useful behavior.
+The runtime workspace contains documented crate boundaries. The offline vector example implements only fixed public fixture encodings and reference-primitive checks. It is not a production parser, protocol state machine, or complete hybrid handshake implementation.
 
 ## Required boundaries
 
