@@ -21,7 +21,6 @@ curve25519-dalek = "=5.0.0"
 ed25519-dalek.workspace = true
 getrandom.workspace = true
 libcrux-chacha20poly1305.workspace = true
-libcrux-ed25519.workspace = true
 libcrux-ml-kem.workspace = true
 zeroize.workspace = true
 
@@ -32,5 +31,8 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 hex.workspace = true
+# Independent reference for signing tests only. Not a runtime dependency: its
+# 0.0.10 signer leaves the expanded secret key on the stack unwiped (§14.2).
+libcrux-ed25519.workspace = true
 proptest.workspace = true
 serde_json.workspace = true

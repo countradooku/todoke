@@ -442,17 +442,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "libcrux-ed25519"
-version = "0.0.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "55de36c252a9fd97a202c03535deecbe988c525eb16901b2ea17ed99e737edc9"
-dependencies = [
- "libcrux-hacl-rs",
- "libcrux-macros",
- "libcrux-sha2",
-]
-
-[[package]]
 name = "libcrux-hacl-rs"
 version = "0.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -522,17 +511,6 @@ checksum = "03c4ba47b3596f2771213ff162c792e9b93ddc0cdd178a2e407e00bb8ae4afcd"
 dependencies = [
  "crabgrind",
  "hax-lib 0.4.2",
-]
-
-[[package]]
-name = "libcrux-sha2"
-version = "0.0.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "86aa35d8fc9576a41df34af4d95d1f11186c1f65cd6c829329748915ea556d71"
-dependencies = [
- "libcrux-hacl-rs",
- "libcrux-macros",
- "libcrux-traits",
 ]
 
 [[package]]
@@ -901,7 +879,6 @@ dependencies = [
  "ed25519-dalek",
  "getrandom",
  "libcrux-chacha20poly1305",
- "libcrux-ed25519",
  "libcrux-ml-kem",
  "todoke-proto",
  "zeroize",

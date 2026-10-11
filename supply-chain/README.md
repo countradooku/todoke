@@ -85,15 +85,24 @@ the public-fixture example; production integration and zeroization remain open.
 ## Identity runtime dependency status
 
 The identity work (PROTOCOL §1–§2) makes these pinned crates **runtime**
-dependencies of `todoke-crypto`: `ed25519-dalek 3.0.0` and `curve25519-dalek 5.0.0`
-(§1 strict verification and canonical point check), `libcrux-ed25519 0.0.10`
-(signing), `libcrux-ml-kem 0.0.11` (FIPS 203 input check of the retained
+dependencies of `todoke-crypto`: `ed25519-dalek 3.0.0` (signing, and §1 strict
+verification) and `curve25519-dalek 5.0.0` (canonical point check),
+`libcrux-ml-kem 0.0.11` (FIPS 203 input check of the retained
 `kem_static`), `libcrux-chacha20poly1305 0.0.10` (sealing local secret state),
 `blake3 1.8.7`, `zeroize 1.9.1`, and `getrandom 0.4.3`, the last with `wasm_js`
 on `wasm32-unknown-unknown` only. Pins shared with `todoke-proto` moved to
 `[workspace.dependencies]`, as cargo-deny's `workspace-duplicate` rule requires.
 `proptest 1.11.0` is a new development dependency of both crates. 1.12 would
 avoid duplicate rand versions, but it requires Rust 1.88, above the 1.85 MSRV.
+
+Signing uses ed25519-dalek, not `libcrux-ed25519 0.0.10`: the libcrux (HACL\*)
+signer expands the seed into a 96-byte stack array that it never wipes, while
+dalek's `SigningKey` and `ExpandedSecretKey` are `ZeroizeOnDrop` with its default
+`zeroize` feature (§14.2). dalek 3.0.0 still leaves some scratch unwiped (the
+SHA-512 output it expands the seed from, hasher states, and the nonce scalar),
+so library zeroization review remains open (O6). `libcrux-ed25519` is now only a
+development dependency of `todoke-crypto` (an independent reference in signing
+tests) and of `todoke-proto` (vector tools).
 
 The maintainer approved re-scoping the dev-only guard on 2026-10-11. The policy
 changes are:
@@ -117,7 +126,9 @@ changes are:
 The fuzz workspace (`fuzz/`) uses the root `deny.toml`. Its graph includes the
 runtime libcrux crates, so the advisory ignore stays matched and no separate
 policy file is needed. Its lock was seeded from the root lock and adds only
-`libfuzzer-sys 0.4.13`, `arbitrary 1.5.0`, and `jobserver 0.1.35`.
+`libfuzzer-sys 0.4.13`, `arbitrary 1.5.0`, and `jobserver 0.1.35`. Moving
+`libcrux-ed25519` to a development dependency removed it and `libcrux-sha2` from
+the fuzz lock.
 
 On 2026-10-11, `cargo deny --locked check -D unmatched-skip`, the guard script,
 and the fuzz-workspace deny check passed. `cargo vet --locked` reports 128

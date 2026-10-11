@@ -3,6 +3,7 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
+use ed25519_dalek::{Signer, SigningKey};
 use zeroize::Zeroizing;
 
 use super::{ExportPolicy, KeyId, KeyRole, KeyStore, KeyStoreError, WrappedKey, WrappingKey};
@@ -43,8 +44,8 @@ impl Entry {
         export: ExportPolicy,
         seed: Zeroizing<[u8; SEED_LEN]>,
     ) -> Result<Self, LocalFormatError> {
-        let mut public = [0; 32];
-        libcrux_ed25519::secret_to_public(&mut public, &seed);
+        // `SigningKey` and the `ExpandedSecretKey` it derives are wiped on drop.
+        let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
         let public =
             Ed25519PublicKey::from_bytes(&public).map_err(|_| LocalFormatError::Malformed)?;
         Ok(Self {
@@ -184,9 +185,7 @@ impl<S: Sealer, B: BlobStorage> KeyStore for EncryptedKeyStore<S, B> {
         let mut input = Vec::with_capacity(domain.bytes().len() + message.len());
         input.extend_from_slice(domain.bytes());
         input.extend_from_slice(message);
-        libcrux_ed25519::sign(&input, &entry.seed)
-            .map(Signature::from_bytes)
-            .map_err(|_| KeyStoreError::MessageTooLong)
+        Ok(sign_input(&entry.seed, &input))
     }
 
     fn export_wrapped(
@@ -227,6 +226,18 @@ impl<S: Sealer, B: BlobStorage> fmt::Debug for EncryptedKeyStore<S, B> {
             .field("keys", &self.keys.len())
             .finish_non_exhaustive()
     }
+}
+
+/// Pure Ed25519 (RFC 8032) over `input`, which already carries the domain.
+///
+/// Uses ed25519-dalek rather than libcrux-ed25519: libcrux 0.0.10 expands the
+/// seed into a 96-byte stack array that it never wipes (§14.2), whereas
+/// dalek's `SigningKey` and per-signature `ExpandedSecretKey` are
+/// `ZeroizeOnDrop` with its default `zeroize` feature. dalek 3.0.0 still
+/// leaves unwiped scratch of its own (the SHA-512 output it expands the seed
+/// from, hasher states, and the nonce scalar); reviewing that is part of O6.
+fn sign_input(seed: &[u8; SEED_LEN], input: &[u8]) -> Signature {
+    Signature::from_bytes(SigningKey::from_bytes(seed).sign(input).to_bytes())
 }
 
 fn wrapped_key_header(entry: &Entry) -> [u8; 35] {
@@ -347,6 +358,48 @@ mod tests {
             self.persist()?;
             Ok(id)
         }
+    }
+
+    /// RFC 8032 §7.1 TEST 1–3 through the store's own signing path, and
+    /// agreement with the independent libcrux implementation.
+    #[test]
+    fn signing_path_matches_rfc8032_and_libcrux() -> TestResult {
+        let vectors = [
+            (
+                "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+                "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+                "",
+                "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+            ),
+            (
+                "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+                "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+                "72",
+                "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+            ),
+            (
+                "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+                "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+                "af82",
+                "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+            ),
+        ];
+        for (seed, public, message, signature) in vectors {
+            let seed: [u8; 32] = hex::decode(seed)?.try_into().map_err(|_| "seed")?;
+            let message = hex::decode(message)?;
+            let entry = Entry::from_seed(
+                KeyRole::Device,
+                ExportPolicy::NonExportable,
+                Zeroizing::new(seed),
+            )
+            .map_err(|_| "seed")?;
+            assert_eq!(entry.public.as_bytes().as_slice(), hex::decode(public)?);
+            let signed = sign_input(&entry.seed, &message).to_bytes();
+            assert_eq!(signed.as_slice(), hex::decode(signature)?);
+            let reference = libcrux_ed25519::sign(&message, &seed).map_err(|_| "libcrux")?;
+            assert_eq!(signed, reference);
+        }
+        Ok(())
     }
 
     #[test]
