@@ -1038,8 +1038,14 @@ pub(crate) fn reencode(decoded: &Decoded) -> Zeroizing<Vec<u8>> {
 mod tests {
     use super::*;
     use crate::identity::storage::MemoryStorage;
-    use crate::identity::test_support::{DAY, Enrolled, T0, TestResult, nz, sealer, time};
-    use crate::identity::{RevocationRequest, SoftwareSealer, issue_revocation};
+    use crate::identity::test_support::{
+        DAY, Enrolled, SwitchableStorage, T0, TestResult, assert_distinct_messages, nz, request,
+        sealer, time,
+    };
+    use crate::identity::{
+        ExportPolicy, KeyRole, RevocationRequest, SoftwareSealer, issue_device_binding,
+        issue_revocation,
+    };
     use proptest::prelude::*;
     use todoke_proto::identity::{RevocationReason, RevokeBody};
 
@@ -1782,6 +1788,704 @@ mod tests {
         let set = RevocationSet::decode(&mut reader).ok()?;
         reader.finish().ok()?;
         Some(set)
+    }
+
+    type SwitchedStore = ContactStore<SoftwareSealer, SwitchableStorage>;
+
+    /// Opens what the switchable store last persisted successfully.
+    fn durable(store: &SwitchedStore) -> Result<Store, ContactError> {
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(store.storage().blob().map(<[u8]>::to_vec));
+        ContactStore::open(sealer(9), storage)
+    }
+
+    fn storage_failed<T: fmt::Debug>(result: &Result<T, ContactError>) -> bool {
+        matches!(result, Err(ContactError::Storage(_)))
+    }
+
+    /// Mutations that grant or keep access roll back when persisting fails;
+    /// mutations that block access stay in effect in memory (fail closed).
+    #[test]
+    fn persistence_failures_roll_back_grants_and_keep_blocks() -> TestResult {
+        let enrolled = Enrolled::new()?;
+        let key = device(&enrolled)?;
+        let (storage, failing) = SwitchableStorage::new();
+        let mut store = ContactStore::open(sealer(9), storage)?;
+        let first = enrolled.bind(1)?;
+        let now = time(T0)?;
+
+        failing.set(true);
+        let result = store.pair(
+            &first,
+            TrustOrigin::QrPairing,
+            PairPsk::new([1; 32]),
+            1,
+            now,
+        );
+        assert!(storage_failed(&result));
+        assert!(store.contact(&key).is_none());
+        failing.set(false);
+        store.pair(
+            &first,
+            TrustOrigin::QrPairing,
+            PairPsk::new([1; 32]),
+            1,
+            now,
+        )?;
+        let pinned = store.contact(&key).ok_or("missing")?.pinned().digest();
+
+        // Re-pairing with other keys rolls back to the previous contact.
+        failing.set(true);
+        let rebinding = enrolled.bind_with(2, 0x33, 0x55)?;
+        let result = store.pair(
+            &rebinding,
+            TrustOrigin::CodePairing,
+            PairPsk::new([2; 32]),
+            5,
+            now,
+        );
+        assert!(storage_failed(&result));
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.pinned().digest(), pinned);
+        assert_eq!(contact.origin(), TrustOrigin::QrPairing);
+        assert_eq!(contact.generation(), 1);
+        assert_eq!(contact.psk.0.as_ref(), &[1; 32]);
+        assert_eq!(contact.history().len(), 1);
+
+        // A renewal rolls back.
+        let renewal = enrolled.bind(2)?;
+        assert!(matches!(
+            store.confirm_identity(&key, &[0x33; 32], renewal.binding(), now),
+            Err(IdentityError::Storage(ContactError::Storage(_)))
+        ));
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.binding_serial(), nz(1)?);
+        assert_eq!(contact.history().len(), 1);
+
+        // A duplicate revocation changes nothing, so nothing is persisted.
+        failing.set(false);
+        let record = revoke_through(&enrolled, 1, 1)?;
+        assert_eq!(store.apply_revocation(record.clone())?, ApplyOutcome::Added);
+        failing.set(true);
+        assert_eq!(store.apply_revocation(record)?, ApplyOutcome::Duplicate);
+        // A new revocation stays in effect although persisting it failed.
+        let result = store.apply_revocation(revoke_through(&enrolled, 2, 1)?);
+        assert!(storage_failed(&result));
+        assert_eq!(store.revocations().len(), 2);
+
+        // Removal rolls back: the contact and its root's revocations remain.
+        assert!(storage_failed(&store.remove(&key)));
+        assert!(store.contact(&key).is_some());
+        assert_eq!(store.revocations().len(), 2);
+
+        // A key change and a ratchet block stay in effect in memory.
+        let changed = enrolled.bind_with(3, 0x33, 0x66)?;
+        assert!(matches!(
+            store.confirm_identity(&key, &[0x33; 32], changed.binding(), now),
+            Err(IdentityError::Storage(ContactError::Storage(_)))
+        ));
+        assert_eq!(
+            store.availability(&key)?.err(),
+            Some(Unavailable::KeyChanged)
+        );
+        assert!(storage_failed(&store.mark_ratchet_uncertain(&key)));
+        assert_eq!(
+            store.availability(&key)?.err(),
+            Some(Unavailable::RatchetUncertain)
+        );
+
+        // Durable state is the last successful write.
+        let durable = durable(&store)?;
+        let contact = durable.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.state(), VerificationState::Verified);
+        assert_eq!(contact.binding_serial(), nz(1)?);
+        assert_eq!(durable.revocations().len(), 1);
+        Ok(())
+    }
+
+    /// The oldest history events are dropped first, at `MAX_HISTORY`.
+    #[test]
+    fn history_keeps_the_newest_events() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let last = MAX_HISTORY as u64 + 2;
+        for serial in 2..=last {
+            store.confirm_identity(
+                &key,
+                &[0x33; 32],
+                enrolled.bind(serial)?.binding(),
+                time(T0)?,
+            )?;
+        }
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.history().len(), MAX_HISTORY);
+        let serials: Vec<u64> = contact.history().map(|event| event.serial.get()).collect();
+        assert_eq!(serials, (3..=last).collect::<Vec<_>>());
+        assert!(
+            contact
+                .history()
+                .all(|event| event.kind == HistoryKind::Renewed)
+        );
+        let reopened = reopen(&store)?;
+        assert_eq!(
+            reopened
+                .contact(&key)
+                .ok_or("missing")?
+                .history()
+                .collect::<Vec<_>>(),
+            contact.history().collect::<Vec<_>>()
+        );
+        Ok(())
+    }
+
+    /// Each pinned key is compared separately and reported precisely.
+    #[test]
+    fn device_and_noise_key_changes_are_reported() -> TestResult {
+        let (mut enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let noise = enrolled.bind_with(2, 0x35, 0x44)?;
+        let result = store.confirm_identity(&key, &[0x35; 32], noise.binding(), time(T0)?);
+        let Err(IdentityError::KeyChanged(which)) = result else {
+            return Err(format!("expected key change, got {result:?}").into());
+        };
+        assert!(which.noise_static());
+        assert!(!which.person_root() && !which.device_key() && !which.kem_static());
+        assert_eq!(
+            format!("{which:?}"),
+            "ChangedKeys { person_root: false, device_key: false, noise_static: true, kem_static: false }"
+        );
+
+        // Re-pair, then present a sibling device's binding for this contact.
+        store.pair(
+            &enrolled.bind(3)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new([3; 32]),
+            1,
+            time(T0)?,
+        )?;
+        let sibling = enrolled
+            .store
+            .generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        let sibling_binding = issue_device_binding(
+            &enrolled.store,
+            &enrolled.root,
+            &sibling,
+            request(0x33, 0x44, 4, T0, T0 + DAY)?,
+        )?;
+        let result =
+            store.confirm_identity(&key, &[0x33; 32], sibling_binding.binding(), time(T0)?);
+        let Err(IdentityError::KeyChanged(which)) = result else {
+            return Err(format!("expected key change, got {result:?}").into());
+        };
+        assert!(which.device_key());
+        assert!(!which.person_root() && !which.noise_static() && !which.kem_static());
+        Ok(())
+    }
+
+    #[test]
+    fn contact_fields_survive_reopening() -> TestResult {
+        let enrolled = Enrolled::new()?;
+        let key = device(&enrolled)?;
+        let mut store = empty_store()?;
+        let binding = enrolled.bind(1)?;
+        store.pair(
+            &binding,
+            TrustOrigin::CodePairing,
+            PairPsk::new([0x5e; 32]),
+            41,
+            time(T0)?,
+        )?;
+        store.mark_ratchet_uncertain(&key)?;
+        let reopened = reopen(&store)?;
+        assert_eq!(reopened.contacts().count(), 1);
+        let contact = reopened.contacts().next().ok_or("missing")?;
+        assert_eq!(contact.device_id(), DeviceId::of(&key));
+        assert_eq!(contact.origin(), TrustOrigin::CodePairing);
+        assert_eq!(contact.state(), VerificationState::RatchetUncertain);
+        assert_eq!(contact.generation(), 41);
+        assert_eq!(contact.psk.0.as_ref(), &[0x5e; 32]);
+        let pinned = contact.pinned();
+        assert_eq!(pinned.person_root(), binding.person_root());
+        assert_eq!(pinned.device_public(), &key);
+        assert_eq!(pinned.noise_static(), binding.noise_static());
+        assert_eq!(pinned.kem_static(), binding.kem_static());
+        Ok(())
+    }
+
+    /// The keyset digest is `B3(domain || root || device || noise || kem)`.
+    #[test]
+    fn keyset_digest_and_debug_output() -> TestResult {
+        let (enrolled, store) = paired()?;
+        let pinned = store
+            .contact(&device(&enrolled)?)
+            .ok_or("missing")?
+            .pinned();
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(b"todoke/local/keyset\0");
+        hasher.update(pinned.person_root().as_bytes());
+        hasher.update(pinned.device_public().as_bytes());
+        hasher.update(pinned.noise_static());
+        hasher.update(pinned.kem_static());
+        let digest = pinned.digest();
+        assert_eq!(digest.as_bytes(), hasher.finalize().as_bytes());
+        assert_eq!(
+            format!("{digest:?}"),
+            format!("KeysetDigest({})", hex::encode(digest.as_bytes()))
+        );
+        let rendered = format!("{pinned:?}");
+        for expected in [
+            hex::encode(pinned.person_root().as_bytes()),
+            hex::encode(pinned.device_public().as_bytes()),
+            hex::encode(pinned.noise_static()),
+            format!("[{KEM_STATIC_LEN} bytes]"),
+        ] {
+            assert!(rendered.contains(&expected), "{rendered} lacks {expected}");
+        }
+        assert_eq!(
+            format!("{store:?}"),
+            "ContactStore { contacts: 1, revocations: 0, .. }"
+        );
+        Ok(())
+    }
+
+    /// Removing one device keeps its root's revocations while another
+    /// contact still pins that root.
+    #[test]
+    fn revocations_are_kept_while_another_contact_pins_the_root() -> TestResult {
+        let (mut enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let sibling = enrolled
+            .store
+            .generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        let sibling_binding = issue_device_binding(
+            &enrolled.store,
+            &enrolled.root,
+            &sibling,
+            request(0x35, 0x45, 1, T0, T0 + DAY)?,
+        )?;
+        store.pair(
+            &sibling_binding,
+            TrustOrigin::QrPairing,
+            PairPsk::new([4; 32]),
+            1,
+            time(T0)?,
+        )?;
+        store.apply_revocation(revoke_through(&enrolled, 1, 1)?)?;
+        store.remove(&key)?;
+        assert_eq!(store.revocations().len(), 1);
+        assert_eq!(reopen(&store)?.revocations().len(), 1);
+        store.remove(sibling_binding.device_public())?;
+        assert!(store.revocations().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn error_messages_are_distinct() {
+        let contact = [
+            ContactError::UnknownContact,
+            ContactError::Capacity,
+            ContactError::Binding(BindingError::Revoked),
+            ContactError::Revocation(RevocationError::InvalidKey),
+            ContactError::Seal,
+            ContactError::Corrupt,
+            ContactError::Storage(StorageError::TooLarge),
+        ];
+        assert_distinct_messages(&contact.map(|error| error.to_string()));
+        assert!(
+            ContactError::Binding(BindingError::Revoked)
+                .to_string()
+                .ends_with(&BindingError::Revoked.to_string())
+        );
+        let identity = [
+            IdentityError::UnknownContact,
+            IdentityError::Unavailable(Unavailable::KeyChanged),
+            IdentityError::AuthenticationFailed,
+            IdentityError::KeyChanged(ChangedKeys(ChangedKeys::NOISE_STATIC)),
+            IdentityError::Binding(BindingError::Expired),
+            IdentityError::SerialRegressed,
+            IdentityError::Storage(ContactError::Seal),
+        ];
+        assert_distinct_messages(&identity.map(|error| error.to_string()));
+        assert_eq!(
+            IdentityError::Storage(ContactError::Seal).to_string(),
+            ContactError::Seal.to_string()
+        );
+    }
+
+    /// A distinct valid Ed25519 key per index (public test data).
+    fn indexed_key(index: u32) -> Result<Ed25519PublicKey, Box<dyn std::error::Error>> {
+        let mut seed = [0x6d; 32];
+        seed[..4].copy_from_slice(&index.to_be_bytes());
+        public_from_seed(seed).ok_or_else(|| "invalid key".into())
+    }
+
+    /// A contact with fixed public test values and `history` events.
+    fn fixed_contact(
+        root: Ed25519PublicKey,
+        device: Ed25519PublicKey,
+        history: usize,
+    ) -> Result<Contact, &'static str> {
+        let event = HistoryEvent {
+            at: time(T0)?,
+            serial: NonZeroU64::MIN,
+            keyset: KeysetDigest([0x2b; 32]),
+            kind: HistoryKind::Renewed,
+        };
+        Ok(Contact {
+            pinned: PinnedKeys {
+                person_root: root,
+                device_public: device,
+                noise_static: [0x33; 32],
+                kem_static: Box::new([0x44; KEM_STATIC_LEN]),
+            },
+            binding_serial: NonZeroU64::MIN,
+            origin: TrustOrigin::QrPairing,
+            state: VerificationState::Verified,
+            generation: 1,
+            psk: PairPsk::new([0x77; 32]),
+            history: core::iter::repeat_n(event, history).collect(),
+        })
+    }
+
+    /// An unsigned, structurally valid record (decode does not verify).
+    fn unsigned_revoke(
+        root: &Ed25519PublicKey,
+        sequence: u64,
+        through: u64,
+    ) -> Result<Revoke, Box<dyn std::error::Error>> {
+        let mut record_id = [0x5a; 16];
+        record_id[..8].copy_from_slice(&sequence.to_be_bytes());
+        record_id[8..].copy_from_slice(&through.to_be_bytes());
+        let body = RevokeBody::new(
+            *root.as_bytes(),
+            record_id,
+            nz(sequence)?,
+            time(T0)?,
+            [0x58; 32],
+            nz(through)?,
+            RevocationReason::Retired,
+        )?;
+        Ok(Revoke::from_parts(body, [0; 64]))
+    }
+
+    /// One root's entry in the local revocation-set format.
+    struct RootEntry {
+        root: Ed25519PublicKey,
+        disabled: bool,
+        records: Vec<Revoke>,
+        conflicts: Vec<Revoke>,
+    }
+
+    /// Multi-root revocation set bytes, entries written in the given order.
+    fn sets_bytes(entries: &[RootEntry]) -> Vec<u8> {
+        let mut bytes = u32::try_from(entries.len())
+            .unwrap_or(u32::MAX)
+            .to_be_bytes()
+            .to_vec();
+        for entry in entries {
+            let one = set_bytes(
+                &entry.root,
+                entry.disabled,
+                &entry.records,
+                &entry.conflicts,
+            );
+            bytes.extend_from_slice(&one[4..]);
+        }
+        bytes
+    }
+
+    fn sorted_keys(
+        count: u32,
+        offset: u32,
+    ) -> Result<Vec<Ed25519PublicKey>, Box<dyn std::error::Error>> {
+        let mut keys = (offset..offset + count)
+            .map(indexed_key)
+            .collect::<Result<Vec<_>, _>>()?;
+        keys.sort();
+        Ok(keys)
+    }
+
+    /// The largest store the quotas allow seals to exactly `MAX_BLOB_LEN` bytes
+    /// and opens; one more contact, history event, or trailing byte is
+    /// rejected.
+    #[test]
+    fn maximal_store_fits_the_blob_limit_exactly() -> TestResult {
+        let max_contacts = u32::try_from(MAX_CONTACTS)?;
+        let roots = sorted_keys(max_contacts, 0)?;
+        let devices = sorted_keys(max_contacts + 1, max_contacts)?;
+        let mut contacts = BTreeMap::new();
+        for (root, device) in roots.iter().zip(&devices) {
+            contacts.insert(*device, fixed_contact(*root, *device, MAX_HISTORY)?);
+        }
+        let per_root = super::super::revocation::MAX_TOTAL_RECORDS / MAX_CONTACTS;
+        let mut entries = Vec::new();
+        for root in &roots {
+            let mut records = Vec::new();
+            for sequence in 1..=per_root as u64 {
+                records.push(unsigned_revoke(root, sequence, 1)?);
+            }
+            entries.push(RootEntry {
+                root: *root,
+                disabled: false,
+                records,
+                conflicts: Vec::new(),
+            });
+        }
+        let revocations = decode_set(&sets_bytes(&entries)).ok_or("set")?;
+        assert_eq!(
+            revocations.len(),
+            super::super::revocation::MAX_TOTAL_RECORDS
+        );
+        let plaintext = encode(&contacts, &revocations);
+        let blob = ENVELOPE.seal(&sealer(9), &plaintext).map_err(|_| "seal")?;
+        assert_eq!(blob.len(), MAX_BLOB_LEN);
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(Some(blob.clone()));
+        let store = ContactStore::open(sealer(9), storage)?;
+        assert_eq!(store.contacts().count(), MAX_CONTACTS);
+        assert_eq!(store.revocations(), &revocations);
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(Some([blob, vec![0]].concat()));
+        assert_eq!(
+            ContactStore::open(sealer(9), storage).err(),
+            Some(ContactError::Storage(StorageError::TooLarge))
+        );
+
+        // One contact over the quota.
+        let extra = *devices.last().ok_or("no devices")?;
+        let first_root = *roots.first().ok_or("no roots")?;
+        contacts.insert(extra, fixed_contact(first_root, extra, 0)?);
+        assert_eq!(
+            decode(&encode(&contacts, &RevocationSet::new())).err(),
+            Some(LocalFormatError::Malformed)
+        );
+        // One history event over the quota.
+        let mut over = BTreeMap::new();
+        over.insert(extra, fixed_contact(first_root, extra, MAX_HISTORY + 1)?);
+        assert_eq!(
+            decode(&encode(&over, &RevocationSet::new())).err(),
+            Some(LocalFormatError::Malformed)
+        );
+        Ok(())
+    }
+
+    /// Pairing a new device at `MAX_CONTACTS` is refused; re-pairing an
+    /// existing contact is still allowed.
+    #[test]
+    fn pairing_beyond_capacity_is_refused() -> TestResult {
+        let (mut enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let root = enrolled.store.public_key(&enrolled.root)?;
+        for device in sorted_keys(u32::try_from(MAX_CONTACTS - 1)?, 0)? {
+            store
+                .contacts
+                .insert(device, fixed_contact(root, device, 0)?);
+        }
+        assert_eq!(store.contacts().count(), MAX_CONTACTS);
+        let sibling = enrolled
+            .store
+            .generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        let sibling_binding = issue_device_binding(
+            &enrolled.store,
+            &enrolled.root,
+            &sibling,
+            request(0x35, 0x45, 1, T0, T0 + DAY)?,
+        )?;
+        assert_eq!(
+            store.pair(
+                &sibling_binding,
+                TrustOrigin::QrPairing,
+                PairPsk::new([5; 32]),
+                1,
+                time(T0)?
+            ),
+            Err(ContactError::Capacity)
+        );
+        assert!(store.contact(sibling_binding.device_public()).is_none());
+        assert_eq!(
+            store.pair(
+                &enrolled.bind(2)?,
+                TrustOrigin::QrPairing,
+                PairPsk::new([6; 32]),
+                1,
+                time(T0)?
+            ),
+            Ok(PairOutcome::RePaired)
+        );
+        assert_eq!(
+            store.contact(&key).ok_or("missing")?.binding_serial(),
+            nz(2)?
+        );
+        Ok(())
+    }
+
+    /// Contacts must be in strictly increasing device-key order, and the
+    /// plaintext must end exactly after the revocation set.
+    #[test]
+    fn decode_rejects_unordered_contacts_and_trailing_bytes() -> TestResult {
+        let root = indexed_key(0)?;
+        let devices = sorted_keys(2, 1)?;
+        let mut contacts = BTreeMap::new();
+        for device in &devices {
+            contacts.insert(*device, fixed_contact(root, *device, 0)?);
+        }
+        let encoded = encode(&contacts, &RevocationSet::new());
+        assert!(decode(&encoded).is_ok());
+        let first = 4..4 + CONTACT_FIXED_LEN;
+        let second = 4 + CONTACT_FIXED_LEN..4 + 2 * CONTACT_FIXED_LEN;
+        let mut swapped = encoded.to_vec();
+        swapped[first.clone()].copy_from_slice(&encoded[second.clone()]);
+        swapped[second.clone()].copy_from_slice(&encoded[first.clone()]);
+        assert_eq!(decode(&swapped).err(), Some(LocalFormatError::Malformed));
+        let mut duplicated = encoded.to_vec();
+        duplicated[second].copy_from_slice(&encoded[first]);
+        assert_eq!(decode(&duplicated).err(), Some(LocalFormatError::Malformed));
+        let mut trailing = encoded.to_vec();
+        trailing.push(0);
+        assert_eq!(decode(&trailing).err(), Some(LocalFormatError::Malformed));
+        Ok(())
+    }
+
+    /// Bounds, ordering, and consistency checks of the local revocation-set
+    /// format (each case differs from a valid encoding in one respect).
+    #[test]
+    fn revocation_set_decode_enforces_bounds() -> TestResult {
+        use super::super::revocation::{MAX_RECORDS_PER_ROOT, MAX_ROOTS};
+        let empty_disabled = |root: Ed25519PublicKey| RootEntry {
+            root,
+            disabled: true,
+            records: Vec::new(),
+            conflicts: Vec::new(),
+        };
+        let records = |root: &Ed25519PublicKey,
+                       count: usize|
+         -> Result<Vec<Revoke>, Box<dyn std::error::Error>> {
+            (1..=count as u64)
+                .map(|sequence| unsigned_revoke(root, sequence, 1))
+                .collect()
+        };
+
+        // Root count: MAX_ROOTS disabled, empty roots decode; one more does not.
+        let max_roots = u32::try_from(MAX_ROOTS)?;
+        let roots = sorted_keys(max_roots + 1, 5000)?;
+        let mut entries: Vec<RootEntry> = roots.iter().copied().map(empty_disabled).collect();
+        assert!(decode_set(&sets_bytes(&entries)).is_none());
+        entries.pop();
+        let set = decode_set(&sets_bytes(&entries)).ok_or("max roots")?;
+        assert!(
+            entries
+                .iter()
+                .all(|entry| set.is_root_disabled(&entry.root))
+        );
+        assert_eq!(set.len(), 0);
+
+        // Roots strictly increasing.
+        let (low, high) = (roots[0], roots[1]);
+        assert!(decode_set(&sets_bytes(&[empty_disabled(low), empty_disabled(high)])).is_some());
+        assert!(decode_set(&sets_bytes(&[empty_disabled(high), empty_disabled(low)])).is_none());
+        assert!(decode_set(&sets_bytes(&[empty_disabled(low), empty_disabled(low)])).is_none());
+
+        // An enabled root must retain records; a flag byte other than 0/1 is rejected.
+        assert!(decode_set(&set_bytes(&low, false, &[], &[])).is_none());
+        let mut flag = set_bytes(&low, true, &[], &[]);
+        flag[36] = 2;
+        assert!(decode_set(&flag).is_none());
+
+        // Per-root record quota, for records alone and with conflicts.
+        let full = records(&low, MAX_RECORDS_PER_ROOT)?;
+        assert!(decode_set(&set_bytes(&low, false, &full, &[])).is_some());
+        let over = records(&low, MAX_RECORDS_PER_ROOT + 1)?;
+        assert!(decode_set(&set_bytes(&low, false, &over, &[])).is_none());
+        let partial = &full[..MAX_RECORDS_PER_ROOT - 1];
+        let conflict = |sequence: u64| unsigned_revoke(&low, sequence, 2);
+        let mut conflicts = vec![conflict(1)?];
+        assert!(decode_set(&set_bytes(&low, true, partial, &conflicts)).is_some());
+        conflicts.push(conflict(2)?);
+        conflicts.sort_by_key(|record| (record.body().sequence(), record.body().encode()));
+        assert!(decode_set(&set_bytes(&low, true, partial, &conflicts)).is_none());
+
+        // Records name this root and have strictly increasing sequences.
+        let foreign = vec![unsigned_revoke(&low, 1, 1)?, unsigned_revoke(&high, 2, 1)?];
+        assert!(decode_set(&set_bytes(&low, false, &foreign, &[])).is_none());
+        let unordered = vec![unsigned_revoke(&low, 2, 1)?, unsigned_revoke(&low, 1, 1)?];
+        assert!(decode_set(&set_bytes(&low, false, &unordered, &[])).is_none());
+
+        // The per-root quota counts records plus evidence: one record with
+        // MAX_RECORDS_PER_ROOT conflicting versions is one too many.
+        let one = records(&low, 1)?;
+        let mut versions = Vec::new();
+        for through in 2..=MAX_RECORDS_PER_ROOT as u64 {
+            versions.push(unsigned_revoke(&low, 1, through)?);
+        }
+        versions.sort_by_key(|record| record.body().encode());
+        assert!(decode_set(&set_bytes(&low, true, &one, &versions)).is_some());
+        versions.push(unsigned_revoke(&low, 1, MAX_RECORDS_PER_ROOT as u64 + 1)?);
+        versions.sort_by_key(|record| record.body().encode());
+        assert!(decode_set(&set_bytes(&low, true, &one, &versions)).is_none());
+        Ok(())
+    }
+
+    /// `MAX_TOTAL_RECORDS` across roots, counting records and evidence.
+    #[test]
+    fn revocation_set_decode_enforces_total_quota() -> TestResult {
+        use super::super::revocation::{MAX_RECORDS_PER_ROOT, MAX_TOTAL_RECORDS};
+        let records = |root: &Ed25519PublicKey,
+                       count: usize|
+         -> Result<Vec<Revoke>, Box<dyn std::error::Error>> {
+            (1..=count as u64)
+                .map(|sequence| unsigned_revoke(root, sequence, 1))
+                .collect()
+        };
+        let roots = sorted_keys(
+            u32::try_from(MAX_TOTAL_RECORDS / MAX_RECORDS_PER_ROOT + 1)?,
+            7000,
+        )?;
+        let mut entries = Vec::new();
+        for root in &roots {
+            entries.push(RootEntry {
+                root: *root,
+                disabled: true,
+                records: records(root, MAX_RECORDS_PER_ROOT)?,
+                conflicts: Vec::new(),
+            });
+        }
+        let last = entries.pop().ok_or("no roots")?;
+        assert_eq!(
+            decode_set(&sets_bytes(&entries)).ok_or("total")?.len(),
+            MAX_TOTAL_RECORDS
+        );
+        // One more record, for a further root, exceeds the total.
+        entries.push(RootEntry {
+            root: last.root,
+            disabled: true,
+            records: records(&last.root, 1)?,
+            conflicts: Vec::new(),
+        });
+        assert!(decode_set(&sets_bytes(&entries)).is_none());
+        // Records exactly at the total, conflict evidence exceeding it: free
+        // one record slot at the first root so the records alone fit.
+        entries.first_mut().ok_or("no roots")?.records.pop();
+        assert_eq!(
+            decode_set(&sets_bytes(&entries)).ok_or("total")?.len(),
+            MAX_TOTAL_RECORDS
+        );
+        let evidence = unsigned_revoke(&last.root, 1, 2)?;
+        entries
+            .last_mut()
+            .ok_or("no roots")?
+            .conflicts
+            .push(evidence);
+        assert!(decode_set(&sets_bytes(&entries)).is_none());
+        // Records plus evidence exactly at the total decode: drop the further
+        // root and keep the evidence at the root with the free slot.
+        entries.pop();
+        let first = entries.first_mut().ok_or("no roots")?;
+        let first_root = first.root;
+        first.conflicts.push(unsigned_revoke(&first_root, 1, 2)?);
+        let set = decode_set(&sets_bytes(&entries)).ok_or("evidence at quota")?;
+        assert_eq!(set.len(), MAX_TOTAL_RECORDS);
+        assert_eq!(set.conflicting_records_for(&first_root).count(), 1);
+        Ok(())
     }
 
     #[derive(Clone, Copy, Debug)]

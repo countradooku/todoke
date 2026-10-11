@@ -1,13 +1,16 @@
 //! Shared fixtures for identity tests. All values are public test data.
 
+use core::cell::Cell;
 use core::num::NonZeroU64;
+use std::rc::Rc;
 
 use todoke_proto::identity::KEM_STATIC_LEN;
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
+use super::storage::StorageError;
 use super::{
-    BindingRequest, ExportPolicy, IssueError, KeyId, KeyRole, KeyStore, KeyStoreError,
+    BindingRequest, BlobStorage, ExportPolicy, IssueError, KeyId, KeyRole, KeyStore, KeyStoreError,
     MemoryStorage, SoftwareKeyStore, SoftwareSealer, StorageKey, VerifiedDeviceBinding,
     issue_device_binding,
 };
@@ -91,6 +94,41 @@ impl Enrolled {
         let request = request(noise, kem, serial, T0, T0 + 30 * DAY)?;
         issue_device_binding(&self.store, &self.root, &self.device, request)
             .map_err(|error: IssueError| error.into())
+    }
+}
+
+/// In-memory storage whose writes fail while the shared switch is on, for
+/// exercising rollback and fail-closed paths. Loads always succeed.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchableStorage {
+    inner: MemoryStorage,
+    failing: Rc<Cell<bool>>,
+}
+
+impl SwitchableStorage {
+    /// The storage and the switch that makes its writes fail.
+    pub(crate) fn new() -> (Self, Rc<Cell<bool>>) {
+        let storage = Self::default();
+        let switch = Rc::clone(&storage.failing);
+        (storage, switch)
+    }
+
+    /// The last successfully stored blob.
+    pub(crate) fn blob(&self) -> Option<&[u8]> {
+        self.inner.blob()
+    }
+}
+
+impl BlobStorage for SwitchableStorage {
+    fn load(&self, max_len: usize) -> Result<Option<Vec<u8>>, StorageError> {
+        self.inner.load(max_len)
+    }
+
+    fn store(&mut self, bytes: &[u8]) -> Result<(), StorageError> {
+        if self.failing.get() {
+            return Err(StorageError::Io(std::io::ErrorKind::Other));
+        }
+        self.inner.store(bytes)
     }
 }
 
