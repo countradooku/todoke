@@ -1470,14 +1470,115 @@ mod tests {
             ContactStore::open(sealer(10), storage).err(),
             Some(ContactError::Seal)
         );
-        let mut changed = blob;
-        let last = changed.len() - 1;
-        changed[last] ^= 1;
-        let mut storage = MemoryStorage::new();
-        storage.set_blob(Some(changed));
+        // Every byte: the header (magic, version) is checked first, then the
+        // nonce, ciphertext, and tag are authenticated.
+        for index in 0..blob.len() {
+            let mut changed = blob.clone();
+            changed[index] ^= 1;
+            let mut storage = MemoryStorage::new();
+            storage.set_blob(Some(changed));
+            let expected = if index < 6 {
+                ContactError::Corrupt
+            } else {
+                ContactError::Seal
+            };
+            assert_eq!(
+                ContactStore::open(sealer(9), storage).err(),
+                Some(expected),
+                "byte {index}"
+            );
+        }
+        Ok(())
+    }
+
+    /// A revocation for a sibling device under the same root leaves this
+    /// contact usable.
+    #[test]
+    fn sibling_revocation_leaves_contact_available() -> TestResult {
+        let (mut enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let sibling = enrolled.store.generate(
+            crate::identity::KeyRole::Device,
+            crate::identity::ExportPolicy::NonExportable,
+        )?;
+        let record = issue_revocation(
+            &enrolled.store,
+            &enrolled.root,
+            RevocationRequest {
+                device_public: enrolled.store.public_key(&sibling)?,
+                sequence: nz(1)?,
+                issued_at: time(T0)?,
+                through_serial: nz(u64::MAX)?,
+                reason: RevocationReason::Lost,
+            },
+        )?;
         assert_eq!(
-            ContactStore::open(sealer(9), storage).err(),
-            Some(ContactError::Seal)
+            store.apply_revocation(record.record().clone())?,
+            ApplyOutcome::Added
+        );
+        assert!(store.availability(&key)?.is_ok());
+        store.confirm_identity(&key, &[0x33; 32], enrolled.bind(2)?.binding(), time(T0)?)?;
+        assert!(reopen(&store)?.availability(&key)?.is_ok());
+        Ok(())
+    }
+
+    /// A disabled root blocks identity confirmation and new pairings for
+    /// every device under it, even when no record revokes this device.
+    #[test]
+    fn disabled_root_blocks_confirmation_and_pairing() -> TestResult {
+        let (mut enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let sibling = enrolled.store.generate(
+            crate::identity::KeyRole::Device,
+            crate::identity::ExportPolicy::NonExportable,
+        )?;
+        let revoke_sibling = |through: u64| {
+            issue_revocation(
+                &enrolled.store,
+                &enrolled.root,
+                RevocationRequest {
+                    device_public: enrolled.store.public_key(&sibling)?,
+                    sequence: nz(7)?,
+                    issued_at: time(T0)?,
+                    through_serial: nz(through)?,
+                    reason: RevocationReason::Lost,
+                },
+            )
+            .map(|record| record.record().clone())
+            .map_err(Box::<dyn std::error::Error>::from)
+        };
+        store.apply_revocation(revoke_sibling(1)?)?;
+        assert_eq!(
+            store.apply_revocation(revoke_sibling(2)?)?,
+            ApplyOutcome::Conflict
+        );
+        assert!(!store.revocations().is_revoked(
+            &enrolled.store.public_key(&enrolled.root)?,
+            &key,
+            nz(1)?
+        ));
+        assert_eq!(
+            store.availability(&key)?.err(),
+            Some(Unavailable::RootDisabled)
+        );
+        let renewal = enrolled.bind(2)?;
+        assert_eq!(
+            store.confirm_identity(&key, &[0x33; 32], renewal.binding(), time(T0)?),
+            Err(IdentityError::Unavailable(Unavailable::RootDisabled))
+        );
+        assert_eq!(
+            store.contact(&key).ok_or("missing")?.binding_serial(),
+            nz(1)?
+        );
+        assert_eq!(
+            store.pair(
+                &renewal,
+                TrustOrigin::QrPairing,
+                PairPsk::new([2; 32]),
+                1,
+                time(T0)?
+            ),
+            Err(ContactError::Binding(BindingError::RootDisabled))
         );
         Ok(())
     }

@@ -718,6 +718,150 @@ fn revocation_quota_disables_root() -> TestResult {
     Ok(())
 }
 
+/// §2: a revocation names a full device key; another device under the same
+/// root is unaffected.
+#[test]
+fn revocation_of_another_device_does_not_affect_this_one() -> TestResult {
+    let mut enrolled = Enrolled::new()?;
+    let root = PersonIdentity::new(enrolled.store.public_key(&enrolled.root)?);
+    let sibling = enrolled
+        .store
+        .generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+    let sibling_public = enrolled.store.public_key(&sibling)?;
+    let this_device = enrolled.store.public_key(&enrolled.device)?;
+    let record = issue_revocation(
+        &enrolled.store,
+        &enrolled.root,
+        RevocationRequest {
+            device_public: sibling_public,
+            sequence: nz(1)?,
+            issued_at: time(T0)?,
+            through_serial: nz(u64::MAX)?,
+            reason: RevocationReason::Compromised,
+        },
+    )?;
+    let mut set = RevocationSet::new();
+    assert_eq!(set.apply(record), ApplyOutcome::Added);
+    assert!(set.is_revoked(root.root(), &sibling_public, nz(1)?));
+    assert!(!set.is_revoked(root.root(), &this_device, nz(1)?));
+    assert!(!set.is_root_disabled(root.root()));
+    let binding = enrolled.bind(1)?.binding().clone();
+    assert!(root.verify_binding(&binding, time(T0)?, &set).is_ok());
+    let sibling_binding = issue_device_binding(
+        &enrolled.store,
+        &enrolled.root,
+        &sibling,
+        request(0x35, 0x45, 1, T0, T0 + DAY)?,
+    )?;
+    assert_eq!(
+        root.verify_binding(sibling_binding.binding(), time(T0)?, &set),
+        Err(BindingError::Revoked)
+    );
+    Ok(())
+}
+
+/// A distinct valid Ed25519 public key per index (public test data).
+fn test_key(index: u32) -> Result<Ed25519PublicKey, Box<dyn std::error::Error>> {
+    let mut seed = [0x5c; 32];
+    seed[..4].copy_from_slice(&index.to_be_bytes());
+    let public = ed25519_dalek::SigningKey::from_bytes(&seed)
+        .verifying_key()
+        .to_bytes();
+    Ok(Ed25519PublicKey::from_bytes(&public)?)
+}
+
+/// An unsigned record for `root` (quota tests only; signatures are covered
+/// elsewhere).
+fn unsigned_record(
+    root: &Ed25519PublicKey,
+    device: &Ed25519PublicKey,
+    sequence: u64,
+) -> Result<RevocationRecord, Box<dyn std::error::Error>> {
+    let mut record_id = [0x01; 16];
+    record_id[..8].copy_from_slice(&sequence.to_be_bytes());
+    let body = todoke_proto::identity::RevokeBody::new(
+        *root.as_bytes(),
+        record_id,
+        nz(sequence)?,
+        time(T0)?,
+        *device.as_bytes(),
+        nz(1)?,
+        RevocationReason::Retired,
+    )?;
+    Ok(RevocationRecord::unverified_for_tests(
+        Revoke::from_parts(body, [0; 64]),
+        *root,
+    ))
+}
+
+/// `MAX_TOTAL_RECORDS`: once the set holds that many records, a further
+/// record for a root with per-root room fails closed by disabling that root.
+#[test]
+fn total_record_quota_disables_root() -> TestResult {
+    let per_root = super::MAX_TOTAL_RECORDS / 128;
+    assert!(per_root < super::MAX_RECORDS_PER_ROOT);
+    let device = test_key(u32::MAX)?;
+    let mut set = RevocationSet::new();
+    let mut roots = Vec::new();
+    for index in 0..128 {
+        let root = test_key(index)?;
+        for sequence in 1..=per_root as u64 {
+            assert_eq!(
+                set.apply(unsigned_record(&root, &device, sequence)?),
+                ApplyOutcome::Added
+            );
+        }
+        roots.push(root);
+    }
+    assert_eq!(set.len(), super::MAX_TOTAL_RECORDS);
+    let first = roots.first().ok_or("no roots")?;
+    assert!(!set.is_root_disabled(first));
+    assert_eq!(
+        set.apply(unsigned_record(first, &device, per_root as u64 + 1)?),
+        ApplyOutcome::QuotaExceeded
+    );
+    assert!(set.is_root_disabled(first));
+    assert_eq!(set.len(), super::MAX_TOTAL_RECORDS);
+    // A new root also gets a disabled slot rather than its record dropped silently.
+    let fresh = test_key(1000)?;
+    assert_eq!(
+        set.apply(unsigned_record(&fresh, &device, 1)?),
+        ApplyOutcome::QuotaExceeded
+    );
+    assert!(set.is_root_disabled(&fresh));
+    assert!(!set.is_root_disabled(&roots[1]));
+    Ok(())
+}
+
+/// `MAX_ROOTS`: with every root slot used, a record for a further root is not
+/// retained and reported as `QuotaExceeded`; existing roots are unaffected.
+#[test]
+fn root_quota_is_reported() -> TestResult {
+    let max_roots = u32::try_from(super::contacts::MAX_CONTACTS)?;
+    let device = test_key(u32::MAX)?;
+    let mut set = RevocationSet::new();
+    for index in 0..max_roots {
+        assert_eq!(
+            set.apply(unsigned_record(&test_key(index)?, &device, 1)?),
+            ApplyOutcome::Added
+        );
+    }
+    let extra = test_key(max_roots)?;
+    assert_eq!(
+        set.apply(unsigned_record(&extra, &device, 1)?),
+        ApplyOutcome::QuotaExceeded
+    );
+    assert_eq!(set.len(), super::contacts::MAX_CONTACTS);
+    assert!(set.records_for(&extra).next().is_none());
+    assert!(!set.is_root_disabled(&test_key(0)?));
+    // Existing roots still accept records.
+    assert_eq!(
+        set.apply(unsigned_record(&test_key(0)?, &device, 2)?),
+        ApplyOutcome::Added
+    );
+    Ok(())
+}
+
 #[test]
 fn person_root_export_policy() -> TestResult {
     let mut store = super::test_support::memory_keystore()?;

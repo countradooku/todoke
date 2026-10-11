@@ -57,6 +57,13 @@ impl RevocationRecord {
         })
     }
 
+    /// Wraps a record without verifying its signature, so quota tests can
+    /// build thousands of records cheaply. Test builds only.
+    #[cfg(test)]
+    pub(crate) fn unverified_for_tests(record: Revoke, root: Ed25519PublicKey) -> Self {
+        Self { record, root }
+    }
+
     /// The verified wire record.
     #[must_use]
     pub fn record(&self) -> &Revoke {
