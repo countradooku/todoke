@@ -1543,7 +1543,11 @@ Full PQ identity migration requires a future reviewed version.
 `spec/test-vectors/*.json` and the deterministic generator
 [`generate_vectors.rs`](../crates/todoke-proto/examples/generate_vectors.rs) define
 public fixtures for QR, discovery HMAC, PSK ratchet, STREAM nonces, manifest hash,
-and signed Accept. The separate
+and signed Accept. They also chain the QR PSK through the ratchet, pair secret,
+discovery key, DiscoveryRecord/mDNS TXT, and rendezvous tokens (§4.4, §9, §10),
+and derive §8 content keys, nonce prefixes, and one 123-byte AAD from the manifest
+fixture. These are key-schedule vectors only: no content ciphertext or Bao slice
+fixture exists yet. The separate
 [`generate_handshake_vectors.rs`](../crates/todoke-proto/examples/generate_handshake_vectors.rs)
 defines complete IKpsk2+hfs, KKpsk2+hfs, and XXpsk3+hfs **Noise-layer** reference
 transcripts for the construction in §4.2. The XX fixture uses an explicitly

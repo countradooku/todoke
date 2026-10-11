@@ -23,6 +23,15 @@ const RATCHET_INFO: &[u8] = b"todoke/v1/psk-ratchet\0";
 const MANIFEST_DOMAIN: &[u8] = b"todoke/v1/manifest\0";
 const ACCEPT_DOMAIN: &[u8] = b"todoke/v1/accept\0";
 const ACCEPT_HASH_DOMAIN: &[u8] = b"todoke/v1/accept-hash\0";
+const PAIR_SECRET_INFO: &[u8] = b"todoke/v1/pair-secret\0";
+const DISCOVERY_KEY_INFO: &[u8] = b"todoke/v1/discovery-key\0";
+const RENDEZVOUS_INFO: &[u8] = b"todoke/v1/rendezvous\0";
+const PAIRING_RENDEZVOUS_INFO: &[u8] = b"todoke/v1/pairing-rendezvous\0";
+const CONTENT_KEY_INFO: &[u8] = b"todoke/v1/content-key\0";
+const CONTENT_NONCE_INFO: &[u8] = b"todoke/v1/content-nonce\0";
+const CONTENT_AAD_DOMAIN: &[u8] = b"todoke/v1/content-aad\0";
+const PAIRING_ID: [u8; 16] = [0xa1; 16];
+const FILE_ID: u32 = 1;
 const PUBLIC_FIXTURE_NOTICE: &str = "PUBLIC TEST FIXTURE: all seeds, PSKs, and derived values are fixed and must never be used in production";
 
 fn main() -> Result<()> {
@@ -73,11 +82,12 @@ fn encoded_vectors() -> Result<Vec<(&'static str, Vec<u8>)>> {
     let receiver = public_key(&receiver_seed);
     let manifest = manifest_bytes(&sender, &receiver)?;
     let manifest_hash = domain_hash(MANIFEST_DOMAIN, &manifest);
+    let next_psk = ratchet_next_psk()?;
     let vectors = [
         ("qr-payload.json", qr_vector(&sender)?),
-        ("discovery-token.json", discovery_vectors()?),
+        ("discovery-token.json", discovery_vectors(&next_psk)?),
         ("psk-ratchet.json", ratchet_vector()?),
-        ("stream-nonces.json", nonce_vectors()),
+        ("stream-nonces.json", nonce_vectors(&manifest_hash)?),
         (
             "manifest-hash.json",
             manifest_vector(&sender, &receiver, &manifest, &manifest_hash),
@@ -125,13 +135,20 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
     binary.extend_from_slice(b"TDKQ");
     binary.extend_from_slice(&1_u16.to_be_bytes());
     binary.extend_from_slice(&1_u16.to_be_bytes());
-    binary.extend_from_slice(&[0xa1; 16]);
+    binary.extend_from_slice(&PAIRING_ID);
     binary.extend_from_slice(&EXPIRES_AT.to_be_bytes());
     binary.extend_from_slice(device_key);
     binary.extend_from_slice(&noise_public);
     binary.extend_from_slice(public.as_slice());
     binary.extend_from_slice(psk.as_slice());
     let base45 = base45::encode(binary.as_slice());
+    let mut pairing_rendezvous = [0; 32];
+    hkdf_sha256(
+        &PAIRING_ID,
+        psk.as_slice(),
+        PAIRING_RENDEZVOUS_INFO,
+        &mut pairing_rendezvous,
+    )?;
     Ok(json!({
         "fixture_notice": PUBLIC_FIXTURE_NOTICE,
         "protocol_version": 1,
@@ -140,7 +157,7 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
         "device_ed25519_seed_hex": hex::encode([0x11; 32]),
         "noise_x25519_seed_hex": hex::encode(noise_seed.as_slice()),
         "mlkem768_keygen_seed_hex": hex::encode(kem_seed.as_slice()),
-        "pairing_id_hex": hex::encode([0xa1; 16]),
+        "pairing_id_hex": hex::encode(PAIRING_ID),
         "expires_at": EXPIRES_AT,
         "device_ed25519_public_key_hex": hex::encode(device_key),
         "device_id_hex": hex::encode(&blake3::hash(device_key).as_bytes()[..16]),
@@ -150,7 +167,9 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
         "binary_length": binary.len(),
         "binary_hex": hex::encode(binary.as_slice()),
         "base45": base45,
-        "qr_text": format!("TODOKE:{base45}")
+        "qr_text": format!("TODOKE:{base45}"),
+        "pairing_rendezvous_info_hex": hex::encode(PAIRING_RENDEZVOUS_INFO),
+        "pairing_rendezvous_token_hex": hex::encode(pairing_rendezvous)
     }))
 }
 
@@ -160,7 +179,7 @@ fn discovery_mac(key: &[u8], epoch: u64) -> Result<[u8; 32]> {
     Ok(mac.finalize().into_bytes().into())
 }
 
-fn discovery_vectors() -> Result<Value> {
+fn discovery_vectors(next_psk: &[u8; 32]) -> Result<Value> {
     let pair_key = Zeroizing::new([0x66; 32]);
     let mut cases = Vec::new();
     for unix_seconds in [0, 899, 900, 1799, 1800, CREATED_AT] {
@@ -178,7 +197,63 @@ fn discovery_vectors() -> Result<Value> {
         "fixture_notice": PUBLIC_FIXTURE_NOTICE,
         "algorithm": "HMAC-BLAKE3 (unkeyed BLAKE3, output 32 bytes, block 64 bytes)",
         "pair_key_hex": hex::encode(pair_key.as_slice()),
-        "cases": cases
+        "cases": cases,
+        "derived_chain": discovery_chain(next_psk)?
+    }))
+}
+
+/// Derives committed pair state from the PSK-ratchet fixture output (§4.4) and
+/// the discovery, `DiscoveryRecord`, mDNS TXT, and rendezvous values of §9/§10.
+fn discovery_chain(next_psk: &[u8; 32]) -> Result<Value> {
+    let mut pair_secret = Zeroizing::new([0; 32]);
+    hkdf_sha256(&[], next_psk, PAIR_SECRET_INFO, pair_secret.as_mut_slice())?;
+    let mut pair_key = Zeroizing::new([0; 32]);
+    hkdf_sha256(
+        &[],
+        pair_secret.as_slice(),
+        DISCOVERY_KEY_INFO,
+        pair_key.as_mut_slice(),
+    )?;
+    let current = CREATED_AT / 900;
+    let mut epochs = Vec::new();
+    for (position, epoch) in [
+        ("previous", current - 1),
+        ("current", current),
+        ("next", current + 1),
+    ] {
+        let mac = Zeroizing::new(discovery_mac(pair_key.as_slice(), epoch)?);
+        let mut rendezvous = [0; 32];
+        hkdf_sha256(
+            &epoch.to_be_bytes(),
+            pair_secret.as_slice(),
+            RENDEZVOUS_INFO,
+            &mut rendezvous,
+        )?;
+        let mut record = vec![1, 0];
+        record.extend_from_slice(&epoch.to_be_bytes());
+        record.extend_from_slice(&mac[..8]);
+        record.push(0);
+        epochs.push(json!({
+            "position": position,
+            "epoch": epoch,
+            "token_hex": hex::encode(&mac[..8]),
+            "discovery_record_hex": hex::encode(&record),
+            "mdns_txt": format!("v1={}", hex::encode(&record)),
+            "rendezvous_salt_hex": hex::encode(epoch.to_be_bytes()),
+            "rendezvous_token_hex": hex::encode(rendezvous),
+            "contact_locator_hex": hex::encode(&rendezvous[..16])
+        }));
+    }
+    Ok(json!({
+        "source": "psk-ratchet.json next_psk_hex",
+        "next_psk_hex": hex::encode(next_psk),
+        "pair_secret_info_hex": hex::encode(PAIR_SECRET_INFO),
+        "pair_secret_hex": hex::encode(pair_secret.as_slice()),
+        "discovery_key_info_hex": hex::encode(DISCOVERY_KEY_INFO),
+        "pair_key_hex": hex::encode(pair_key.as_slice()),
+        "rendezvous_info_hex": hex::encode(RENDEZVOUS_INFO),
+        "reference_unix_seconds": CREATED_AT,
+        "epochs": epochs
     }))
 }
 
@@ -199,16 +274,24 @@ fn hkdf_sha256(salt: &[u8], ikm: &[u8], info: &[u8], output: &mut [u8]) -> Resul
     Ok(())
 }
 
-fn ratchet_vector() -> Result<Value> {
+const RATCHET_HANDSHAKE_HASH: [u8; 32] = [0x77; 32];
+
+fn ratchet_next_psk() -> Result<Zeroizing<[u8; 32]>> {
     let psk = Zeroizing::new([0x55; 32]);
-    let handshake_hash = [0x77; 32];
     let mut next_psk = Zeroizing::new([0; 32]);
     hkdf_sha256(
-        &handshake_hash,
+        &RATCHET_HANDSHAKE_HASH,
         psk.as_slice(),
         RATCHET_INFO,
         next_psk.as_mut_slice(),
     )?;
+    Ok(next_psk)
+}
+
+fn ratchet_vector() -> Result<Value> {
+    let psk = Zeroizing::new([0x55; 32]);
+    let handshake_hash = RATCHET_HANDSHAKE_HASH;
+    let next_psk = ratchet_next_psk()?;
     Ok(json!({
         "fixture_notice": PUBLIC_FIXTURE_NOTICE,
         "algorithm": "HKDF-SHA-256",
@@ -227,7 +310,7 @@ fn stream_nonce(prefix: &[u8], counter: u32, final_segment: bool) -> Vec<u8> {
     nonce
 }
 
-fn nonce_vectors() -> Value {
+fn nonce_vectors(manifest_hash: &[u8; 32]) -> Result<Value> {
     let mut cases = Vec::new();
     for (suite, prefix) in [(1, vec![0x88; 7]), (2, vec![0x99; 19])] {
         for counter in [0, 1, 65535, u32::MAX] {
@@ -253,7 +336,121 @@ fn nonce_vectors() -> Value {
             }
         }
     }
-    json!({"fixture_notice": PUBLIC_FIXTURE_NOTICE, "construction": "STREAM-BE32", "cases": cases})
+    Ok(json!({
+        "fixture_notice": PUBLIC_FIXTURE_NOTICE,
+        "construction": "STREAM-BE32",
+        "cases": cases,
+        "content_key_schedule": content_key_schedule(manifest_hash)?
+    }))
+}
+
+/// `transfer_id || file_id:u32 || content_suite:u16 || content_epoch:u32` (§8).
+fn content_context(suite: u16, epoch: u32) -> Vec<u8> {
+    let mut context = TRANSFER_ID.to_vec();
+    context.extend_from_slice(&FILE_ID.to_be_bytes());
+    context.extend_from_slice(&suite.to_be_bytes());
+    context.extend_from_slice(&epoch.to_be_bytes());
+    context
+}
+
+fn labeled(label: &[u8], context: &[u8]) -> Vec<u8> {
+    let mut info = label.to_vec();
+    info.extend_from_slice(context);
+    info
+}
+
+/// Returns the epoch content key and STREAM nonce prefix (7 or 19 bytes).
+fn content_epoch_keys(
+    manifest_hash: &[u8; 32],
+    file_master: &[u8; 32],
+    suite: u16,
+    epoch: u32,
+) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>)> {
+    let context = content_context(suite, epoch);
+    let mut key = Zeroizing::new([0; 32]);
+    hkdf_sha256(
+        manifest_hash,
+        file_master,
+        &labeled(CONTENT_KEY_INFO, &context),
+        key.as_mut_slice(),
+    )?;
+    let mut prefix = vec![0; if suite == 1 { 7 } else { 19 }];
+    hkdf_sha256(
+        manifest_hash,
+        file_master,
+        &labeled(CONTENT_NONCE_INFO, &context),
+        &mut prefix,
+    )?;
+    Ok((key, prefix))
+}
+
+/// The 123-byte content AAD for one segment (§8).
+fn content_aad(
+    manifest_hash: &[u8; 32],
+    suite: u16,
+    segment_index: u32,
+    logical_length: u32,
+    final_segment: bool,
+    root: &[u8; 32],
+) -> Vec<u8> {
+    let mut aad = CONTENT_AAD_DOMAIN.to_vec();
+    aad.extend_from_slice(&1_u16.to_be_bytes());
+    aad.extend_from_slice(&TRANSFER_ID);
+    aad.extend_from_slice(manifest_hash);
+    aad.extend_from_slice(&FILE_ID.to_be_bytes());
+    aad.extend_from_slice(&suite.to_be_bytes());
+    aad.extend_from_slice(&(segment_index / 65536).to_be_bytes());
+    aad.extend_from_slice(&segment_index.to_be_bytes());
+    aad.extend_from_slice(&logical_length.to_be_bytes());
+    aad.push(u8::from(final_segment));
+    aad.extend_from_slice(root);
+    aad
+}
+
+fn content_key_schedule(manifest_hash: &[u8; 32]) -> Result<Value> {
+    let file_master = Zeroizing::new([0xa5; 32]);
+    let mut cases = Vec::new();
+    for suite in [1_u16, 2] {
+        for epoch in [0_u32, 1] {
+            let context = content_context(suite, epoch);
+            let (key, prefix) = content_epoch_keys(manifest_hash, &file_master, suite, epoch)?;
+            cases.push(json!({
+                "content_suite": suite,
+                "content_epoch": epoch,
+                "context_hex": hex::encode(&context),
+                "key_info_hex": hex::encode(labeled(CONTENT_KEY_INFO, &context)),
+                "nonce_info_hex": hex::encode(labeled(CONTENT_NONCE_INFO, &context)),
+                "content_key_hex": hex::encode(key.as_slice()),
+                "nonce_prefix_hex": hex::encode(&prefix),
+                "first_segment_index": epoch * 65536,
+                "first_nonce_nonfinal_hex": hex::encode(stream_nonce(&prefix, 0, false))
+            }));
+        }
+    }
+    // The manifest fixture's sole file: six bytes, suite 1, one final segment.
+    let root = *blake3::hash(b"hello\n").as_bytes();
+    let (_, prefix) = content_epoch_keys(manifest_hash, &file_master, 1, 0)?;
+    let aad = content_aad(manifest_hash, 1, 0, 6, true, &root);
+    Ok(json!({
+        "algorithm": "HKDF-SHA-256, salt = manifest_hash, IKM = file_master",
+        "file_master_hex": hex::encode(file_master.as_slice()),
+        "transfer_id_hex": hex::encode(TRANSFER_ID),
+        "file_id": FILE_ID,
+        "manifest_hash_hex": hex::encode(manifest_hash),
+        "cases": cases,
+        "aad_example": {
+            "note": "manifest-hash.json entry 1 (hello.txt), segment 0, the only and final segment",
+            "content_suite": 1,
+            "content_epoch": 0,
+            "segment_index": 0,
+            "logical_length": 6,
+            "final_segment": true,
+            "root_hex": hex::encode(root),
+            "aad_length": aad.len(),
+            "aad_hex": hex::encode(&aad),
+            "nonce_hex": hex::encode(stream_nonce(&prefix, 0, true))
+        }
+    }))
 }
 
 fn manifest_bytes(sender: &[u8; 32], receiver: &[u8; 32]) -> Result<Vec<u8>> {
@@ -535,6 +732,49 @@ mod tests {
             discovery_mac(key.as_slice(), 0)?,
             discovery_mac(key.as_slice(), 1)?
         );
+        Ok(())
+    }
+
+    #[test]
+    fn content_key_schedule_separates_suites_and_epochs() -> Result<()> {
+        let master = Zeroizing::new([0xa5; 32]);
+        let hash = [0x5a; 32];
+        let mut keys = Vec::new();
+        for suite in [1_u16, 2] {
+            for epoch in [0_u32, 1] {
+                assert_eq!(content_context(suite, epoch).len(), 26);
+                let (key, prefix) = content_epoch_keys(&hash, &master, suite, epoch)?;
+                assert_eq!(prefix.len(), if suite == 1 { 7 } else { 19 });
+                assert_eq!(stream_nonce(&prefix, 0, false).len(), prefix.len() + 5);
+                keys.push(*key);
+            }
+        }
+        for (index, key) in keys.iter().enumerate() {
+            assert!(keys[index + 1..].iter().all(|other| other != key));
+        }
+        let aad = content_aad(&hash, 1, 65536, 16384, false, &[0; 32]);
+        assert_eq!(aad.len(), 123);
+        assert_eq!(&aad[..22], CONTENT_AAD_DOMAIN);
+        assert_eq!(&aad[76..78], &1_u16.to_be_bytes());
+        assert_eq!(&aad[78..82], &1_u32.to_be_bytes());
+        Ok(())
+    }
+
+    #[test]
+    fn discovery_chain_rotates_tokens_and_rendezvous() -> Result<()> {
+        let next_psk = ratchet_next_psk()?;
+        let chain = discovery_chain(&next_psk)?;
+        let epochs = chain["epochs"].as_array().ok_or("missing epochs")?;
+        assert_eq!(epochs.len(), 3);
+        for (index, case) in epochs.iter().enumerate() {
+            let record = hex::decode(case["discovery_record_hex"].as_str().ok_or("record")?)?;
+            assert_eq!(record.len(), 19);
+            assert_eq!(case["mdns_txt"].as_str().ok_or("txt")?.len(), 41);
+            for other in &epochs[index + 1..] {
+                assert_ne!(case["token_hex"], other["token_hex"]);
+                assert_ne!(case["rendezvous_token_hex"], other["rendezvous_token_hex"]);
+            }
+        }
         Ok(())
     }
 
