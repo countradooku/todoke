@@ -1,0 +1,39 @@
+# cargo-deny 0.20.2. Review policy changes alongside the dependency introducing them.
+[graph]
+# With no target filter, audit dependencies for every resolved platform.
+all-features = true
+exclude-dev = false
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+ignore = []
+unused-ignored-advisory = "deny"
+
+[licenses]
+allow = ["Apache-2.0", "MIT"]
+confidence-threshold = 0.93
+exceptions = []
+
+[bans]
+multiple-versions = "deny"
+multiple-versions-include-dev = true
+wildcards = "deny"
+allow-wildcard-paths = false
+deny = []
+skip = []
+skip-tree = []
+
+[bans.workspace-dependencies]
+duplicates = "deny"
+include-path-dependencies = true
+unused = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+required-git-spec = "rev"
