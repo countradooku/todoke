@@ -4,7 +4,7 @@
 
 This document records architectural requirements for a free, open-source, cross-platform, end-to-end secure file transfer app. The goal is any-to-any transfers between phones and PCs, with adoption ahead of revenue and the ambition to outperform existing solutions across usability, reliability, performance, and security.
 
-The runtime crates remain a compiling scaffold with no transfer implementation, platform integration, or usable application. The repository also contains offline Rust tools and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and the hybrid HFS+PSK construction from independently reviewed Snow source. Production backend, application integration, and interoperability remain release gates.
+The runtime crates have no transfer implementation, platform integration, or usable application. The first implemented pieces are identity: `DeviceBinding` and `Revoke` wire codecs in `todoke-proto`, and in `todoke-crypto` device and person identities, binding and revocation issuance and verification, a key-store interface with an encrypted software backend, and a contact store. The repository also contains offline Rust tools and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and the hybrid HFS+PSK construction from independently reviewed Snow source. Production backend, application integration, and interoperability remain release gates.
 
 Read both documents before changing behavior. If specification and implementation disagree, stop and report the disagreement.
 
@@ -16,7 +16,7 @@ Mobile and web bindings are to use BoltFFI. Its exact supported targets, packagi
 
 ## Crate responsibilities and trust boundaries
 
-The table assigns future responsibilities. Every crate currently contains documentation only; it does not provide the APIs described here.
+The table assigns responsibilities. Apart from the identity code in `todoke-proto` and `todoke-crypto`, every crate currently contains documentation only and does not provide the APIs described here.
 
 | Crate | Responsibility | Trust boundary |
 | --- | --- | --- |
@@ -61,4 +61,6 @@ The scaffold's build and policy checks establish repository hygiene only. Cross-
 
 ## Decisions required before implementation
 
-The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, secret storage, and dependency/API boundaries. The protocol draft resolves wire choices where stated and explicitly gates unresolved construction, platform, and secret-lifecycle questions.
+The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, platform secret storage, and dependency/API boundaries.
+
+Secret storage has a core interface but no platform backend. `todoke-crypto` keeps signing keys behind a `KeyStore` trait. Its encrypted backend persists one sealed blob through two hooks: a `Sealer` (authenticated encryption under a key the backend protects) and a `BlobStorage` (atomic whole-blob replacement). The software backend seals with ChaCha20-Poly1305 under a caller-supplied key. Secure Enclave, StrongBox/TEE, TPM/DPAPI, and Secret Service adapters still need to be designed against official platform documentation (O9), along with how the software storage key is obtained on Linux without a TPM. Rollback resistance of stored state remains a gate (O3). The protocol draft resolves wire choices where stated and explicitly gates unresolved construction, platform, and secret-lifecycle questions.
