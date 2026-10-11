@@ -136,9 +136,10 @@ changes are:
 - `unicode-ident` was originally recorded as build-time only. The extended
   guard showed that `getrandom`'s `wasm_js` backend links it into
   `wasm32-unknown-unknown` artifacts (`wasm-bindgen` → `wasm-bindgen-shared`),
-  so its `deny.toml` reason now says so. The exception itself is unchanged, and
-  whether to keep it for wasm artifacts, with Unicode-3.0 notice retention,
-  needs maintainer confirmation.
+  so its `deny.toml` reason now says so. The exception itself is unchanged.
+- On 2026-10-11 the maintainer approved every license exception above,
+  including `unicode-ident` in wasm artifacts. Binary distributions must retain
+  the BSD-3-Clause, ISC, and Unicode-3.0 notices of the crates they include.
 - New dev-only duplicate skips for proptest's `rand 0.9.5`, `rand_core 0.9.5`,
   `getrandom 0.3.4`, and `r-efi 5.3.0`.
 
