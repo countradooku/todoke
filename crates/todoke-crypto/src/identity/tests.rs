@@ -1052,3 +1052,108 @@ fn revocation_record_accessors_and_set_emptiness() -> TestResult {
     assert_eq!(set.len(), 1);
     Ok(())
 }
+
+/// Reads a committed fixture from `spec/test-vectors/`.
+fn fixture(json: &str) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
+    Ok(serde_json::from_str(json)?)
+}
+
+fn fixture_bytes(
+    fixture: &serde_json::Value,
+    name: &str,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    Ok(hex::decode(fixture[name].as_str().ok_or("missing field")?)?)
+}
+
+/// The rest of the Accept signature fixture: the published signing message
+/// is exactly `domain || payload`, it verifies under the receiver key through
+/// the runtime's strict path, and the signed record is `payload || signature`.
+/// The Accept hash and payload layout belong to the unimplemented §7.3 code.
+#[test]
+fn accept_fixture_signing_message_and_record() -> TestResult {
+    let fixture = fixture(include_str!(
+        "../../../../spec/test-vectors/accept-signature.json"
+    ))?;
+    let field = |name: &str| fixture_bytes(&fixture, name);
+    let payload = field("signed_payload_hex")?;
+    let message = field("signing_message_hex")?;
+    let signature = Signature::from_bytes(
+        field("signature_hex")?
+            .try_into()
+            .map_err(|_| "signature length")?,
+    );
+    assert_eq!(
+        message,
+        [SigningDomain::Accept.bytes(), payload.as_slice()].concat()
+    );
+    let receiver = Ed25519PublicKey::from_bytes(
+        &field("receiver_ed25519_public_key_hex")?
+            .try_into()
+            .map_err(|_| "key length")?,
+    )?;
+    receiver.verify_input(&message, &signature)?;
+    let record = field("signed_record_hex")?;
+    assert_eq!(
+        Some(record.len()),
+        fixture["signed_record_length"]
+            .as_u64()
+            .and_then(|length| usize::try_from(length).ok())
+    );
+    assert_eq!(record, [payload, signature.to_bytes().to_vec()].concat());
+    // The sender key is a valid key and cannot stand in for the receiver.
+    let sender = Ed25519PublicKey::from_bytes(
+        &field("sender_ed25519_public_key_hex")?
+            .try_into()
+            .map_err(|_| "key length")?,
+    )?;
+    assert!(sender.verify_input(&message, &signature).is_err());
+    Ok(())
+}
+
+/// The device identity in `qr-payload.json` matches the runtime: the key
+/// store derives the published Ed25519 key from the published seed,
+/// `device_id = B3(device key)[..16]` (§2), and the published X25519 and
+/// ML-KEM-768 credentials pass binding issuance and verification. The QR
+/// layout, Base45 text, and rendezvous token have no runtime implementation.
+#[test]
+fn qr_fixture_device_identity_matches_runtime() -> TestResult {
+    let fixture = fixture(include_str!(
+        "../../../../spec/test-vectors/qr-payload.json"
+    ))?;
+    let field = |name: &str| fixture_bytes(&fixture, name);
+    let seed: [u8; 32] = field("device_ed25519_seed_hex")?
+        .try_into()
+        .map_err(|_| "seed length")?;
+    let mut store = super::test_support::memory_keystore()?;
+    let device = store.insert_fixed_seed(KeyRole::Device, seed)?;
+    let public = store.public_key(&device)?;
+    assert_eq!(
+        public.as_bytes().as_slice(),
+        field("device_ed25519_public_key_hex")?
+    );
+    assert_eq!(
+        DeviceId::of(&public).as_bytes().as_slice(),
+        field("device_id_hex")?
+    );
+
+    let root = store.generate(KeyRole::PersonRoot, ExportPolicy::NonExportable)?;
+    let mut request = request(0, 0, 1, T0, T0 + DAY)?;
+    request.noise_static = field("noise_x25519_public_key_hex")?
+        .try_into()
+        .map_err(|_| "noise length")?;
+    request.kem_static = field("mlkem768_encapsulation_key_hex")?
+        .into_boxed_slice()
+        .try_into()
+        .map_err(|_| "kem length")?;
+    let binding = issue_device_binding(&store, &root, &device, request)?;
+    assert_eq!(
+        binding.noise_static().as_slice(),
+        field("noise_x25519_public_key_hex")?
+    );
+    PersonIdentity::new(store.public_key(&root)?).verify_binding(
+        binding.binding(),
+        time(T0)?,
+        &RevocationSet::new(),
+    )?;
+    Ok(())
+}
