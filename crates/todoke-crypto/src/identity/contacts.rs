@@ -541,6 +541,15 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
 
     /// Whether `device` may be used for a new session now.
     ///
+    /// The session layer MUST call this before starting a contact handshake
+    /// (`KKpsk2` with the stored pair PSK) and refuse on any [`Unavailable`].
+    /// Revocation does not by itself rotate, erase, or otherwise invalidate
+    /// the pair PSK or its generation: this check is what keeps a revoked
+    /// pinned serial from resuming with the existing PSK (§2: revocation MUST
+    /// invalidate resumable authorization). [`Self::confirm_identity`] alone
+    /// is not enough, because it tolerates [`Unavailable::Revoked`] so that a
+    /// renewal can supersede the revoked serial.
+    ///
     /// # Errors
     ///
     /// [`ContactError::UnknownContact`], or `Ok(Err(reason))` if blocked.
@@ -664,6 +673,13 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     ///
     /// This does not check the `Identity` signature over the handshake hash;
     /// that belongs to the session layer.
+    ///
+    /// The session layer MUST also have called [`Self::availability`] before
+    /// starting the handshake. This method deliberately accepts a contact
+    /// whose pinned serial is revoked when the presented binding has a higher,
+    /// unrevoked serial (a renewal), and neither it nor revocation rotates the
+    /// pair PSK; only the availability check stops a revoked contact from
+    /// resuming with that PSK.
     ///
     /// # Errors
     ///
@@ -1400,6 +1416,30 @@ mod tests {
         let stranger = Enrolled::new()?;
         let foreign = revoke_through(&stranger, 1, 2)?;
         assert!(decode_set(&set_bytes(&root, true, &records, &[foreign])).is_none());
+        Ok(())
+    }
+
+    /// The contract the session layer relies on (§2): `availability` blocks a
+    /// revoked pinned serial, while `confirm_identity` still accepts a renewal
+    /// that supersedes it. Revocation leaves the PSK and generation untouched,
+    /// so the availability check is what invalidates resumption.
+    #[test]
+    fn availability_blocks_revoked_serial_but_renewal_is_accepted() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        store.apply_revocation(revoke_through(&enrolled, 1, 1)?)?;
+        assert_eq!(store.availability(&key)?.err(), Some(Unavailable::Revoked));
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.generation(), 1);
+        assert_eq!(contact.psk.0.as_ref(), &[0x77; 32]);
+        let renewal = enrolled.bind(2)?;
+        assert_eq!(
+            store.confirm_identity(&key, &[0x33; 32], renewal.binding(), time(T0)?),
+            Ok(renewal.clone())
+        );
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.binding_serial(), nz(2)?);
+        assert!(store.availability(&key)?.is_ok());
         Ok(())
     }
 
