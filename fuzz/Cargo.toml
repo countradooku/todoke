@@ -1,0 +1,60 @@
+[package]
+name = "todoke-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "Apache-2.0 OR MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+# Isolated from the root workspace (see fuzz/README.md).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "=0.4.13"
+todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0" }
+todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
+
+[[bin]]
+name = "proto_device_binding"
+path = "fuzz_targets/proto_device_binding.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_revoke"
+path = "fuzz_targets/proto_revoke.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_binding_verification"
+path = "fuzz_targets/crypto_binding_verification.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_keystore_plaintext"
+path = "fuzz_targets/crypto_keystore_plaintext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_contact_store_plaintext"
+path = "fuzz_targets/crypto_contact_store_plaintext.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_sealed_envelope"
+path = "fuzz_targets/crypto_sealed_envelope.rs"
+test = false
+doc = false
+bench = false
