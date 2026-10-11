@@ -586,6 +586,15 @@ fn encoded_vectors() -> Result<Vec<(&'static str, Vec<u8>)>> {
         .collect()
 }
 
+/// Cargo sets the manifest directory at run time for `cargo run` and `cargo test`.
+/// Prefer it so a reused target directory from another checkout cannot point the
+/// tool at that checkout's fixtures; fall back to the compile-time value.
+fn fixture_directory() -> PathBuf {
+    std::env::var_os("CARGO_MANIFEST_DIR")
+        .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from)
+        .join("../../spec/test-vectors")
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args_os().skip(1).collect();
     let check = match args.as_slice() {
@@ -593,7 +602,7 @@ fn main() -> Result<()> {
         [arg] if arg == "--check" => true,
         _ => return Err("usage: generate_handshake_vectors [--check]".into()),
     };
-    let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/test-vectors");
+    let directory = fixture_directory();
     for (name, bytes) in encoded_vectors()? {
         let path = directory.join(name);
         if check {
@@ -683,7 +692,7 @@ mod tests {
 
     #[test]
     fn committed_vectors_match_reference_regeneration() -> Result<()> {
-        let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../spec/test-vectors");
+        let directory = fixture_directory();
         for (name, bytes) in encoded_vectors()? {
             assert_eq!(
                 fs::read(directory.join(name))?,
