@@ -58,9 +58,19 @@ impl From<io::Error> for StorageError {
 
 /// [`BlobStorage`] in one file, replaced via write, sync, and rename.
 ///
-/// On Unix the file is created with mode 0600 and the parent directory is
-/// synced after the rename. Windows ACLs and mobile sandbox protection classes
-/// are left to platform integration (O9).
+/// Each store removes any stale `.tmp` sibling and creates a fresh one with
+/// `create_new` (`O_CREAT | O_EXCL`), which never opens an existing file and,
+/// per POSIX, fails rather than following a symlink at that path. Before the
+/// rename, the path's `symlink_metadata` must still be the regular file that
+/// was opened. On Unix the file is created with mode 0600 and the parent
+/// directory is synced after the rename. Windows ACLs and mobile sandbox
+/// protection classes are left to platform integration (O9).
+///
+/// **Single writer required:** there is no locking. At most one
+/// `FileStorage` (in one process) may store to a path at a time; a concurrent
+/// writer makes `store` fail or lose an update. The directory should be
+/// writable only by its owner: anyone who can write to it can replace the
+/// blob outright.
 #[derive(Debug)]
 pub struct FileStorage {
     path: PathBuf,
@@ -103,8 +113,19 @@ impl BlobStorage for FileStorage {
     }
 
     fn store(&mut self, bytes: &[u8]) -> Result<(), StorageError> {
+        // A leftover from a crash, or something planted: never reuse it, since
+        // its mode, owner, or link target would carry over. Removing a symlink
+        // removes the link, not its target.
+        match fs::remove_file(&self.temporary) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        // O_NOFOLLOW would need a libc constant; O_EXCL already refuses an
+        // existing path, symlinks included, and the identity check below
+        // confirms what is renamed.
         let mut options = OpenOptions::new();
-        options.write(true).create(true).truncate(true);
+        options.write(true).create_new(true);
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt;
@@ -113,11 +134,35 @@ impl BlobStorage for FileStorage {
         let mut file = options.open(&self.temporary)?;
         file.write_all(bytes)?;
         file.sync_all()?;
+        ensure_same_file(&file, &self.temporary)?;
         drop(file);
         fs::rename(&self.temporary, &self.path)?;
         #[cfg(unix)]
         sync_parent(&self.path)?;
         Ok(())
+    }
+}
+
+/// Fails unless `path` is, without following symlinks, the regular file open
+/// as `file` (on Unix, the same device and inode).
+fn ensure_same_file(file: &File, path: &std::path::Path) -> Result<(), StorageError> {
+    let opened = file.metadata()?;
+    let current = fs::symlink_metadata(path)?;
+    let same = current.file_type().is_file() && {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            opened.dev() == current.dev() && opened.ino() == current.ino()
+        }
+        #[cfg(not(unix))]
+        {
+            opened.is_file()
+        }
+    };
+    if same {
+        Ok(())
+    } else {
+        Err(StorageError::Io(io::ErrorKind::AlreadyExists))
     }
 }
 
@@ -218,6 +263,48 @@ mod tests {
         let path = scratch.0.join("blob");
         FileStorage::new(&path).store(b"x")?;
         assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        Ok(())
+    }
+
+    /// A leftover or planted `.tmp` with loose permissions must not be
+    /// reused: its mode would survive the rename onto the real path.
+    #[cfg(unix)]
+    #[test]
+    fn stale_temporary_file_is_replaced() -> TestResult {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new()?;
+        let path = scratch.0.join("blob");
+        let temporary = scratch.0.join("blob.tmp");
+        fs::write(&temporary, b"stale contents, longer than the new blob")?;
+        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o644))?;
+        let mut storage = FileStorage::new(&path);
+        storage.store(b"new")?;
+        assert_eq!(storage.load(64)?.as_deref(), Some(&b"new"[..]));
+        assert_eq!(fs::metadata(&path)?.permissions().mode() & 0o777, 0o600);
+        assert!(!temporary.exists());
+        Ok(())
+    }
+
+    /// A symlink planted at the `.tmp` path must not be followed: the target
+    /// stays untouched and the real path becomes a regular file.
+    #[cfg(unix)]
+    #[test]
+    fn temporary_symlink_is_not_followed() -> TestResult {
+        let scratch = Scratch::new()?;
+        let path = scratch.0.join("blob");
+        let victim = scratch.0.join("victim");
+        fs::write(&victim, b"victim")?;
+        std::os::unix::fs::symlink(&victim, scratch.0.join("blob.tmp"))?;
+        let mut storage = FileStorage::new(&path);
+        storage.store(b"secret blob")?;
+        assert_eq!(fs::read(&victim)?, b"victim");
+        assert!(fs::symlink_metadata(&path)?.file_type().is_file());
+        assert_eq!(fs::read(&path)?, b"secret blob");
+        // A dangling symlink is not followed either.
+        std::os::unix::fs::symlink(scratch.0.join("missing"), scratch.0.join("blob.tmp"))?;
+        storage.store(b"again")?;
+        assert!(!scratch.0.join("missing").exists());
+        assert_eq!(fs::read(&path)?, b"again");
         Ok(())
     }
 
