@@ -448,6 +448,10 @@ pub enum IdentityError {
     KeyChanged(ChangedKeys),
     /// The binding has the pinned keys but failed time or revocation policy.
     Binding(BindingError),
+    /// The binding has the pinned keys but a lower serial than the pinned
+    /// one. Serials are unique and increasing (§2), so a superseded binding
+    /// must not authenticate. The contact is unchanged.
+    SerialRegressed,
     /// Recording the result failed. The in-memory state remains fail-closed.
     Storage(ContactError),
 }
@@ -460,6 +464,7 @@ impl fmt::Display for IdentityError {
             Self::AuthenticationFailed => f.write_str("identity authentication failed"),
             Self::KeyChanged(_) => f.write_str("contact keys changed"),
             Self::Binding(error) => write!(f, "binding rejected: {error}"),
+            Self::SerialRegressed => f.write_str("binding serial is older than the pinned serial"),
             Self::Storage(error) => write!(f, "{error}"),
         }
     }
@@ -651,8 +656,9 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// Noise handshake; it must equal `binding.noise_static`. A validly
     /// signed binding with any different key blocks the contact and records
     /// the change; a binding that is not validly signed changes nothing.
-    /// With matching keys, time and revocation policy apply, and a higher
-    /// serial is recorded as a renewal.
+    /// With matching keys, time and revocation policy apply, a serial below
+    /// the pinned one is rejected (§2: serials are unique and increasing),
+    /// and a higher serial is recorded as a renewal.
     ///
     /// This does not check the `Identity` signature over the handshake hash;
     /// that belongs to the session layer.
@@ -710,6 +716,9 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
         let verified = PersonIdentity::new(pinned_root)
             .verify_binding(presented, now, &self.revocations)
             .map_err(IdentityError::Binding)?;
+        if verified.serial() < pinned_serial {
+            return Err(IdentityError::SerialRegressed);
+        }
         if verified.serial() > pinned_serial {
             self.renew(expected_device, &verified, now)
                 .map_err(IdentityError::Storage)?;
@@ -1087,12 +1096,38 @@ mod tests {
         assert_eq!(contact.binding_serial(), nz(2)?);
         let kinds: Vec<_> = contact.history().map(|event| event.kind).collect();
         assert_eq!(kinds, [HistoryKind::Paired, HistoryKind::Renewed]);
-        // An older serial with the same keys is accepted but not recorded.
-        store.confirm_identity(&key, &[0x33; 32], same.binding(), time(T0)?)?;
+        // Presenting the pinned serial again is accepted and changes nothing.
+        store.confirm_identity(&key, &[0x33; 32], renewed.binding(), time(T0)?)?;
         assert_eq!(
             store.contact(&key).ok_or("missing")?.binding_serial(),
             nz(2)?
         );
+        Ok(())
+    }
+
+    /// §2: serials are "unique and increasing for this root/device". Once a
+    /// higher serial is pinned, a replayed older binding must not authenticate
+    /// even while it is still time-valid.
+    #[test]
+    fn regressed_serial_is_rejected() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let old = enrolled.bind(1)?;
+        store.confirm_identity(&key, &[0x33; 32], enrolled.bind(3)?.binding(), time(T0)?)?;
+        assert_eq!(
+            store.confirm_identity(&key, &[0x33; 32], old.binding(), time(T0)?),
+            Err(IdentityError::SerialRegressed)
+        );
+        assert_eq!(
+            store.confirm_identity(&key, &[0x33; 32], enrolled.bind(2)?.binding(), time(T0)?),
+            Err(IdentityError::SerialRegressed)
+        );
+        let contact = store.contact(&key).ok_or("missing")?;
+        assert_eq!(contact.binding_serial(), nz(3)?);
+        assert_eq!(contact.state(), VerificationState::Verified);
+        assert_eq!(contact.history().len(), 2);
+        // The pinned serial itself still authenticates.
+        store.confirm_identity(&key, &[0x33; 32], enrolled.bind(3)?.binding(), time(T0)?)?;
         Ok(())
     }
 
@@ -1488,6 +1523,8 @@ mod tests {
     enum Op {
         Pair,
         ConfirmSame,
+        /// Present the pinned keys at `pinned serial - delta` (at least 1).
+        ConfirmOlder(u64),
         ConfirmChanged,
         ConfirmTampered,
         MarkUncertain,
@@ -1498,14 +1535,16 @@ mod tests {
 
     fn arb_op() -> impl Strategy<Value = Op> {
         prop_oneof![
-            Just(Op::Pair),
-            Just(Op::ConfirmSame),
-            Just(Op::ConfirmChanged),
-            Just(Op::ConfirmTampered),
-            Just(Op::MarkUncertain),
-            Just(Op::Revoke),
-            Just(Op::Reopen),
-            Just(Op::Remove),
+            2 => Just(Op::Pair),
+            1 => Just(Op::ConfirmSame),
+            // Weighted so regressed serials are reached in most cases.
+            3 => (0..3u64).prop_map(Op::ConfirmOlder),
+            1 => Just(Op::ConfirmChanged),
+            1 => Just(Op::ConfirmTampered),
+            1 => Just(Op::MarkUncertain),
+            1 => Just(Op::Revoke),
+            1 => Just(Op::Reopen),
+            1 => Just(Op::Remove),
         ]
     }
 
@@ -1558,6 +1597,24 @@ mod tests {
                             }
                         }
                         next_serial += 1;
+                    }
+                    Op::ConfirmOlder(delta) => {
+                        let serial = model.map_or(1, |m| m.serial.saturating_sub(delta).max(1));
+                        let binding = enrolled.bind(serial).map_err(fail)?;
+                        let result = store.confirm_identity(&key, &[0x33; 32], binding.binding(), now);
+                        match model {
+                            None => prop_assert_eq!(result, Err(IdentityError::UnknownContact)),
+                            Some(m) if m.state != VerificationState::Verified => {
+                                prop_assert!(matches!(result, Err(IdentityError::Unavailable(_))));
+                            }
+                            Some(_) if serial <= revoked_through => {
+                                prop_assert_eq!(result, Err(IdentityError::Binding(BindingError::Revoked)));
+                            }
+                            Some(m) if serial < m.serial => {
+                                prop_assert_eq!(result, Err(IdentityError::SerialRegressed));
+                            }
+                            Some(_) => prop_assert!(result.is_ok()),
+                        }
                     }
                     Op::ConfirmChanged | Op::ConfirmTampered => {
                         let binding = enrolled.bind_with(next_serial, 0x33, 0x66).map_err(fail)?;
