@@ -26,6 +26,21 @@
 //! ratchet. That is peer authentication only: it is not consent to receive
 //! anything (§7). Transfers are not implemented here.
 //!
+//! # Limitations
+//!
+//! - Only [`ContactAuthority`] (existing contacts, `KKpsk2`) is public. QR and
+//!   code pairing need an authority that burns the offer and creates the
+//!   contact when the ratchet commits; that belongs to the pairing work.
+//! - Code mode binds a caller-supplied [`CodeTranscript`] into the prologue;
+//!   `CodeOfferRequest`/`CodeOffer`/`CodeShare*` records are not exchanged
+//!   and `CPace` is not implemented (O2).
+//! - A [`ContactAuthority`] borrows its [`ContactStore`](crate::identity::ContactStore)
+//!   mutably for the whole establishment, so one store serves one contact
+//!   session establishment at a time.
+//! - [`Session`] has no full-duplex split; `send` and `recv` take `&mut self`.
+//! - Capabilities (§6), transfers (§7), the "one session per device pair" rule,
+//!   and unauthenticated-attempt rate limits (§13) belong to higher layers.
+//!
 //! # Secrets
 //!
 //! PSKs, static and ephemeral keys, and decrypted frames live in
