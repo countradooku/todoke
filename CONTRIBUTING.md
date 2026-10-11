@@ -31,7 +31,8 @@ Run the required checks before submitting:
 cargo fmt
 cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 cargo test
-cargo deny check
+cargo deny check -D unmatched-skip
+bash scripts/ci/deny-exceptions-dev-only.sh
 cargo vet
 ```
 

@@ -57,7 +57,10 @@ jobs:
           cargo install cargo-deny --version 0.20.2 --locked
           cargo install cargo-vet --version 0.10.2 --locked
       - name: Check licenses, advisories, bans, and sources
-        run: cargo deny --locked check
+        # A stale skip entry fails rather than lingering after upstream converges.
+        run: cargo deny --locked check -D unmatched-skip
+      - name: Check deny exceptions stay in dev-dependencies
+        run: bash scripts/ci/deny-exceptions-dev-only.sh
       - name: Check dependency audits
         run: cargo vet --locked
       - name: Check fuzz dependency policy and audits

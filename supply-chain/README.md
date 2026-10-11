@@ -12,7 +12,8 @@ Run the same tool versions as CI:
 ```sh
 cargo install --locked cargo-deny --version 0.20.2
 cargo install --locked cargo-vet --version 0.10.2
-cargo deny --locked check
+cargo deny --locked check -D unmatched-skip
+bash scripts/ci/deny-exceptions-dev-only.sh
 cargo vet --locked
 ```
 
@@ -39,8 +40,8 @@ References: [cargo-deny configuration](https://embarkstudios.github.io/cargo-den
 
 ## Protocol-vector dependency check status
 
-On 2026-10-11, the locked vector-tool graph passes cargo-deny's license and
-source checks but does **not** pass its advisory or duplicate-version policies:
+On 2026-10-11, the locked vector-tool graph passed cargo-deny's license and
+source checks but not its advisory or duplicate-version policies:
 
 - [RUSTSEC-2026-0173](https://rustsec.org/advisories/RUSTSEC-2026-0173.html):
   unmaintained `proc-macro-error2 2.0.1`, with no patched version. The path includes
@@ -58,10 +59,23 @@ source checks but does **not** pass its advisory or duplicate-version policies:
   also a direct development dependency.
 
 Current upstream features/releases were inspected; disabling ML-KEM default/SIMD
-features does not remove the older verification graph. No advisory ignore, version
-skip, blanket vet exemption, or dependency source patch was added. CI supply-chain
-checks therefore remain failing until upstream resolution and actual audit evidence
-are available, or narrowly justified exceptions receive review. The generator takes
+features does not remove the older verification graph.
+
+The maintainer accepted narrow cargo-deny exceptions for these findings, also on
+2026-10-11: one advisory ignore by ID and one skip per exact older duplicate
+version, each with its reason in `deny.toml`. No version range, `skip-tree`,
+wildcard, `multiple-versions-include-dev = false`, or `exclude-dev` was used, so
+any new duplicate or advisory still fails. Because cargo-deny cannot scope an
+exception by dependency kind, `scripts/ci/deny-exceptions-dev-only.sh` fails CI
+if an exempted package becomes reachable through a normal or build dependency on
+any target. CI passes `-D unmatched-skip`, and `unused-ignored-advisory = "deny"`
+is already set, so each exception must be deleted once upstream no longer needs it.
+
+No blanket vet exemption or dependency source patch was added: `cargo vet --locked`
+still fails until actual audit evidence exists. The shared `deny.toml` is also used
+for the future fuzz workspace, whose graph will not contain these dev-only crates;
+its unused advisory ignore would then fail, so introducing that workspace requires
+a decision on a separate fuzz policy file. The generator takes
 only public fixed fixtures and is not a production secret-handling approval.
 
 The [O1 decision](../spec/decisions/O1-HYBRID-NOISE.md) cites a real independent

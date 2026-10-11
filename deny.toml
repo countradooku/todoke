@@ -9,7 +9,14 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
-ignore = []
+# Exceptions below are scoped to exact IDs/versions and are reachable only through
+# todoke-proto's offline vector-generator dev-dependencies. cargo-deny cannot scope
+# them by dependency kind; scripts/ci/deny-exceptions-dev-only.sh enforces that
+# none of these packages appears in the non-dev graph. Remove each when upstream
+# no longer needs it; unused-ignored-advisory makes a stale ignore fail.
+ignore = [
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 2.0.1 is unmaintained with no fixed release. Dev-only: libcrux-intrinsics 0.0.9 -> core-models 0.0.7 -> hax-lib 0.3.7 -> hax-lib-macros 0.3.7, a compile-time proc macro for libcrux's hax verification annotations. No runtime crate depends on it." },
+]
 unused-ignored-advisory = "deny"
 
 [licenses]
@@ -23,7 +30,17 @@ multiple-versions-include-dev = true
 wildcards = "deny"
 allow-wildcard-paths = false
 deny = []
-skip = []
+# One older version per duplicate pair, all reached only from todoke-proto's
+# offline vector-generator dev-dependencies (see the advisories note above).
+skip = [
+    { crate = "hax-lib@0.3.7", reason = "Dev-only. libcrux-intrinsics 0.0.9 uses hax-lib 0.4.2 directly and 0.3.7 via core-models 0.0.7; upstream must converge." },
+    { crate = "hax-lib-macros@0.3.7", reason = "Dev-only. Proc macro of hax-lib 0.3.7 in the same libcrux split." },
+    { crate = "hax-lib-macros-types@0.3.7", reason = "Dev-only. Types crate of hax-lib-macros 0.3.7 in the same libcrux split." },
+    { crate = "syn@2.0.119", reason = "Dev-only build/proc-macro use (bindgen via crabgrind for libcrux-secrets, hax-lib-macros, curve25519-dalek-derive, proc-macro-error2) while libcrux-macros and serde_derive use syn 3." },
+    { crate = "shlex@1.3.0", reason = "Dev-only build dependency of bindgen 0.72.1 via crabgrind for libcrux-secrets; cc 1.7 uses shlex 2." },
+    { crate = "rand_core@0.6.4", reason = "Dev-only. Required by the pinned snow 0.9.6 handshake fixture engine and its RNG adapter; libcrux uses rand_core 0.10." },
+    { crate = "getrandom@0.2.17", reason = "Dev-only. Pulled by rand_core 0.6.4 for snow 0.9.6; libcrux's uuid/rand use getrandom 0.4." },
+]
 skip-tree = []
 
 [bans.workspace-dependencies]
