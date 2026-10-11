@@ -797,6 +797,11 @@ mod tests {
         assert_eq!(body.not_after(), time(T0 + 86_400)?);
         assert_eq!(binding.root_signature(), &[5; 64]);
         assert_eq!(binding.device_signature(), &[6; 64]);
+        // A root other than the sample's [1; 32], so a constant cannot pass.
+        let mut bytes = sample_binding()?.encode();
+        bytes[2..34].fill(0xa1);
+        let decoded = DeviceBinding::decode(&bytes)?;
+        assert_eq!(decoded.body().person_root(), &[0xa1; 32]);
         Ok(())
     }
 
@@ -833,6 +838,9 @@ mod tests {
         assert_eq!(body.device_public(), &[2; 32]);
         assert_eq!(body.through_serial(), nz(7)?);
         assert_eq!(body.reason(), RevocationReason::Compromised);
+        let mut bytes = sample_revoke()?.encode();
+        bytes[2..34].fill(0xa1);
+        assert_eq!(Revoke::decode(&bytes)?.body().person_root(), &[0xa1; 32]);
         Ok(())
     }
 
