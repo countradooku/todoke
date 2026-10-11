@@ -784,6 +784,104 @@ mod tests {
         assert_eq!(RevocationReason::from_u16(4), None);
     }
 
+    #[test]
+    fn decoded_binding_exposes_every_field() -> TestResult {
+        let binding = DeviceBinding::decode(&sample_binding()?.encode())?;
+        let body = binding.body();
+        assert_eq!(body.person_root(), &[1; 32]);
+        assert_eq!(body.device_public(), &[2; 32]);
+        assert_eq!(body.noise_static(), &[3; 32]);
+        assert_eq!(body.kem_static(), &[4; KEM_STATIC_LEN]);
+        assert_eq!(body.serial(), nz(7)?);
+        assert_eq!(body.not_before(), time(T0)?);
+        assert_eq!(body.not_after(), time(T0 + 86_400)?);
+        assert_eq!(binding.root_signature(), &[5; 64]);
+        assert_eq!(binding.device_signature(), &[6; 64]);
+        Ok(())
+    }
+
+    /// §2: lifetime <= 366 days, counted in whole seconds.
+    #[test]
+    fn binding_lifetime_limit_is_366_days() {
+        assert_eq!(MAX_BINDING_LIFETIME_SECONDS, 31_622_400);
+        let window = |lifetime: u64| {
+            DeviceBindingBody::new(
+                [1; 32],
+                [2; 32],
+                [3; 32],
+                Box::new([4; KEM_STATIC_LEN]),
+                nz(1)?,
+                time(T0)?,
+                time(T0 + lifetime)?,
+            )
+            .map(|_| ())
+        };
+        assert_eq!(window(31_622_400), Ok(()));
+        assert_eq!(window(31_622_401), Err(DecodeError::Range));
+        assert_eq!(window(1), Ok(()));
+    }
+
+    #[test]
+    fn decoded_revoke_exposes_every_field() -> TestResult {
+        let revoke = Revoke::decode(&sample_revoke()?.encode())?;
+        assert_eq!(revoke.signature(), &[8; 64]);
+        let body = revoke.body().clone();
+        assert_eq!(body.person_root(), &[1; 32]);
+        assert_eq!(body.record_id(), &[9; 16]);
+        assert_eq!(body.sequence(), nz(3)?);
+        assert_eq!(body.issued_at(), time(T0)?);
+        assert_eq!(body.device_public(), &[2; 32]);
+        assert_eq!(body.through_serial(), nz(7)?);
+        assert_eq!(body.reason(), RevocationReason::Compromised);
+        Ok(())
+    }
+
+    #[test]
+    fn decode_errors_have_distinct_messages() {
+        let all = [
+            DecodeError::Length,
+            DecodeError::Version,
+            DecodeError::Reserved,
+            DecodeError::Range,
+            DecodeError::ZeroIdentifier,
+            DecodeError::UnknownEnum,
+        ];
+        let messages: Vec<String> = all.iter().map(ToString::to_string).collect();
+        for (index, message) in messages.iter().enumerate() {
+            assert_ne!(message, "");
+            assert!(!messages[..index].contains(message), "{message}");
+        }
+    }
+
+    /// Public fields render as lowercase hex; the 1184-byte credential is
+    /// summarized by its length rather than dumped.
+    #[test]
+    fn debug_renders_public_fields_as_hex() -> TestResult {
+        let binding = format!("{:?}", sample_binding()?.body());
+        for expected in [
+            "01".repeat(32),
+            "02".repeat(32),
+            "03".repeat(32),
+            format!("[{KEM_STATIC_LEN} bytes]"),
+            format!("{T0}"),
+            format!("{}", T0 + 86_400),
+        ] {
+            assert!(binding.contains(&expected), "{binding} lacks {expected}");
+        }
+        assert!(!binding.contains(&"04".repeat(32)));
+        let revoke = format!("{:?}", sample_revoke()?.body());
+        for expected in [
+            "01".repeat(32),
+            "09".repeat(16),
+            "02".repeat(32),
+            format!("{T0}"),
+            "Compromised".to_owned(),
+        ] {
+            assert!(revoke.contains(&expected), "{revoke} lacks {expected}");
+        }
+        Ok(())
+    }
+
     fn arb_binding() -> impl Strategy<Value = DeviceBinding> {
         (
             any::<([u8; 32], [u8; 32], [u8; 32])>(),
