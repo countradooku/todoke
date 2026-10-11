@@ -72,3 +72,10 @@ path = "fuzz_targets/proto_session_frames.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_session_handshake"
+path = "fuzz_targets/crypto_session_handshake.rs"
+test = false
+doc = false
+bench = false

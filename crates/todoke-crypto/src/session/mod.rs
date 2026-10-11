@@ -38,6 +38,8 @@
 mod authority;
 mod engine;
 mod establish;
+#[cfg(fuzzing)]
+pub mod fuzzing;
 mod handshake;
 mod io;
 mod kdf;
