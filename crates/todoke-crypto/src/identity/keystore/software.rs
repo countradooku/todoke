@@ -632,6 +632,119 @@ mod tests {
         Ok(())
     }
 
+    /// A full store (`MAX_KEYS` keys) seals to exactly `MAX_BLOB_LEN` bytes
+    /// and reopens; one more byte is refused before decryption.
+    #[test]
+    fn full_store_fits_the_blob_limit_exactly() -> TestResult {
+        let mut store = memory_store()?;
+        for _ in 0..MAX_KEYS {
+            store.generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        }
+        let blob = store.storage().blob().ok_or("no blob")?.to_vec();
+        assert_eq!(blob.len(), MAX_BLOB_LEN);
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(Some(blob.clone()));
+        let reopened = SoftwareKeyStore::open(sealer(7), storage)?;
+        assert_eq!(reopened.len(), MAX_KEYS);
+        assert_eq!(
+            reopened.key_ids().collect::<Vec<_>>(),
+            store.key_ids().collect::<Vec<_>>()
+        );
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(Some([blob, vec![0]].concat()));
+        assert_eq!(
+            SoftwareKeyStore::open(sealer(7), storage).err(),
+            Some(KeyStoreError::Storage(StorageError::TooLarge))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn key_ids_len_and_debug_track_contents() -> TestResult {
+        let mut store = memory_store()?;
+        assert!(store.is_empty());
+        assert_eq!(store.key_ids().count(), 0);
+        let first = store.generate(KeyRole::PersonRoot, ExportPolicy::NonExportable)?;
+        let second = store.generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        assert!(!store.is_empty());
+        assert_eq!(store.len(), 2);
+        let mut expected = vec![first, second];
+        expected.sort();
+        assert_eq!(store.key_ids().collect::<Vec<_>>(), expected);
+        assert_eq!(format!("{store:?}"), "EncryptedKeyStore { keys: 2, .. }");
+        Ok(())
+    }
+
+    /// The wrapped seed is bound to `todoke/local/wrapped-key\0 || header`,
+    /// where the header is `version || role || public key`.
+    #[test]
+    fn wrapped_key_is_bound_to_its_header() -> TestResult {
+        let mut store = memory_store()?;
+        let root = store.generate(KeyRole::PersonRoot, ExportPolicy::Exportable)?;
+        let wrapping = WrappingKey::generate()?;
+        let wrapped = store.export_wrapped(&root, &wrapping)?;
+        let (header, sealed) = wrapped
+            .as_bytes()
+            .split_first_chunk::<35>()
+            .ok_or("short")?;
+        assert_eq!(header[..3], [0, 1, KeyRole::PersonRoot.to_u8()]);
+        assert_eq!(&header[3..], store.public_key(&root)?.as_bytes());
+        let mut context = b"todoke/local/wrapped-key\0".to_vec();
+        context.extend_from_slice(header);
+        let seed = sealing::open_with(wrapping.as_storage_key(), &context, sealed)?;
+        let public = SigningKey::from_bytes(&seed.as_slice().try_into()?)
+            .verifying_key()
+            .to_bytes();
+        assert_eq!(&public, store.public_key(&root)?.as_bytes());
+        // Any other header fails authentication.
+        let mut other = context.clone();
+        let last = other.len() - 1;
+        other[last] ^= 1;
+        assert!(sealing::open_with(wrapping.as_storage_key(), &other, sealed).is_err());
+        Ok(())
+    }
+
+    /// A failed delete leaves the key present and usable.
+    #[test]
+    fn delete_rolls_back_on_persistence_failure() -> TestResult {
+        let (storage, failing) = crate::identity::test_support::SwitchableStorage::new();
+        let mut store = SoftwareKeyStore::open(sealer(7), storage)?;
+        let key = store.generate(KeyRole::Device, ExportPolicy::NonExportable)?;
+        failing.set(true);
+        assert!(matches!(store.delete(&key), Err(KeyStoreError::Storage(_))));
+        assert_eq!(store.len(), 1);
+        let signature = store.sign(&key, SigningDomain::Identity, b"m")?;
+        store
+            .public_key(&key)?
+            .verify(SigningDomain::Identity, b"m", &signature)?;
+        Ok(())
+    }
+
+    /// `MAX_KEYS` well-formed entries decode; one more is rejected even when
+    /// it is otherwise well formed.
+    #[test]
+    fn decode_enforces_the_key_quota() {
+        let encoded = |count: usize| {
+            let mut bytes = u16::try_from(count)
+                .unwrap_or(u16::MAX)
+                .to_be_bytes()
+                .to_vec();
+            for index in 1..=count {
+                let mut id = [0; 16];
+                id[8..].copy_from_slice(&(index as u64).to_be_bytes());
+                bytes.extend_from_slice(&id);
+                bytes.extend_from_slice(&[2, 0]);
+                bytes.extend_from_slice(&[0x11; SEED_LEN]);
+            }
+            bytes
+        };
+        assert_eq!(
+            decode(&encoded(MAX_KEYS)).map(|keys| keys.len()),
+            Ok(MAX_KEYS)
+        );
+        assert!(decode(&encoded(MAX_KEYS + 1)).is_err());
+    }
+
     proptest! {
         #[test]
         fn plaintext_round_trips(
@@ -671,6 +784,147 @@ mod tests {
         #[test]
         fn decode_never_panics(bytes in proptest::collection::vec(any::<u8>(), 0..512)) {
             let _ = decode(&bytes);
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum KeyOp {
+        Generate { root: bool, exportable: bool },
+        Delete(proptest::sample::Index),
+        DeleteUnknown,
+        Sign(proptest::sample::Index, proptest::sample::Index),
+        SetFailing(bool),
+        Reopen,
+    }
+
+    fn arb_key_op() -> impl Strategy<Value = KeyOp> {
+        prop_oneof![
+            3 => (any::<bool>(), any::<bool>())
+                .prop_map(|(root, exportable)| KeyOp::Generate { root, exportable }),
+            2 => any::<proptest::sample::Index>().prop_map(KeyOp::Delete),
+            1 => Just(KeyOp::DeleteUnknown),
+            2 => (any::<proptest::sample::Index>(), any::<proptest::sample::Index>())
+                .prop_map(|(key, domain)| KeyOp::Sign(key, domain)),
+            2 => any::<bool>().prop_map(KeyOp::SetFailing),
+            1 => Just(KeyOp::Reopen),
+        ]
+    }
+
+    const DOMAINS: [SigningDomain; 6] = [
+        SigningDomain::DeviceBinding,
+        SigningDomain::DevicePossession,
+        SigningDomain::Revoke,
+        SigningDomain::Identity,
+        SigningDomain::Accept,
+        SigningDomain::DeliveryReceipt,
+    ];
+
+    /// What the model expects of each stored key.
+    type ModelKeys = BTreeMap<KeyId, (KeyRole, ExportPolicy, Ed25519PublicKey)>;
+
+    fn fail(error: impl fmt::Display) -> TestCaseError {
+        TestCaseError::fail(error.to_string())
+    }
+
+    /// Checks that `store` holds exactly the model's keys, with their roles,
+    /// public keys, and export policies.
+    fn matches_model<S: Sealer, B: BlobStorage>(
+        store: &EncryptedKeyStore<S, B>,
+        model: &ModelKeys,
+        wrapping: &WrappingKey,
+    ) -> Result<(), TestCaseError> {
+        prop_assert_eq!(store.len(), model.len());
+        prop_assert_eq!(store.is_empty(), model.is_empty());
+        prop_assert!(store.key_ids().eq(model.keys().copied()));
+        for (id, (role, export, public)) in model {
+            prop_assert_eq!(store.role(id).map_err(fail)?, *role);
+            prop_assert_eq!(store.public_key(id).map_err(fail)?, *public);
+            let exported = store.export_wrapped(id, wrapping);
+            if *role == KeyRole::PersonRoot && *export == ExportPolicy::Exportable {
+                let wrapped = exported.map_err(fail)?;
+                prop_assert_eq!(&wrapped.as_bytes()[3..35], public.as_bytes());
+            } else {
+                prop_assert_eq!(exported, Err(KeyStoreError::NotExportable));
+            }
+        }
+        Ok(())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(32))]
+
+        /// Model-based state-machine test of key generation, deletion,
+        /// signing policy, export policy, rollback on persistence failure,
+        /// and durability across reopening.
+        #[test]
+        fn key_store_state_machine(ops in proptest::collection::vec(arb_key_op(), 1..40)) {
+            let (storage, failing) = crate::identity::test_support::SwitchableStorage::new();
+            let mut store = SoftwareKeyStore::open(sealer(7), storage).map_err(fail)?;
+            let mut model = ModelKeys::new();
+            let wrapping = WrappingKey::from_bytes(Zeroizing::new([0x42; 32]));
+            for op in ops {
+                match op {
+                    KeyOp::Generate { root, exportable } => {
+                        let role = if root { KeyRole::PersonRoot } else { KeyRole::Device };
+                        let export = if exportable {
+                            ExportPolicy::Exportable
+                        } else {
+                            ExportPolicy::NonExportable
+                        };
+                        let result = store.generate(role, export);
+                        if model.len() >= MAX_KEYS {
+                            prop_assert_eq!(result, Err(KeyStoreError::Capacity));
+                        } else if failing.get() {
+                            prop_assert!(matches!(result, Err(KeyStoreError::Storage(_))));
+                        } else {
+                            let id = result.map_err(fail)?;
+                            prop_assert!(!model.contains_key(&id));
+                            // Device keys are never exportable (§2).
+                            let export = if root { export } else { ExportPolicy::NonExportable };
+                            model.insert(id, (role, export, store.public_key(&id).map_err(fail)?));
+                        }
+                    }
+                    KeyOp::Delete(index) => {
+                        let Some(id) = model.keys().nth(index.index(model.len().max(1))).copied() else {
+                            continue;
+                        };
+                        let result = store.delete(&id);
+                        if failing.get() {
+                            prop_assert!(matches!(result, Err(KeyStoreError::Storage(_))));
+                        } else {
+                            prop_assert_eq!(result, Ok(()));
+                            model.remove(&id);
+                            prop_assert_eq!(store.public_key(&id), Err(KeyStoreError::UnknownKey));
+                        }
+                    }
+                    KeyOp::DeleteUnknown => {
+                        let unknown = KeyId::from_bytes([0xff; 16])
+                            .ok_or_else(|| fail("zero key id"))?;
+                        prop_assert_eq!(store.delete(&unknown), Err(KeyStoreError::UnknownKey));
+                    }
+                    KeyOp::Sign(key, domain) => {
+                        let Some((id, (role, _, public))) = model.iter().nth(key.index(model.len().max(1))) else {
+                            continue;
+                        };
+                        let domain = DOMAINS[domain.index(DOMAINS.len())];
+                        let result = store.sign(id, domain, b"state machine");
+                        if domain.permits(*role) {
+                            let signature = result.map_err(fail)?;
+                            prop_assert!(public.verify(domain, b"state machine", &signature).is_ok());
+                        } else {
+                            prop_assert_eq!(result, Err(KeyStoreError::DomainNotPermitted));
+                        }
+                    }
+                    KeyOp::SetFailing(on) => failing.set(on),
+                    KeyOp::Reopen => {
+                        let mut durable = MemoryStorage::new();
+                        durable.set_blob(store.storage().blob().map(<[u8]>::to_vec));
+                        let reopened = SoftwareKeyStore::open(sealer(7), durable).map_err(fail)?;
+                        matches_model(&reopened, &model, &wrapping)?;
+                    }
+                }
+                matches_model(&store, &model, &wrapping)?;
+            }
         }
     }
 }
