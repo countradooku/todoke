@@ -33,7 +33,10 @@ exceptions = [
     { crate = "curve25519-dalek@5.0.0", allow = ["BSD-3-Clause"] },
     # Constant-time primitives used by curve25519-dalek.
     { crate = "subtle@2.6.1", allow = ["BSD-3-Clause"] },
-    # Build-time only: proc-macro2 -> syn for curve25519-dalek-derive and serde_derive.
+    # Linked into wasm32-unknown-unknown artifacts through getrandom's wasm_js
+    # backend (wasm-bindgen -> wasm-bindgen-shared); on other targets it is only
+    # compiled at build time (proc-macro2 -> syn for curve25519-dalek-derive and
+    # serde_derive). Unicode-3.0 also requires retaining its notice.
     { crate = "unicode-ident@1.0.26", allow = ["Unicode-3.0"] },
     # Never compiled: libcrux-secrets -> crabgrind -> bindgen under cfg(valgrind_ct_test).
     { crate = "bindgen@0.72.1", allow = ["BSD-3-Clause"] },

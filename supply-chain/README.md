@@ -14,6 +14,7 @@ cargo install --locked cargo-deny --version 0.20.2
 cargo install --locked cargo-vet --version 0.10.2
 cargo deny --locked check -D unmatched-skip
 bash scripts/ci/deny-exceptions-dev-only.sh
+bash scripts/ci/deny-exceptions-dev-only.test.sh
 cargo vet --locked
 ```
 
@@ -122,10 +123,22 @@ changes are:
   `curve25519-dalek-derive`, the proc macro of dalek's x86_64 SIMD backend. The
   guard fails if it is linked into any target artifact.
 - Exact-version license exceptions: BSD-3-Clause for `ed25519-dalek`,
-  `curve25519-dalek`, and `subtle`; Unicode-3.0 for `unicode-ident` (build
-  time); BSD-3-Clause / ISC for never-compiled `bindgen` / `libloading`; NCSA for
+  `curve25519-dalek`, and `subtle`; Unicode-3.0 for `unicode-ident`;
+  BSD-3-Clause / ISC for never-compiled `bindgen` / `libloading`; NCSA for
   the fuzz-only `libfuzzer-sys`. cargo-deny's license check ignores
   dev-dependencies, so dalek's license was not checked while it was dev-only.
+- The guard also reads the comment above each license exception: entries
+  marked "Never compiled" fail if any target compiles them, dev-dependencies
+  included, and entries marked "Build-time only" fail if linked into any
+  target. It also fails if a target in the CI cross job is missing from its
+  target list. `scripts/ci/deny-exceptions-dev-only.test.sh` checks these rules
+  against mutated copies of `deny.toml` and the CI workflow.
+- `unicode-ident` was originally recorded as build-time only. The extended
+  guard showed that `getrandom`'s `wasm_js` backend links it into
+  `wasm32-unknown-unknown` artifacts (`wasm-bindgen` → `wasm-bindgen-shared`),
+  so its `deny.toml` reason now says so. The exception itself is unchanged, and
+  whether to keep it for wasm artifacts, with Unicode-3.0 notice retention,
+  needs maintainer confirmation.
 - New dev-only duplicate skips for proptest's `rand 0.9.5`, `rand_core 0.9.5`,
   `getrandom 0.3.4`, and `r-efi 5.3.0`.
 
