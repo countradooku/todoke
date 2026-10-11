@@ -1,0 +1,12 @@
+[package]
+name = "todoke-transport"
+description = "Transport interfaces for BLE, Wi-Fi P2P, AWDL, USB, LAN, and QUIC relay."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

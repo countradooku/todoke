@@ -1,0 +1,12 @@
+/target/
+/fuzz/target/
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/coverage/
+/mutants.out/
+/mutants.out.old/
+.DS_Store
+
+# Local ChatGPT project reference files are not part of the repository.
+/AGENTS.md
+/sources/

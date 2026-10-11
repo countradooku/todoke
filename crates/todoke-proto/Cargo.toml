@@ -1,0 +1,12 @@
+[package]
+name = "todoke-proto"
+description = "Wire-format definitions and bounded parsing for the todoke protocol."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true

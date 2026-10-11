@@ -1,0 +1,12 @@
+[package]
+name = "todoke-daemon"
+description = "Background service integration around the public todoke core."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
