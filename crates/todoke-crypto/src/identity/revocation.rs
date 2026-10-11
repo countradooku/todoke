@@ -446,3 +446,181 @@ impl fmt::Display for RevocationError {
 }
 
 impl std::error::Error for RevocationError {}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::identity::test_support::{T0, nz, time};
+
+    fn fail(error: impl fmt::Display) -> TestCaseError {
+        TestCaseError::fail(error.to_string())
+    }
+
+    /// A valid Ed25519 public key from a fixed public seed.
+    fn key(seed: u8) -> Result<Ed25519PublicKey, TestCaseError> {
+        let public = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
+            .verifying_key()
+            .to_bytes();
+        Ed25519PublicKey::from_bytes(&public).map_err(fail)
+    }
+
+    /// The varying fields of a record body; equal specs give equal bodies.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    struct Spec {
+        sequence: u64,
+        device: u8,
+        through: u64,
+    }
+
+    /// An unsigned record for `root` (the state machine is about retention,
+    /// not signatures, which are covered elsewhere).
+    fn record(root: &Ed25519PublicKey, spec: Spec) -> Result<Revoke, TestCaseError> {
+        let mut record_id = [0x7e; 16];
+        record_id[0] = spec.device;
+        record_id[1..9].copy_from_slice(&spec.through.to_be_bytes());
+        let body = RevokeBody::new(
+            *root.as_bytes(),
+            record_id,
+            nz(spec.sequence).map_err(fail)?,
+            time(T0).map_err(fail)?,
+            *key(100 + spec.device)?.as_bytes(),
+            nz(spec.through).map_err(fail)?,
+            RevocationReason::Lost,
+        )
+        .map_err(fail)?;
+        Ok(Revoke::from_parts(body, [0; 64]))
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum SetOp {
+        Apply {
+            root: usize,
+            spec: Spec,
+        },
+        /// Keep the roots whose bit is set.
+        Retain(u8),
+        RoundTrip,
+    }
+
+    fn arb_set_op() -> impl Strategy<Value = SetOp> {
+        prop_oneof![
+            8 => (0..3usize, 1..5u64, 0..2u8, 1..5u64).prop_map(
+                |(root, sequence, device, through)| SetOp::Apply {
+                    root,
+                    spec: Spec { sequence, device, through },
+                }
+            ),
+            1 => (0..8u8).prop_map(SetOp::Retain),
+            1 => Just(SetOp::RoundTrip),
+        ]
+    }
+
+    #[derive(Debug, Default)]
+    struct ModelRoot {
+        records: BTreeMap<u64, Spec>,
+        conflicts: BTreeSet<Spec>,
+        disabled: bool,
+    }
+
+    impl ModelRoot {
+        fn apply(&mut self, spec: Spec) -> ApplyOutcome {
+            match self.records.get(&spec.sequence) {
+                Some(existing) if *existing == spec => ApplyOutcome::Duplicate,
+                Some(_) if self.conflicts.contains(&spec) => ApplyOutcome::Duplicate,
+                Some(_) => {
+                    self.disabled = true;
+                    self.conflicts.insert(spec);
+                    ApplyOutcome::Conflict
+                }
+                None => {
+                    self.records.insert(spec.sequence, spec);
+                    ApplyOutcome::Added
+                }
+            }
+        }
+
+        fn all(&self) -> impl Iterator<Item = &Spec> {
+            self.records.values().chain(&self.conflicts)
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Model-based state-machine test of `RevocationSet` below its quotas:
+        /// apply outcomes, retention of first records and conflict evidence,
+        /// disabling, revocation decisions, dropping untrusted roots, and the
+        /// local-format round trip.
+        #[test]
+        fn revocation_set_state_machine(ops in proptest::collection::vec(arb_set_op(), 1..40)) {
+            let roots = [key(1)?, key(2)?, key(3)?];
+            let mut set = RevocationSet::new();
+            let mut model: BTreeMap<usize, ModelRoot> = BTreeMap::new();
+            for op in ops {
+                match op {
+                    SetOp::Apply { root, spec } => {
+                        let expected = model.entry(root).or_default().apply(spec);
+                        let verified = RevocationRecord::unverified_for_tests(
+                            record(&roots[root], spec)?,
+                            roots[root],
+                        );
+                        prop_assert_eq!(set.apply(verified), expected);
+                    }
+                    SetOp::Retain(mask) => {
+                        let keep = |index: usize| mask & (1 << index) != 0;
+                        set.retain_roots(|root| {
+                            roots.iter().position(|candidate| candidate == root).is_some_and(keep)
+                        });
+                        model.retain(|index, _| keep(*index));
+                    }
+                    SetOp::RoundTrip => {
+                        let mut bytes = Vec::new();
+                        set.encode_into(&mut bytes);
+                        let mut reader = Reader::new(&bytes);
+                        let decoded = RevocationSet::decode(&mut reader)
+                            .map_err(|error| fail(format!("{error:?}")))?;
+                        prop_assert_eq!(reader.remaining(), 0);
+                        prop_assert_eq!(&decoded, &set);
+                    }
+                }
+
+                let total: usize = model.values().map(|entry| entry.all().count()).sum();
+                prop_assert_eq!(set.len(), total);
+                prop_assert_eq!(set.is_empty(), model.is_empty());
+                for (index, root) in roots.iter().enumerate() {
+                    let entry = model.get(&index);
+                    prop_assert_eq!(set.is_root_disabled(root), entry.is_some_and(|entry| entry.disabled));
+                    let mut records = Vec::new();
+                    let mut conflicts = Vec::new();
+                    if let Some(entry) = entry {
+                        for spec in entry.records.values() {
+                            records.push(record(root, *spec)?);
+                        }
+                        for spec in &entry.conflicts {
+                            conflicts.push(record(root, *spec)?);
+                        }
+                    }
+                    conflicts.sort_by_key(|record| (record.body().sequence(), record.body().encode()));
+                    prop_assert!(set.records_for(root).eq(records.iter()));
+                    prop_assert!(set.conflicting_records_for(root).eq(conflicts.iter()));
+                    for device in 0..2u8 {
+                        let device_key = key(100 + device)?;
+                        for serial in 1..6u64 {
+                            let expected = entry.is_some_and(|entry| {
+                                entry.all().any(|spec| spec.device == device && spec.through >= serial)
+                            });
+                            prop_assert_eq!(
+                                set.is_revoked(root, &device_key, nz(serial).map_err(fail)?),
+                                expected
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
