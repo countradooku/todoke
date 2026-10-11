@@ -72,10 +72,7 @@ any target. CI passes `-D unmatched-skip`, and `unused-ignored-advisory = "deny"
 is already set, so each exception must be deleted once upstream no longer needs it.
 
 No blanket vet exemption or dependency source patch was added: `cargo vet --locked`
-still fails until actual audit evidence exists. The shared `deny.toml` is also used
-for the future fuzz workspace, whose graph will not contain these dev-only crates;
-its unused advisory ignore would then fail, so introducing that workspace requires
-a decision on a separate fuzz policy file. The generator takes
+still fails until actual audit evidence exists. The generator takes
 only public fixed fixtures and is not a production secret-handling approval.
 
 The [O1 decision](../spec/decisions/O1-HYBRID-NOISE.md) cites a real independent
@@ -84,3 +81,47 @@ That is not a cargo-vet audit of the current resolved packages, this adapter, or
 the whole dependency graph. No audit-store entries or exemptions were fabricated.
 Snow's raw Split export and the KEM resolver compatibility slot are confined to
 the public-fixture example; production integration and zeroization remain open.
+
+## Identity runtime dependency status
+
+The identity work (PROTOCOL §1–§2) makes these pinned crates **runtime**
+dependencies of `todoke-crypto`: `ed25519-dalek 3.0.0` and `curve25519-dalek 5.0.0`
+(§1 strict verification and canonical point check), `libcrux-ed25519 0.0.10`
+(signing), `libcrux-ml-kem 0.0.11` (FIPS 203 input check of the retained
+`kem_static`), `libcrux-chacha20poly1305 0.0.10` (sealing local secret state),
+`blake3 1.8.7`, `zeroize 1.9.1`, and `getrandom 0.4.3`, the last with `wasm_js`
+on `wasm32-unknown-unknown` only. Pins shared with `todoke-proto` moved to
+`[workspace.dependencies]`, as cargo-deny's `workspace-duplicate` rule requires.
+`proptest 1.11.0` is a new development dependency of both crates. 1.12 would
+avoid duplicate rand versions, but it requires Rust 1.88, above the 1.85 MSRV.
+
+The maintainer approved re-scoping the dev-only guard on 2026-10-11. The policy
+changes are:
+
+- `scripts/ci/deny-exceptions-dev-only.sh` resolves the graph per supported
+  target triple instead of `--target all`. hax-lib 0.3.7, core-models,
+  proc-macro-error2, crabgrind, bindgen, and shlex 1.3.0 reach runtime libcrux
+  crates only through `cfg(hax)` / `cfg(valgrind_ct_test)` edges, which no todoke
+  build sets. They still fail the guard if any real target compiles them.
+- `syn 2.0.119` has an explicit build-time-only allowance. It is compiled for
+  `curve25519-dalek-derive`, the proc macro of dalek's x86_64 SIMD backend. The
+  guard fails if it is linked into any target artifact.
+- Exact-version license exceptions: BSD-3-Clause for `ed25519-dalek`,
+  `curve25519-dalek`, and `subtle`; Unicode-3.0 for `unicode-ident` (build
+  time); BSD-3-Clause / ISC for never-compiled `bindgen` / `libloading`; NCSA for
+  the fuzz-only `libfuzzer-sys`. cargo-deny's license check ignores
+  dev-dependencies, so dalek's license was not checked while it was dev-only.
+- New dev-only duplicate skips for proptest's `rand 0.9.5`, `rand_core 0.9.5`,
+  `getrandom 0.3.4`, and `r-efi 5.3.0`.
+
+The fuzz workspace (`fuzz/`) uses the root `deny.toml`. Its graph includes the
+runtime libcrux crates, so the advisory ignore stays matched and no separate
+policy file is needed. Its lock was seeded from the root lock and adds only
+`libfuzzer-sys 0.4.13`, `arbitrary 1.5.0`, and `jobserver 0.1.35`.
+
+On 2026-10-11, `cargo deny --locked check -D unmatched-skip`, the guard script,
+and the fuzz-workspace deny check passed. `cargo vet --locked` reports 128
+unvetted packages at the root, now including `safe-to-deploy` requirements for
+the runtime crates above, and fails in the same way for `fuzz/`. No audits or
+exemptions were recorded. Reference-fixture use and passing tests are not a
+review of these crates for production secrets (O6).

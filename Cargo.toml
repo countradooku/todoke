@@ -11,10 +11,27 @@ license = "Apache-2.0 OR MIT"
 repository = "https://github.com/countradooku/todoke"
 publish = false
 
+# Pins shared by more than one workspace crate (cargo-deny workspace-duplicate).
+# Fixture use is not production approval: zeroization and audit evidence are open (O6).
+[workspace.dependencies]
+blake3 = { version = "=1.8.7", features = ["zeroize"] }
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+hex = "=0.4.3"
+libcrux-chacha20poly1305 = "=0.0.10"
+libcrux-ed25519 = "=0.0.10"
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+# Property tests only. 1.12 requires Rust 1.88, above the 1.85 MSRV.
+proptest = { version = "=1.11.0", default-features = false, features = ["std"] }
+serde_json = "=1.0.152"
+zeroize = "=1.9.1"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
+# cargo-fuzz builds every crate with `--cfg fuzzing`; harness entry points use it.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

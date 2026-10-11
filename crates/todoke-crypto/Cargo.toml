@@ -10,3 +10,27 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+# Versions are the reviewed vector-tool pins (workspace dependencies). Fixture use
+# is not production approval: zeroization and cargo-vet evidence remain open (O6).
+[dependencies]
+todoke-proto = { path = "../todoke-proto", version = "0.1.0" }
+blake3.workspace = true
+# Canonical Ed25519 point-encoding check required alongside strict dalek verification (§1).
+curve25519-dalek = "=5.0.0"
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+libcrux-chacha20poly1305.workspace = true
+libcrux-ed25519.workspace = true
+libcrux-ml-kem.workspace = true
+zeroize.workspace = true
+
+# Browsers expose their CSPRNG only through Web Crypto; getrandom 0.4 has no
+# default backend on wasm32-unknown-unknown.
+[target.'cfg(all(target_family = "wasm", any(target_os = "unknown", target_os = "none")))'.dependencies]
+getrandom = { workspace = true, features = ["wasm_js"] }
+
+[dev-dependencies]
+hex.workspace = true
+proptest.workspace = true
+serde_json.workspace = true

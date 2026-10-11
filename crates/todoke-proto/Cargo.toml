@@ -19,22 +19,24 @@ test = true
 name = "generate_handshake_vectors"
 test = true
 
-# Reference implementations for the offline, public-fixture generator only.
+# Reference implementations for the offline, public-fixture generator, plus
+# property tests for the runtime codecs.
 [dev-dependencies]
+proptest.workspace = true
 base45 = "=3.2.0"
-blake3 = { version = "=1.8.7", features = ["traits-preview", "zeroize"] }
-ed25519-dalek = "=3.0.0"
-hex = "=0.4.3"
+blake3 = { workspace = true, features = ["traits-preview"] }
+ed25519-dalek.workspace = true
+hex.workspace = true
 hmac = { version = "=0.13.0", features = ["zeroize"] }
 libcrux-curve25519 = "=0.0.9"
-libcrux-chacha20poly1305 = "=0.0.10"
-libcrux-ed25519 = "=0.0.10"
+libcrux-chacha20poly1305.workspace = true
+libcrux-ed25519.workspace = true
 libcrux-hkdf = "=0.0.9"
-libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+libcrux-ml-kem.workspace = true
 libcrux-secrets = "=0.0.7"
 libcrux-sha2 = "=0.0.9"
 rand_core = "=0.6.4"
-serde_json = "=1.0.152"
+serde_json.workspace = true
 # Offline public-fixture engine only; never enable raw key export in runtime crates.
 snow = { version = "=0.9.6", default-features = false, features = ["hfs", "risky-raw-split"] }
-zeroize = "=1.9.1"
+zeroize.workspace = true
