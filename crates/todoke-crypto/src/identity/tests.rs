@@ -513,6 +513,66 @@ fn duplicate_conflict_and_out_of_order_records() -> TestResult {
     Ok(())
 }
 
+/// §2: records are irrevocable and retained; a conflict needs local
+/// resolution, so both signed records must survive as evidence.
+#[test]
+fn conflicting_records_are_retained_as_evidence() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let root = enrolled.store.public_key(&enrolled.root)?;
+    let device = enrolled.store.public_key(&enrolled.device)?;
+    let first = revoke(&enrolled, 5, 1)?;
+    let conflicting = revoke(&enrolled, 5, 9)?;
+    let third = revoke(&enrolled, 5, 3)?;
+    let mut set = RevocationSet::new();
+    assert_eq!(set.apply(first.clone()), ApplyOutcome::Added);
+    assert_eq!(set.apply(conflicting.clone()), ApplyOutcome::Conflict);
+    assert_eq!(set.len(), 2);
+    assert_eq!(set.records_for(&root).collect::<Vec<_>>(), [first.record()]);
+    assert_eq!(
+        set.conflicting_records_for(&root).collect::<Vec<_>>(),
+        [conflicting.record()]
+    );
+    // Receiving retained evidence again is idempotent.
+    assert_eq!(set.apply(conflicting.clone()), ApplyOutcome::Duplicate);
+    assert_eq!(set.len(), 2);
+    // Further distinct records for the same sequence are kept too.
+    assert_eq!(set.apply(third.clone()), ApplyOutcome::Conflict);
+    assert_eq!(set.len(), 3);
+    let mut evidence: Vec<_> = set.conflicting_records_for(&root).cloned().collect();
+    evidence.sort_by_key(todoke_proto::identity::Revoke::encode);
+    let mut expected = vec![conflicting.record().clone(), third.record().clone()];
+    expected.sort_by_key(todoke_proto::identity::Revoke::encode);
+    assert_eq!(evidence, expected);
+    assert!(set.is_root_disabled(&root));
+    // Every root-signed record is honoured (fail closed).
+    assert!(set.is_revoked(&root, &device, nz(9)?));
+    assert!(set.conflicting_records_for(&device).next().is_none());
+    Ok(())
+}
+
+/// Conflict evidence counts toward the per-root quota; when the quota is
+/// full the root is still disabled but the extra record is not retained.
+#[test]
+fn conflict_evidence_is_bounded_by_quota() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let root = enrolled.store.public_key(&enrolled.root)?;
+    let mut set = RevocationSet::new();
+    let quota = super::MAX_RECORDS_PER_ROOT as u64;
+    for sequence in 1..quota {
+        assert_eq!(
+            set.apply(revoke(&enrolled, sequence, 1)?),
+            ApplyOutcome::Added
+        );
+    }
+    assert_eq!(set.apply(revoke(&enrolled, 1, 2)?), ApplyOutcome::Conflict);
+    assert_eq!(set.len(), super::MAX_RECORDS_PER_ROOT);
+    assert_eq!(set.apply(revoke(&enrolled, 1, 3)?), ApplyOutcome::Conflict);
+    assert_eq!(set.len(), super::MAX_RECORDS_PER_ROOT);
+    assert_eq!(set.conflicting_records_for(&root).count(), 1);
+    assert!(set.is_root_disabled(&root));
+    Ok(())
+}
+
 #[test]
 fn revocation_quota_disables_root() -> TestResult {
     let enrolled = Enrolled::new()?;

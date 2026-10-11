@@ -34,12 +34,14 @@ const MAX_BLOB_LEN: usize = 6
     + 4
     + MAX_CONTACTS * (CONTACT_FIXED_LEN + MAX_HISTORY * HISTORY_LEN)
     + 4
-    + super::revocation::MAX_ROOTS * (32 + 1 + 2)
+    + super::revocation::MAX_ROOTS * (32 + 1 + 2 + 2)
     + super::revocation::MAX_TOTAL_RECORDS * todoke_proto::identity::REVOKE_LEN;
 
+/// Version 2 added retained conflicting revocation records to the revocation
+/// set layout. Version 1 blobs are rejected; that format never shipped.
 const ENVELOPE: Envelope = Envelope {
     magic: *b"TDKC",
-    version: 1,
+    version: 2,
     context: b"todoke/local/contacts\0",
 };
 const KEYSET_DOMAIN: &[u8] = b"todoke/local/keyset\0";
@@ -869,7 +871,7 @@ fn map_format(error: LocalFormatError) -> ContactError {
     }
 }
 
-/// Local format v1 plaintext:
+/// Local format v2 plaintext:
 /// `count:u32 || count × contact || revocation set`, contacts in strictly
 /// increasing device-key order. See [`CONTACT_FIXED_LEN`] and
 /// [`HISTORY_LEN`] for the record layouts.
@@ -1317,6 +1319,91 @@ mod tests {
     }
 
     #[test]
+    fn conflicting_revocations_persist_as_evidence() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let root = enrolled.store.public_key(&enrolled.root)?;
+        let first = revoke_through(&enrolled, 1, 1)?;
+        let conflicting = revoke_through(&enrolled, 1, 2)?;
+        assert_eq!(store.apply_revocation(first.clone())?, ApplyOutcome::Added);
+        assert_eq!(
+            store.apply_revocation(conflicting.clone())?,
+            ApplyOutcome::Conflict
+        );
+        assert_eq!(
+            store.availability(&key)?.err(),
+            Some(Unavailable::RootDisabled)
+        );
+        let reopened = reopen(&store)?;
+        assert_eq!(reopened.revocations(), store.revocations());
+        assert_eq!(
+            reopened
+                .revocations()
+                .records_for(&root)
+                .collect::<Vec<_>>(),
+            [&first]
+        );
+        assert_eq!(
+            reopened
+                .revocations()
+                .conflicting_records_for(&root)
+                .collect::<Vec<_>>(),
+            [&conflicting]
+        );
+        assert_eq!(
+            reopened.availability(&key)?.err(),
+            Some(Unavailable::RootDisabled)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn decode_rejects_malformed_conflict_evidence() -> TestResult {
+        let (enrolled, _) = paired()?;
+        let root = enrolled.store.public_key(&enrolled.root)?;
+        let one = revoke_through(&enrolled, 1, 1)?;
+        let two = revoke_through(&enrolled, 2, 1)?;
+        let mut evidence = [
+            revoke_through(&enrolled, 1, 2)?,
+            revoke_through(&enrolled, 1, 3)?,
+        ];
+        evidence.sort_by_key(|record| record.body().encode());
+        let [low, high] = evidence;
+        let records = [one.clone(), two];
+        assert!(
+            decode_set(&set_bytes(
+                &root,
+                true,
+                &records,
+                &[low.clone(), high.clone()]
+            ))
+            .is_some()
+        );
+        // Conflicts require the disabled flag.
+        assert!(
+            decode_set(&set_bytes(
+                &root,
+                false,
+                &records,
+                core::slice::from_ref(&low)
+            ))
+            .is_none()
+        );
+        // A conflict must match a retained sequence with a different body.
+        let orphan = revoke_through(&enrolled, 3, 1)?;
+        assert!(decode_set(&set_bytes(&root, true, &records, &[orphan])).is_none());
+        assert!(decode_set(&set_bytes(&root, true, &records, &[one])).is_none());
+        // Strictly increasing, so no duplicates or reordering.
+        assert!(decode_set(&set_bytes(&root, true, &records, &[high, low.clone()])).is_none());
+        assert!(decode_set(&set_bytes(&root, true, &records, &[low.clone(), low])).is_none());
+        // Another root's record is not evidence for this one.
+        let stranger = Enrolled::new()?;
+        let foreign = revoke_through(&stranger, 1, 2)?;
+        assert!(decode_set(&set_bytes(&root, true, &records, &[foreign])).is_none());
+        Ok(())
+    }
+
+    #[test]
     fn persistence_round_trip_and_tamper_detection() -> TestResult {
         let (enrolled, mut store) = paired()?;
         let key = device(&enrolled)?;
@@ -1458,29 +1545,47 @@ mod tests {
         #[test]
         fn plaintext_round_trips(
             contacts in proptest::collection::vec(arb_contact(), 0..6),
-            revoked in proptest::collection::vec((any::<[u8; 16]>(), 1..=u64::MAX, any::<[u8; 64]>()), 0..4),
+            revoked in proptest::collection::vec((any::<[u8; 16]>(), 1..=u64::MAX, any::<[u8; 64]>(), any::<bool>()), 0..4),
         ) {
             let mut map = BTreeMap::new();
             for contact in contacts {
                 map.insert(contact.pinned.device_public, contact);
             }
             // Attach structurally valid (unsigned) records to the first root.
+            // Optionally add a conflicting record (same sequence, different
+            // body) for each, which disables the root.
             let mut revocations = RevocationSet::new();
             if let Some(first) = map.values().next() {
                 let root = first.pinned.person_root;
                 let device = first.pinned.device_public;
-                for (index, (id, through, signature)) in revoked.iter().enumerate() {
-                    let id = if *id == [0; 16] { [1; 16] } else { *id };
-                    let sequence = NonZeroU64::new(u64::try_from(index).unwrap_or(0) + 1)
-                        .ok_or_else(|| TestCaseError::fail("sequence"))?;
+                let record = |id: [u8; 16], sequence: NonZeroU64, through: u64, signature: [u8; 64]| {
                     let body = RevokeBody::new(
                         *root.as_bytes(), id, sequence,
                         UnixTime::new(T0).ok_or_else(|| TestCaseError::fail("time"))?,
                         *device.as_bytes(),
-                        NonZeroU64::new(*through).ok_or_else(|| TestCaseError::fail("through"))?,
+                        NonZeroU64::new(through).ok_or_else(|| TestCaseError::fail("through"))?,
                         RevocationReason::Retired,
                     ).map_err(|_| TestCaseError::fail("body"))?;
-                    revocations = insert_unverified(revocations, Revoke::from_parts(body, *signature));
+                    Ok::<_, TestCaseError>(Revoke::from_parts(body, signature))
+                };
+                let mut records = Vec::new();
+                let mut conflicts = Vec::new();
+                for (index, (id, through, signature, conflict)) in revoked.iter().enumerate() {
+                    let id = if *id == [0; 16] { [1; 16] } else { *id };
+                    let sequence = NonZeroU64::new(u64::try_from(index).unwrap_or(0) + 1)
+                        .ok_or_else(|| TestCaseError::fail("sequence"))?;
+                    records.push(record(id, sequence, *through, *signature)?);
+                    if *conflict {
+                        let mut other = id;
+                        other[0] ^= 0x80;
+                        conflicts.push(record(other, sequence, *through, *signature)?);
+                    }
+                }
+                if !records.is_empty() {
+                    revocations = unverified_set(&root, &records, &conflicts)
+                        .ok_or_else(|| TestCaseError::fail("set"))?;
+                    prop_assert_eq!(revocations.len(), records.len() + conflicts.len());
+                    prop_assert_eq!(revocations.is_root_disabled(&root), !conflicts.is_empty());
                 }
             }
             let encoded = encode(&map, &revocations);
@@ -1497,26 +1602,44 @@ mod tests {
         }
     }
 
-    /// Builds a set containing an unsigned record via the local format, the
+    /// Builds a one-root set of unsigned records via the local format, the
     /// same path persistence uses (decode does not re-verify signatures).
-    fn insert_unverified(set: RevocationSet, record: Revoke) -> RevocationSet {
-        let mut records: Vec<Revoke> = set
-            .roots()
-            .flat_map(|root| set.records_for(root).cloned().collect::<Vec<_>>())
-            .collect();
-        records.push(record);
-        let Some(first) = records.first() else {
-            return set;
-        };
+    /// `records` are in sequence order; `conflicts` (any order) disable the root.
+    fn unverified_set(
+        root: &Ed25519PublicKey,
+        records: &[Revoke],
+        conflicts: &[Revoke],
+    ) -> Option<RevocationSet> {
+        let mut conflicts = conflicts.to_vec();
+        conflicts.sort_by_key(|record| (record.body().sequence(), record.body().encode()));
+        decode_set(&set_bytes(root, !conflicts.is_empty(), records, &conflicts))
+    }
+
+    /// One-root revocation set bytes in the local format, as given.
+    fn set_bytes(
+        root: &Ed25519PublicKey,
+        disabled: bool,
+        records: &[Revoke],
+        conflicts: &[Revoke],
+    ) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&1u32.to_be_bytes());
-        bytes.extend_from_slice(first.body().person_root());
-        bytes.push(0);
-        bytes.extend_from_slice(&u16::try_from(records.len()).unwrap_or(0).to_be_bytes());
-        for record in &records {
-            bytes.extend_from_slice(&record.encode());
+        bytes.extend_from_slice(root.as_bytes());
+        bytes.push(u8::from(disabled));
+        for list in [records, conflicts] {
+            bytes.extend_from_slice(&u16::try_from(list.len()).unwrap_or(u16::MAX).to_be_bytes());
+            for record in list {
+                bytes.extend_from_slice(&record.encode());
+            }
         }
-        RevocationSet::decode(&mut Reader::new(&bytes)).unwrap_or(set)
+        bytes
+    }
+
+    fn decode_set(bytes: &[u8]) -> Option<RevocationSet> {
+        let mut reader = Reader::new(bytes);
+        let set = RevocationSet::decode(&mut reader).ok()?;
+        reader.finish().ok()?;
+        Some(set)
     }
 
     #[derive(Clone, Copy, Debug)]
