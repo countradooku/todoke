@@ -2,12 +2,12 @@
 
 **Status: normative draft, not a deployable protocol.** This document replaces the
 requirements baseline and is the source of truth for v1 wire encodings, fixtures,
-and subsequent implementations. The hybrid Noise suite is reserved but **disabled**:
-its exact construction is an unresolved release blocker (§16). No implementation
-MAY claim interoperable or secure todoke v1 sessions until that blocker is resolved
-here with reviewed handshake vectors. In particular, an implementation MUST NOT
-substitute ordinary classical Noise. The standalone encodings specified here can
-be implemented and tested independently of that gate.
+and subsequent implementations. Suite 0x0001 now has an exact hybrid HFS+PSK
+construction (§4.2), based on independently reviewed Snow source. Its new ML-KEM
+backend and todoke integration are not covered by that audit. Production sessions
+remain **disabled** pending the applicable implementation, secret-lifecycle, and
+interoperability gates in §16. An implementation MUST NOT substitute ordinary
+classical Noise. Fixtures establish deterministic encodings, not production readiness.
 
 The architectural requirements in [DESIGN.md](../docs/DESIGN.md) apply. Rust owns
 protocol, cryptography, file handling, and consent; SwiftUI, Jetpack Compose, and
@@ -23,7 +23,7 @@ RECOMMENDED, NOT RECOMMENDED, MAY, and OPTIONAL are interpreted as in
 
 A byte is an octet. `u8`, `u16`, `u32`, and `u64` are unsigned integers of exactly
 1, 2, 4, and 8 bytes. Integers are **big-endian**, except the explicitly identified
-Bao length. `x[n]` is exactly n bytes; `||` is concatenation; `[..n]` means the
+Bao length and Noise AEAD nonce counter. `x[n]` is exactly n bytes; `||` is concatenation; `[..n]` means the
 first n bytes. Strings in cryptographic formulas are ASCII bytes without quotes.
 `\0` means one zero byte, not two printable characters. No implicit padding,
 terminator, alignment, variable integer, JSON, CBOR, or platform-native encoding
@@ -67,6 +67,13 @@ independent Ed25519 root public key; `person_id = B3(person_root)[..16]`. Root
 secrets SHOULD remain offline except for issuing device bindings and revocations.
 Device private keys MUST NOT be shared between devices.
 
+The existing `kem_static` credential is retained in v1 bindings and QR encodings
+for a future assigned PQ-identity profile. Suite 0x0001 MUST NOT use it as the HFS
+ephemeral key, encapsulate to it, or claim proof of its decapsulation-key possession.
+Its signatures and pairing pin authenticate the public credential only. HFS uses
+a separately generated, single-session ML-KEM key (§4.2); no static-KEM token is
+introduced. Whether to remove this unused credential before v1 release is O11.
+
 A person certifies a device with the following `DeviceBinding`. Both signatures
 are mandatory, including for a person's first device. Possession of another device
 under the same root does not inherit that device's pairings or file consent.
@@ -77,7 +84,7 @@ under the same root does not inherit that device's pairings or file consent.
 | person_root | 32 | Valid Ed25519 public key |
 | device_public | 32 | Valid device Ed25519 public key |
 | noise_static | 32 | Valid independently generated X25519 public key |
-| kem_static | 1184 | FIPS 203 ML-KEM-768 encapsulation key |
+| kem_static | 1184 | Valid FIPS 203 ML-KEM-768 public credential; unused by HFS |
 | serial | 8 | u64, 1..2^64-1, unique and increasing for this root/device |
 | not_before | 8 | Unix time |
 | not_after | 8 | Unix time; > not_before, lifetime <= 366 days |
@@ -133,12 +140,12 @@ requires a reviewed core/platform interface that preserves this boundary (§16).
 | ---: | --- | ---: | --- |
 | 0 | magic | 4 | ASCII `TDKQ` |
 | 4 | version | 2 | u16 = 1 |
-| 6 | hybrid_suite | 2 | u16 = 0x0001, reserved/disabled pending §16 |
+| 6 | hybrid_suite | 2 | u16 = 0x0001, assigned in §4.2; production gated by §16 |
 | 8 | pairing_id | 16 | Random, one-time |
 | 24 | expires_at | 8 | Unix time; no more than 300 seconds after creation |
 | 32 | device_public | 32 | Responder Ed25519 public key |
 | 64 | noise_static | 32 | Responder X25519 public key |
-| 96 | kem_static | 1184 | Responder ML-KEM-768 encapsulation key |
+| 96 | kem_static | 1184 | Responder ML-KEM-768 public credential; not the HFS key |
 | 1280 | one_time_psk | 32 | Uniform random bytes |
 
 Total: 1312 bytes. QR text is exactly `TODOKE:` followed by
@@ -257,7 +264,7 @@ unframed bytes. This is not the encrypted transport envelope of §5.
 | 0x02 | ServerHello | 66 bytes, table below |
 | 0x03 | CodeShareA | 49 bytes, §3.2 |
 | 0x04 | CodeShareB | 49 bytes, §3.2 |
-| 0x05 | NoiseHandshake | table below; exact inner profile blocked |
+| 0x05 | NoiseHandshake | table below and exact inner layouts in §4.2 |
 | 0x06 / 0x07 | CodeOfferRequest / CodeOffer | 10 / 34 bytes, §3.2, only before code Hellos |
 | 0x00, 0x08..0xff | Reserved | MUST reject/close, no fallback |
 
@@ -267,7 +274,7 @@ ClientHello and ServerHello each have this layout:
 | --- | ---: | --- |
 | magic | 4 | ASCII `TDKE` |
 | version | 2 | 1; exact equality, no version list |
-| hybrid_suite | 2 | 0x0001; disabled until profile ratification |
+| hybrid_suite | 2 | 0x0001; assigned profile, production gates in §16 |
 | mode | 1 | 1 QR/IKpsk2, 2 code/XXpsk3, 3 contact/KKpsk2 |
 | flags | 1 | 0 |
 | generation | 8 | u64; 0 for new pairing, persisted generation for contact |
@@ -285,15 +292,15 @@ previous-PSK trials, suite fallback, or deletion of a contact.
 
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
-| message_index | 1 | 1..16; strictly increasing, starts at 1 |
-| token_bytes | remaining | 1..8190; opaque only until the profile in §16 is assigned |
+| message_index | 1 | IK/KK: 1..2; XX: 1..3; strictly increasing, starts at 1 |
+| token_bytes | remaining | Exactly the per-pattern/message size in §4.2; 64..1296 bytes |
 
-The envelope is fully assigned; **the inner hybrid handshake byte layout is not**.
-This is an explicit blocking exception to the otherwise complete message layouts,
-not permission to choose token encodings in code. There are no valid live
-NoiseHandshake messages for suite 0x0001 in this revision.
+The kind and message index are framing, not Noise payload. Receivers MUST enforce
+the expected pattern, sender role, index, and exact length before handing the
+inner bytes to Noise. No retransmission, extra handshake payload, trailing bytes,
+or transport bytes embedded inside this record are permitted.
 
-### 4.2 Required Noise profiles and hybrid gate
+### 4.2 Suite 0x0001: reviewed HFS+PSK construction
 
 | Case | Required logical pattern | Prior authenticated material |
 | --- | --- | --- |
@@ -301,26 +308,207 @@ NoiseHandshake messages for suite 0x0001 in this revision.
 | Code | XXpsk3 | CPace supplies PSK; no pretrusted peer static key |
 | Existing contact | KKpsk2 | Both pin full static keys and the same current pair PSK/generation |
 
-The [Noise specification, revision 34](https://noiseprotocol.org/noise.html)
-defines the classical patterns and psk modifiers, not their hybrid KEM extension.
-ML-KEM-768 uses encapsulation key 1184 bytes, ciphertext 1088 bytes, shared secret
-32 bytes, and decapsulation key 2400 bytes
-([FIPS 203](https://csrc.nist.gov/pubs/fips/203/final)). Secrets never appear on the wire.
+#### 4.2.1 Construction and review provenance
 
-The eventual suite MUST combine independently generated X25519 and ML-KEM-768,
-retain the designated PSK placement, and bind every transmitted key, KEM ciphertext,
-role, pattern, version, and suite into the authenticated transcript. It MUST specify
-PQNoise-style KEM send/encapsulate/decapsulate tokens, their complete order, MixHash /
-MixKey operations, full protocol name, hash, AEAD, payload placement, failure
-behavior, and all message sizes. A hybrid combiner MUST be supported by a reviewed
-construction; concatenating outputs ad hoc or inserting extra Noise payload bytes
-is forbidden. [PQNoise](https://eprint.iacr.org/2022/539) does not by itself assign
-these todoke profiles or prove a newly invented composition.
+V1 instantiates the existing generic HFS+PSK construction implemented by
+[Snow commit 009411d2035a77ece57b0a6873169de7693a0aa0](https://github.com/mcginty/snow/tree/009411d2035a77ece57b0a6873169de7693a0aa0),
+the revision identified in the [Trail of Bits security review, 2024-03-29](https://github.com/trailofbits/publications/blob/master/reviews/2024-03-agilebits-snow-securityreview.pdf).
+The audit includes manual source/specification review. It does not claim dedicated
+testing of these three HFS+PSK cases, nor review of ML-KEM-768 or todoke integration.
+This is reuse of an existing reviewed state machine with a standardized KEM
+instantiation, **not a claim of a new todoke audit or formal security proof**.
+
+The [O1 decision and evidence](decisions/O1-HYBRID-NOISE.md) pin the construction
+and audit boundaries. The source's HFS insertion rule resolves the contradictory
+KKhfs table in [HFS draft revision 1](https://github.com/noiseprotocol/noise_hfs_spec/blob/025f0f60cb3b94ad75b68e3a4158b9aac234f8cb/noise_hfs.md):
+use `e, es, e1, ss`, as in Snow, not that draft table's `e, e1, es, ss`.
+Implementations MUST follow the exact schedules below; the draft is not an
+alternative wire profile. PQNoise research supplies useful analysis of other KEM
+transformations but is not asserted to prove this todoke profile.
+
+#### 4.2.2 Algorithms and names
+
+The classical state-machine operations are those of
+[Noise revision 34](https://noiseprotocol.org/noise.html), with the HFS operations
+below. The KEM is **FIPS 203 ML-KEM-768**, not Kyber round 3, ML-KEM-512/1024, or
+X-Wing. Hash is SHA-256; transport and handshake cipher are Noise ChaChaPoly
+(ChaCha20-Poly1305, 32-byte key, 16-byte tag). Content encryption remains §8.
+
+| Case | Exact ASCII protocol name, no NUL |
+| --- | --- |
+| QR | `Noise_IKpsk2+hfs_25519+MLKEM768_ChaChaPoly_SHA256` |
+| Contacts | `Noise_KKpsk2+hfs_25519+MLKEM768_ChaChaPoly_SHA256` |
+| Code | `Noise_XXpsk3+hfs_25519+MLKEM768_ChaChaPoly_SHA256` |
+
+Names are transcript inputs, not transmitted fields or negotiation strings.
+Equivalent-looking spellings, modifier reorderings, hash/cipher substitutions,
+and alternate KEM identifiers MUST be rejected as different protocols. Initialize
+`h = SHA256(protocol_name)` (each name exceeds 32 bytes), `ck = h`, and an empty
+CipherState, then MixHash(prologue), then the pre-messages in the order below.
+
+| Primitive value | Exact bytes | Encoding / lifetime |
+| --- | ---: | --- |
+| X25519 public key | 32 | RFC 7748 u-coordinate; static or fresh session ephemeral as scheduled |
+| X25519 secret input / DH result | 32 / 32 | Library-managed secret; never transmitted; all-zero result MUST fail |
+| ML-KEM encapsulation key `e1` | 1184 | FIPS 203 public-key encoding and input validation |
+| ML-KEM ciphertext `ekem1` | 1088 | FIPS 203 ciphertext encoding |
+| ML-KEM shared secret | 32 | Secret; only input to MixKey |
+| ML-KEM decapsulation key | 2400 | Secret; single session; never transmitted |
+| PSK | 32 | QR, CPace result, or contact generation, exactly one per handshake |
+| `h`, `ck`, split keys | 32 each | `h` is public; chaining/traffic keys are secrets |
+
+The initiator MUST generate fresh independent X25519 ephemeral material and a
+fresh ML-KEM-768 ephemeral key pair for each attempt. The responder MUST generate
+fresh independent X25519 ephemeral material and encapsulation randomness for each
+attempt. Follow FIPS 203 KeyGen's independent 32-byte `d` and `z` and Encaps's
+32-byte `m`, supplied by a CSPRNG through the reference library. No seed derivation
+from the PSK, device key, session nonce, or peer input is permitted. No ephemeral
+key or encapsulation randomness MAY be reused after failure, retry, or transport
+change. Erase ephemeral secrets and intermediate DH/KEM results after use.
+
+#### 4.2.3 Transcript operations
+
+`MixHash(x)`, `MixKey(x)`, `MixKeyAndHash(x)`, `EncryptAndHash(x)`,
+`DecryptAndHash(x)`, and `Split()` MUST have the Noise revision 34 semantics.
+Noise's HKDF uses HMAC-SHA-256 with empty info, the current `ck` as salt, and the
+specified input as IKM; it is distinct from the labeled application KDFs elsewhere
+in this document. Each MixKey or MixKeyAndHash installs the derived cipher key and
+resets its nonce to zero. A keyed CipherState uses nonce
+`0x00000000 || LE64(counter)`. Handshake EncryptAndHash/DecryptAndHash uses AAD
+equal to `h` immediately before encryption; the ciphertext including its tag is
+then hashed. Transport AAD is empty (§5). A message is not authenticated
+merely because its public-data-derived key can produce a tag.
+
+| Token / step | Sender and receiver operations, in exact order | Wire bytes |
+| --- | --- | ---: |
+| Pre-message `s` | MixHash(the indicated full X25519 static public key), initiator pre-message before responder pre-message | 0 |
+| `e` | Send/read X25519 ephemeral public key; MixHash(key), then MixKey(key) because every v1 pattern has a PSK modifier | 32 |
+| `s` | EncryptAndHash / DecryptAndHash(sender's X25519 static public key) | 48 in all scheduled v1 positions |
+| `ee` | MixKey(X25519(initiator ephemeral, responder ephemeral)) | 0 |
+| `es` | MixKey(X25519(initiator ephemeral, responder static)) | 0 |
+| `se` | MixKey(X25519(initiator static, responder ephemeral)) | 0 |
+| `ss` | MixKey(X25519(initiator static, responder static)) | 0 |
+| `e1` | Initiator generates fresh ML-KEM key pair; EncryptAndHash(1184-byte encapsulation key). Responder DecryptAndHash, then validates the public key | 1200 |
+| `ekem1` | Responder Encaps(peer `e1`), then EncryptAndHash(1088-byte KEM ciphertext), then MixKey(32-byte shared secret). Initiator DecryptAndHash **before** Decaps, then MixKey(decapsulated secret) | 1104 |
+| `psk` | MixKeyAndHash(32-byte PSK), at the specified message end | 0 |
+| Payload | EncryptAndHash / DecryptAndHash(empty string), after all tokens in **every** message | 16 |
+| Split | Noise HKDF(ck, empty, 2); output 1 initiator-to-responder, output 2 responder-to-initiator; both transport counters start at 0 | 0 |
+
+The hybrid combination is the scheduled sequential Noise MixKey operations, with
+`ee` immediately followed by the AEAD-protected KEM ciphertext and its MixKey. No
+secret concatenation, alternate combiner, SEEC transform, extra KEM, or static-KEM
+token MAY be added. V1 does not claim resilience to exposed/bias-controlled
+ephemeral randomness. The PSK `e` rule applies even before reaching the `psk` token;
+omitting it changes both the transcript and the wire sizes.
+
+#### 4.2.4 Exact schedules
+
+`->` is initiator to responder, `<-` is responder to initiator. The dashed line
+separates pre-messages (known keys, no wire bytes) from actual handshake messages.
+Every message below additionally ends with the empty encrypted payload.
+
+```text
+IKpsk2+hfs:
+  <- s
+  ...
+  -> e, es, e1, s, ss
+  <- e, ee, ekem1, se, psk
+
+KKpsk2+hfs:
+  -> s
+  <- s
+  ...
+  -> e, es, e1, ss
+  <- e, ee, ekem1, se, psk
+
+XXpsk3+hfs:
+  ...
+  -> e, e1
+  <- e, ee, ekem1, s, es
+  -> s, se, psk
+```
+
+#### 4.2.5 Inner byte layouts
+
+Offsets below begin at `token_bytes[0]`, excluding the prelude envelope and
+message index. Each `E(x)` contains ciphertext followed by its 16-byte tag. DH,
+PSK, and MixKey operations have no encoded bytes. Nonces are implicit counters,
+not additional fields. Payloads MUST be empty; application/identity data MUST wait
+for the post-Split Identity messages in §4.3.
+
+IK message 1 (`->`), **1296 bytes**:
+
+| Offset | Field | Bytes | Limit / semantics |
+| ---: | --- | ---: | --- |
+| 0 | `e_i` | 32 | Initiator X25519 ephemeral key |
+| 32 | `E(e1)` | 1200 | 1184-byte ML-KEM key + 16-byte tag, after `es` |
+| 1232 | `E(s_i)` | 48 | 32-byte static key + 16-byte tag |
+| 1280 | `E(empty)` | 16 | Empty payload tag, after `ss` |
+
+IK and KK message 2 (`<-`), **1152 bytes**:
+
+| Offset | Field | Bytes | Limit / semantics |
+| ---: | --- | ---: | --- |
+| 0 | `e_r` | 32 | Responder X25519 ephemeral key |
+| 32 | `E(ekem1)` | 1104 | 1088-byte KEM ciphertext + 16-byte tag, after `ee` |
+| 1136 | `E(empty)` | 16 | Empty payload tag, after KEM MixKey, `se`, and `psk` |
+
+KK message 1 and XX message 1 (`->`), **1248 bytes**:
+
+| Offset | Field | Bytes | Limit / semantics |
+| ---: | --- | ---: | --- |
+| 0 | `e_i` | 32 | Initiator X25519 ephemeral key |
+| 32 | `E(e1)` | 1200 | ML-KEM key + tag; KK after `es`, XX after MixKey(public `e_i`) |
+| 1232 | `E(empty)` | 16 | Empty payload tag; KK after `ss`, XX immediately after `e1` |
+
+XX message 2 (`<-`), **1200 bytes**:
+
+| Offset | Field | Bytes | Limit / semantics |
+| ---: | --- | ---: | --- |
+| 0 | `e_r` | 32 | Responder X25519 ephemeral key |
+| 32 | `E(ekem1)` | 1104 | KEM ciphertext + tag, after `ee` |
+| 1136 | `E(s_r)` | 48 | Responder static key + tag, after KEM MixKey |
+| 1184 | `E(empty)` | 16 | Empty payload tag, after `es` |
+
+XX message 3 (`->`), **64 bytes**:
+
+| Offset | Field | Bytes | Limit / semantics |
+| ---: | --- | ---: | --- |
+| 0 | `E(s_i)` | 48 | Initiator static key + tag, continuing the previous cipher state |
+| 48 | `E(empty)` | 16 | Empty payload tag, after `se` and `psk` |
+
+For cross-checking the reset rules, the AEAD counters for encrypted fields in
+table order MUST be: IK1 `0,1,0`; IK2/KK2 `0,0`; KK1 `0,0`; XX1 `0,1`;
+XX2 `0,0,0`; XX3 `1,0`. These counters belong to different keys where a MixKey
+intervenes; they are not transmitted and MUST NOT be replaced with one global
+handshake counter.
+
+For the complete prelude record, `length = 2 + inner_length` (kind + index +
+inner bytes); the wire record adds the two-byte length prefix. Thus IK record
+sizes are 1300/1156, KK 1252/1156, and XX 1252/1204/68 bytes. A receiver MUST
+reject any other size for that mode and index. In XX message 1 the AEAD key is
+derived only from public inputs: its tags give **no** peer authentication or
+confidentiality. No pre-Split payload is accepted for any pattern.
+
+#### 4.2.6 Transcript binding and failure
 
 Required prologue bytes are `"todoke/v1/noise-prologue\0" || pre_noise`, where QR
-and contact pre_noise consist of the two Hello bodies; code mode uses the complete
-pre_noise formula in §3.2, including public offer bodies. The final handshake hash `h` MUST be 32 bytes in the ratified
-suite. `session_id = B3("todoke/v1/session\0" || h)`.
+and contact `pre_noise` consist of ClientHello body followed by ServerHello body;
+code mode uses the complete §3.2 formula, including public offer bodies. There is
+no implicit domain terminator beyond the one shown. Envelope headers are excluded.
+The final handshake hash `h` is exactly 32 bytes.
+`session_id = B3("todoke/v1/session\0" || h)`.
+
+On invalid length, malformed ML-KEM public key, all-zero DH output, AEAD failure,
+unexpected state, or failure to match a pinned X25519 static key, implementations
+MUST close, erase the attempt's secrets, and send no transport traffic. ML-KEM
+decapsulation MUST use the library's constant-time implicit rejection; it MUST NOT
+expose a ciphertext-validity bit or substitute an explicit rejection oracle.
+An implicitly rejected ciphertext produces a different secret and the subsequent
+authenticated payload MUST fail. No secret-dependent fallback or retry is allowed.
+Peer-controlled failures MUST be reported as the generic authentication error
+where an error can safely be sent (§12), without distinguishing DH/KEM/PSK causes.
+An unconfirmed responder after IK/KK MUST wait for §4.3 before authorizing a peer.
 
 ### 4.3 Identity confirmation
 
@@ -337,8 +525,10 @@ is insufficient proof to the responder of initiator PSK possession.
 | signature | 64 | Sign(device, `todoke/v1/identity\0` \|\| h \|\| role:u8 \|\| B3(binding)) |
 
 Total: 1536 bytes. Role is 0 initiator or 1 responder and is reconstructed, not
-an additional wire field. Noise static keys MUST exactly match binding keys; QR
-pins MUST match; contacts MUST match stored full device/person/static keys.
+an additional wire field. The Noise X25519 static key MUST exactly match
+`binding.noise_static`; QR pins and stored full device/person/static credentials
+MUST match. The signed `kem_static` credential is compared as data; this check
+MUST NOT be described as a Noise static-KEM possession proof (§2).
 Revocation/expiry checks precede identity confirmation. Unknown identity changes
 MUST fail closed and require explicit local pairing. The core MUST NOT expose a
 peer as authenticated before both proofs and transcript checks succeed.
@@ -410,7 +600,9 @@ Each ordered byte pipe after Split carries:
 
 The prefix is untrusted and bounded before buffering. It is not additional Noise
 AAD; modification yields a framing or authentication failure, never a decoded
-partial message. Exactly one complete decrypted frame occupies a ciphertext.
+partial message. Noise transport MUST use empty AAD, the directional Split key,
+and nonce `0x00000000 || LE64(counter)`; it does not use `h` as transport AAD.
+Exactly one complete decrypted frame occupies a ciphertext.
 Maximum plaintext is 65519 bytes. No compression is defined. BLE/datagram adapters
 MUST reassemble a bounded, reliable, ordered stream or fail; their acknowledgments
 have no protocol authority. Multipath sharing of a CipherState is forbidden.
@@ -1275,12 +1467,16 @@ of a displayed code/QR, malicious recipients redistributing plaintext, guarantee
 erasure from flash/backups, global revocation availability, and anonymity/traffic
 analysis resistance. Root/device compromise must be addressed by revocation and
 explicit re-pairing; it is not automatically healed by the hash-based PSK ratchet.
-The hybrid encryption goal includes recorded-traffic confidentiality if the approved
-combiner retains at least one secure component, **but no such guarantee is claimed
-before §16 is resolved**. Ed25519 identity/receipt signatures and X25519 alone are
-not post-quantum authentication. A quantum attacker able to forge identity signatures
-is not defeated merely by adding a KEM to key establishment. Full post-quantum identity
-migration requires a future reviewed version.
+The HFS construction's intended quantum threat is an attacker recording traffic
+now and attacking classical key agreement later. It combines classical DH and a
+fresh ephemeral KEM via the specified Noise KDF, assuming honest independent
+randomness, secure KDF/AEAD, and correct erasure. It makes no randomness-exposure
+resilience claim and no claim that this new integration has been audited or is
+production-ready. Ed25519 signatures, X25519, and the selected CPace group do not
+provide post-quantum identity authentication against an active quantum attacker.
+An unknown high-entropy PSK supplies additional authentication protection, but
+adding HFS does not turn the identity system into a post-quantum signature system.
+Full PQ identity migration requires a future reviewed version.
 
 ### 14.2 Required defenses
 
@@ -1324,7 +1520,13 @@ migration requires a future reviewed version.
 `spec/test-vectors/*.json` and the deterministic generator
 [`generate_vectors.rs`](../crates/todoke-proto/examples/generate_vectors.rs) define
 public fixtures for QR, discovery HMAC, PSK ratchet, STREAM nonces, manifest hash,
-and signed Accept. Values are lowercase hex unless their schema says otherwise.
+and signed Accept. The separate
+[`generate_handshake_vectors.rs`](../crates/todoke-proto/examples/generate_handshake_vectors.rs)
+defines complete IKpsk2+hfs, KKpsk2+hfs, and XXpsk3+hfs **Noise-layer** reference
+transcripts for the construction in §4.2. The XX fixture uses an explicitly
+synthetic prologue and public PSK; it is not a valid §3.2/§4.2.6 code-session
+transcript and does not certify CPace-to-Noise integration. Values are lowercase
+hex unless their schema says otherwise.
 Fixture JSON is not a wire encoding. Fixtures containing suite 0x0001 do not enable
 that suite. The generator MUST use reference crates, fixed public seeds/times,
 canonical serialization, and no production secret input or random fixture drift.
@@ -1335,6 +1537,9 @@ Regenerate from repository root and check exact committed bytes:
 cargo run --locked -p todoke-proto --example generate_vectors
 cargo run --locked -p todoke-proto --example generate_vectors -- --check
 cargo test --locked -p todoke-proto --example generate_vectors
+cargo run --locked -p todoke-proto --example generate_handshake_vectors
+cargo run --locked -p todoke-proto --example generate_handshake_vectors -- --check
+cargo test --locked -p todoke-proto --example generate_handshake_vectors
 cargo fmt
 cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 cargo test
@@ -1369,7 +1574,7 @@ limits, and policies above are v1 design decisions; open gates do not weaken the
 
 | ID | Open question / required evidence | Consequence until resolved |
 | --- | --- | --- |
-| O1 | What exact reviewed hybrid X25519+ML-KEM-768 Noise construction realizes IKpsk2, XXpsk3, and KKpsk2? Pin token schedules, KEM key lifetimes, combiner, MixKey/MixHash order, protocol names, AEAD/hash choices, payload layouts, constant-time rejection, library support, and independent positive/negative full-handshake vectors. PQNoise is a design reference, not an assigned todoke profile. | Suite 0x0001 disabled; no live v1 sessions, no claim of complete handshake byte layouts or interoperable v1. |
+| O1 (resolved) | The exact HFS+PSK construction is pinned to independently reviewed Snow source, instantiated with ML-KEM-768 in §4.2, with schedules, operations, byte layouts, and reproducible handshake vectors. See the [decision and review limits](decisions/O1-HYBRID-NOISE.md). | Construction selection resolved. The new backend/application integration is not covered by that audit; production and independent interoperability gates remain O6/O10. No classical fallback. |
 | O2 | Does the pinned CPace draft/profile and the specified embedding have a reviewed production Rust implementation with matching context/ISK/confirmation vectors? If not, should a reviewed SPAKE2 profile replace it through a spec revision? | Code pairing disabled. No homemade PAKE or code-hash PSK. |
 | O3 | Can seamless ratchet recovery be proven without rollback, double use, trial-decryption oracles, or permanent desynchronization? Which mobile/desktop storage APIs enforce atomic journal replacement and prevent restored backups from reusing a generation? | Current conservative pending-journal policy requires re-pairing. Production persistence needs crash/rollback testing before sessions ship. |
 | O4 | How are person roots provisioned, protected, backed up/recovered, and migrated; how is revocation freshness obtained without telemetry or an online dependency? How are new devices enrolled without transferring device secrets? | Root signatures/bindings/revocations are specified; remote enrollment, global freshness, and root recovery are not enabled. |
@@ -1378,4 +1583,5 @@ limits, and policies above are v1 design decisions; open gates do not weaken the
 | O7 | What registered BLE service UUID/GATT allocation, mobile permission/background behavior, AWDL/Wi-Fi P2P/USB packaging, and exact direct-path QUIC/ALPN/hole-punch profile are deployable on each platform? | Shared discovery/control encodings exist; unspecified transport adapters/probes stay disabled. |
 | O8 | How is a high-entropy rendezvous capability conveyed for remote human-code-only pairing without an offline dictionary oracle or trusted matching service? | Local code discovery and QR capability derivation are specified; remote code-only rendezvous disabled. |
 | O9 | What platform-specific filesystem publication, secret storage, preview isolation, collision mapping, and quota policies satisfy the core invariants on all targets? | No secure file-receipt/platform claim until implementation and adversarial OS tests. |
-| O10 | What independently generated handshake, content encryption/Bao, state-machine, crash, identity/revocation, discovery-adapter, and relay transcripts establish full interoperability? | The six requested fixture families cover only the standalone encodings listed in §15. They do not certify the whole protocol. |
+| O10 | What independent implementation reproduces the hybrid handshakes, and what content encryption/Bao, state-machine, crash, identity/revocation, discovery-adapter, and relay transcripts establish full interoperability? | The six standalone fixture families and new reference handshake transcripts establish reproducibility, not independent full-protocol interoperability. |
+| O11 | Should the unused static ML-KEM credential in QR/DeviceBinding be removed before v1 release? | Retain its existing bytes and validation for now; signatures/pins authenticate the public credential only. It MUST NOT be used as an HFS ephemeral key or represented as a static-KEM possession proof. Any removal requires an explicit wire-format revision and regenerated affected fixtures. |

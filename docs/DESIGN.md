@@ -4,7 +4,7 @@
 
 This document records architectural requirements for a free, open-source, cross-platform, end-to-end secure file transfer app. The goal is any-to-any transfers between phones and PCs, with adoption ahead of revenue and the ambition to outperform existing solutions across usability, reliability, performance, and security.
 
-The runtime crates remain a compiling scaffold with no transfer implementation, platform integration, or usable application. The repository also contains an offline Rust tool and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and identifies release blockers, including the unassigned hybrid Noise construction.
+The runtime crates remain a compiling scaffold with no transfer implementation, platform integration, or usable application. The repository also contains offline Rust tools and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and the hybrid HFS+PSK construction from independently reviewed Snow source. Production backend, application integration, and interoperability remain release gates.
 
 Read both documents before changing behavior. If specification and implementation disagree, stop and report the disagreement.
 
@@ -41,7 +41,7 @@ This is an ownership map, not a dependency graph. Concrete APIs, dependency edge
 
 ## Security requirements
 
-Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The protocol draft assigns pattern selection, transcript requirements, and a conservative ratchet transaction. Its exact hybrid construction remains a blocking open decision; suite 0x0001 is disabled. Do not interpret the algorithm names as a complete protocol.
+Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The protocol draft assigns the exact HFS+PSK token schedules, message layouts, transcript requirements, and a conservative ratchet transaction. HFS uses a fresh ephemeral ML-KEM key, not the draft's retained static ML-KEM credential. The construction follows independently reviewed Snow source; the new ML-KEM backend and todoke integration are not covered by that audit. Suite 0x0001 remains disabled for production pending the applicable implementation and interoperability gates.
 
 Per-file content must use AES-256-GCM STREAM encryption, with XChaCha20-Poly1305 as the fallback, and BLAKE3/bao verified chunks. The protocol draft specifies STREAM BE32 substreams, nonce allocation, authenticated suite selection, encrypted Bao slices, and chunk framing. Authenticate and validate according to that specification before treating data as trusted; standalone nonce vectors are not complete content-encryption conformance evidence.
 
