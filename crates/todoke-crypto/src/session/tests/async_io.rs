@@ -1115,3 +1115,26 @@ fn slow_authority_steps_count_against_the_establishment_deadline() -> TestResult
     }
     Ok(())
 }
+
+/// §14.2: an accepted attempt's `Debug` does not print the contact locator.
+#[test]
+fn incoming_session_debug_redacts_the_locator() -> TestResult {
+    use todoke_proto::session::{Hello, PreludeKind, encode_prelude_record};
+    let (mut peer, listener) = duplex(4096);
+    let hello = Hello::client(SessionMode::Contact, GENERATION, LOCATOR, [0xc4; 16])?;
+    let record = encode_prelude_record(PreludeKind::ClientHello, &hello.encode())?;
+    let written = Pin::new(&mut peer).poll_write(&mut Context::from_waker(Waker::noop()), &record);
+    assert!(matches!(written, Poll::Ready(Ok(n)) if n == record.len()));
+    let incoming = block_on(IncomingSession::accept(
+        listener,
+        ManualTimer::at(START),
+        GATE,
+    ))??;
+    assert_eq!(incoming.client_hello().locator(), &LOCATOR);
+    let debug = format!("{incoming:?}");
+    for needle in ["a7a7", "167", "c4c4", "196"] {
+        assert!(!debug.contains(needle), "{debug}");
+    }
+    assert!(debug.contains("IncomingSession") && debug.contains("[16 bytes]"));
+    Ok(())
+}

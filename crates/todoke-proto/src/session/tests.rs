@@ -474,7 +474,8 @@ fn errors_have_distinct_messages() -> TestResult {
         assert!(!messages[..index].contains(message), "{message}");
     }
     let hello = format!("{:?}", sample_client(SessionMode::Qr)?);
-    assert!(hello.contains(&"a1".repeat(16)) && hello.contains("Qr"));
+    // The locator is redacted (see hello_debug_redacts_locator_and_nonces).
+    assert!(!hello.contains(&"a1".repeat(16)) && hello.contains("Qr"));
     let record = NoiseHandshakeRecord::decode(&[2; 1153], SessionMode::Qr)?;
     assert!(format!("{record:?}").contains("[1152 bytes]"));
     Ok(())
@@ -561,4 +562,26 @@ proptest! {
         let _ = decode_key_update(&bytes);
         let _ = decode_ping(&bytes);
     }
+}
+
+/// §14.2: contact tokens are not logged. The locator is a pairing ID or a
+/// contact rendezvous-token prefix and the nonces identify the attempt, so
+/// `Debug` shows only their sizes.
+#[test]
+fn hello_debug_redacts_locator_and_nonces() -> TestResult {
+    let client = Hello::client(SessionMode::Contact, 7, [0xa1; 16], [0xa5; 16])?;
+    let server = client.server_reply([0xa6; 16])?;
+    for hello in [client, server] {
+        let debug = format!("{hello:?}");
+        for byte in ["a1", "a5", "a6"] {
+            assert!(!debug.contains(&byte.repeat(4)), "{debug}");
+        }
+        assert!(!debug.contains("161"), "{debug}");
+        assert!(
+            debug.contains("[16 bytes]") && debug.contains("Contact"),
+            "{debug}"
+        );
+        assert!(debug.contains("generation: 7"), "{debug}");
+    }
+    Ok(())
 }

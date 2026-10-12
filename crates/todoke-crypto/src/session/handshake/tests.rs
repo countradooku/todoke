@@ -387,3 +387,36 @@ fn debug_output_is_structural() -> TestResult {
     );
     Ok(())
 }
+
+/// §14.2: plans carry the locator (a pairing ID or contact rendezvous-token
+/// prefix); `Debug` must not print it, nor the pinned static key or PSK.
+#[test]
+fn plans_do_not_print_locators_or_keys() {
+    let psk = || PairingPsk::from_bytes(Zeroizing::new([0x44; 32]));
+    let transcript = || {
+        CodeTranscript::new(
+            [0x31; CODE_OFFER_LEN],
+            [0x32; CODE_SHARE_LEN],
+            [0x33; CODE_SHARE_LEN],
+        )
+    };
+    let debug = [
+        format!("{:?}", InitiatorPlan::qr([0xa7; 16], [0xb8; 32], psk())),
+        format!("{:?}", InitiatorPlan::code([0xa7; 16], psk(), transcript())),
+        format!(
+            "{:?}",
+            InitiatorPlan::contact(9, [0xa7; 16], Zeroizing::new([0x44; 32]), [0xb8; 32])
+        ),
+        format!("{:?}", ResponderPlan::qr(psk())),
+        format!(
+            "{:?}",
+            ResponderPlan::contact(9, Zeroizing::new([0x44; 32]), [0xb8; 32])
+        ),
+    ];
+    for debug in debug {
+        for needle in ["a7a7", "167", "b8b8", "184", "4444", "68, 68"] {
+            assert!(!debug.contains(needle), "{debug}");
+        }
+        assert!(debug.contains("Plan"), "{debug}");
+    }
+}

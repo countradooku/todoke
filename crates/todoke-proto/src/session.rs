@@ -440,14 +440,17 @@ impl Hello {
     }
 }
 
+/// Redacted: the locator is a pairing ID or a contact rendezvous-token prefix
+/// and the nonces identify the attempt; §14.2 forbids logging contact tokens.
 impl fmt::Debug for Hello {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let redacted = Redacted(self.locator.len());
         f.debug_struct("Hello")
             .field("mode", &self.mode)
             .field("generation", &self.generation)
-            .field("locator", &Hex(&self.locator))
-            .field("client_nonce", &Hex(&self.client_nonce))
-            .field("server_nonce", &Hex(&self.server_nonce))
+            .field("locator", &redacted)
+            .field("client_nonce", &redacted)
+            .field("server_nonce", &redacted)
             .finish()
     }
 }
@@ -998,6 +1001,15 @@ impl ErrorRecord {
 }
 
 struct Hex<'a>(&'a [u8]);
+
+/// Prints only a length, for values that must not appear in logs.
+struct Redacted(usize);
+
+impl fmt::Debug for Redacted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{} bytes]", self.0)
+    }
+}
 
 impl fmt::Debug for Hex<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

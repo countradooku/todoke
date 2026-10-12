@@ -64,8 +64,8 @@ impl fmt::Debug for CodeTranscript {
     }
 }
 
-/// What the initiator needs before sending `ClientHello`.
-#[derive(Debug)]
+/// What the initiator needs before sending `ClientHello`. `Debug` omits
+/// the locator (§14.2: contact tokens are not logged) and the keys.
 pub struct InitiatorPlan {
     mode: SessionMode,
     generation: u64,
@@ -126,8 +126,8 @@ impl InitiatorPlan {
     }
 }
 
-/// What the responder needs after reading `ClientHello`.
-#[derive(Debug)]
+/// What the responder needs after reading `ClientHello`. `Debug` omits
+/// the keys.
 pub struct ResponderPlan {
     mode: SessionMode,
     generation: u64,
@@ -179,6 +179,25 @@ impl ResponderPlan {
     #[must_use]
     pub fn mode(&self) -> SessionMode {
         self.mode
+    }
+}
+
+impl fmt::Debug for InitiatorPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InitiatorPlan")
+            .field("mode", &self.mode)
+            .field("generation", &self.generation)
+            .field("locator", &format_args!("[{} bytes]", self.locator.len()))
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for ResponderPlan {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResponderPlan")
+            .field("mode", &self.mode)
+            .field("generation", &self.generation)
+            .finish_non_exhaustive()
     }
 }
 
