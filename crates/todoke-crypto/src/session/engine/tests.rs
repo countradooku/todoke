@@ -681,6 +681,70 @@ fn debug_output_names_no_secret() -> TestResult {
     Ok(())
 }
 
+/// §4.2.2: every attempt draws fresh X25519 ephemerals, a fresh ML-KEM key
+/// pair, and fresh encapsulation randomness from the OS CSPRNG. Two attempts
+/// with identical static inputs send different `e_i` and `e_r`, and the
+/// ML-KEM adapter on the OS source never repeats a key pair or ciphertext.
+#[test]
+fn every_attempt_uses_fresh_ephemeral_material() -> TestResult {
+    let initiator_static = [0x11; 32];
+    let responder_static = [0x33; 32];
+    let responder_public = public_of(&responder_static);
+    let initiator_public = public_of(&initiator_static);
+    let attempt = || -> Result<(Vec<u8>, Vec<u8>), NoiseError> {
+        let mut initiator = NoiseHandshake::new(&HandshakeInputs {
+            pattern: Pattern::KkPsk2,
+            initiator: true,
+            prologue: b"fresh",
+            psk: &[0x55; 32],
+            local_static: &initiator_static,
+            remote_static: Some(&responder_public),
+            entropy: Entropy::Os,
+        })?;
+        let mut responder = NoiseHandshake::new(&HandshakeInputs {
+            pattern: Pattern::KkPsk2,
+            initiator: false,
+            prologue: b"fresh",
+            psk: &[0x55; 32],
+            local_static: &responder_static,
+            remote_static: Some(&initiator_public),
+            entropy: Entropy::Os,
+        })?;
+        let first = initiator.write_message()?;
+        responder.read_message(&first)?;
+        let second = responder.write_message()?;
+        initiator.read_message(&second)?;
+        Ok((first, second))
+    };
+    let (first_a, second_a) = attempt()?;
+    let (first_b, second_b) = attempt()?;
+    // e_i and e_r are the first 32 bytes of KK messages 1 and 2 (§4.2.5).
+    assert_ne!(first_a.get(..32), first_b.get(..32));
+    assert_ne!(second_a.get(..32), second_b.get(..32));
+    // The KEM adapter alone, so X25519 freshness cannot mask a repeat.
+    let kem = || MlKem768 {
+        entropy: Entropy::Os,
+        failed: Arc::new(AtomicBool::new(false)),
+        private: Zeroizing::new([0; KEM_PRIVATE_LEN]),
+        public: Box::new([0; KEM_PUBLIC_LEN]),
+    };
+    let (mut one, mut two) = (kem(), kem());
+    one.generate(&mut SnowRandom(Entropy::Os));
+    two.generate(&mut SnowRandom(Entropy::Os));
+    assert!(!one.failed.load(Ordering::SeqCst) && !two.failed.load(Ordering::SeqCst));
+    assert_ne!(one.pubkey(), two.pubkey());
+    assert_ne!(one.private.as_slice(), two.private.as_slice());
+    let public = one.pubkey().to_vec();
+    let mut shared = [[0; 32]; 2];
+    let mut ciphertext = [[0; KEM_CIPHERTEXT_LEN]; 2];
+    for (shared, ciphertext) in shared.iter_mut().zip(ciphertext.iter_mut()) {
+        two.encapsulate(&public, shared, ciphertext)?;
+    }
+    assert_ne!(ciphertext[0], ciphertext[1]);
+    assert_ne!(shared[0], shared[1]);
+    Ok(())
+}
+
 /// Engine errors render as fixed, distinct messages with no peer detail.
 #[test]
 fn noise_errors_render_fixed_messages() {

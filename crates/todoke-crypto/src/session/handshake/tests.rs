@@ -235,6 +235,32 @@ fn code_mode_binds_the_code_transcript_into_the_prologue() -> TestResult {
     Ok(())
 }
 
+/// §3.2/§4.2.6: the code-mode prologue is exactly
+/// `"todoke/v1/noise-prologue\0" || CodeOfferRequest (10) || CodeOffer (34)
+/// || ClientHello (66) || ServerHello (66) || CodeShareA (49) || CodeShareB
+/// (49)`, written out here from the spec sizes.
+#[test]
+fn code_prologue_is_the_spec_concatenation() -> TestResult {
+    let (mut initiator, mut responder, server_hello) = code_pair(transcript())?;
+    let server = Hello::decode_server(&body(&server_hello)?[1..], &initiator.client)?;
+    let mut expected = b"todoke/v1/noise-prologue\x00".to_vec();
+    expected.extend_from_slice(&[0x31; 10 + 34]);
+    expected.extend_from_slice(&initiator.client.encode());
+    expected.extend_from_slice(&server.encode());
+    expected.extend_from_slice(&[0x32; 49]);
+    expected.extend_from_slice(&[0x33; 49]);
+    assert_eq!(expected.len(), 25 + 44 + 66 + 66 + 49 + 49);
+    assert_eq!(initiator.prologue(&server)?, expected);
+    assert_eq!(responder.prologue(&server)?, expected);
+    run_to_end(&mut initiator, &mut responder, body(&server_hello)?)?;
+    let split = initiator.finish()?;
+    assert_eq!(
+        format!("{split:?}"),
+        "Split { role: Initiator, mode: Code, generation: 0, .. }"
+    );
+    Ok(())
+}
+
 #[test]
 fn plan_and_hello_must_agree() -> TestResult {
     let key = NoiseStaticKey::generate()?;
