@@ -56,7 +56,7 @@ pub const PONG_TIMEOUT: Duration = Duration::from_secs(10);
 /// No authenticated traffic for this long closes the session (§5, §13).
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(135);
 /// Longest session (§13).
-pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
+pub const MAX_SESSION_DURATION: Duration = Duration::from_hours(24);
 
 /// `KeyUpdate` ciphertext: 4-byte header, 8-byte epoch, 16-byte tag.
 const KEY_UPDATE_CIPHERTEXT_LEN: usize = 28;

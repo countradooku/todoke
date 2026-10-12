@@ -280,3 +280,15 @@ the libcrux code under test:
 | `sha2 0.11.0` | `default-features = false`. Already in the lock through `ed25519-dalek`; latest release. |
 
 No package was added to the lock, and no exception was added.
+
+## MSRV 1.94 (2026-10-13)
+
+The first CI run of this branch showed that `libcrux-platform 0.0.4`, the
+latest release, does not compile on x86_64 before Rust 1.94. It calls
+`core::arch::x86_64::__cpuid` without `unsafe`, which older compilers reject
+(E0133). The local MSRV check ran on Apple Silicon, which never compiles that
+code. Checking `-p libcrux-platform --target x86_64-unknown-linux-gnu` with
+each toolchain fails on 1.89 through 1.93 and passes on 1.94.0. The
+workspace and fuzz `rust-version`, the CI `msrv` job, `README.md`,
+`CONTRIBUTING.md`, and ADR 0001 now say 1.94.0. Local MSRV checks must cover
+an x86_64 target as well as the host.

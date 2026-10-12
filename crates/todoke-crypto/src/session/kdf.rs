@@ -17,16 +17,6 @@ use super::engine::KEY_LEN;
 const SESSION_DOMAIN: &[u8] = b"todoke/v1/session\0";
 const RATCHET_INFO: &[u8] = b"todoke/v1/psk-ratchet\0";
 const RATCHET_CONFIRM_DOMAIN: &[u8] = b"todoke/v1/ratchet-confirm\0";
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by discovery (§9), not built yet")
-)]
-const PAIR_SECRET_INFO: &[u8] = b"todoke/v1/pair-secret\0";
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by discovery (§9), not built yet")
-)]
-const DISCOVERY_KEY_INFO: &[u8] = b"todoke/v1/discovery-key\0";
 
 /// `session_id = B3("todoke/v1/session\0" || h)` (§4.2.6).
 #[must_use]
@@ -87,6 +77,7 @@ pub(crate) fn psk_next(
 pub(crate) fn pair_secret(
     committed_psk: &[u8; KEY_LEN],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
+    const PAIR_SECRET_INFO: &[u8] = b"todoke/v1/pair-secret\0";
     hkdf_sha256(&[], committed_psk, PAIR_SECRET_INFO)
 }
 
@@ -98,6 +89,7 @@ pub(crate) fn pair_secret(
 pub(crate) fn discovery_key(
     pair_secret: &[u8; KEY_LEN],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
+    const DISCOVERY_KEY_INFO: &[u8] = b"todoke/v1/discovery-key\0";
     hkdf_sha256(&[], pair_secret, DISCOVERY_KEY_INFO)
 }
 

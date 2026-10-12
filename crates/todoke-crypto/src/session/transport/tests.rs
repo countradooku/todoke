@@ -515,7 +515,7 @@ fn idle_timeout_and_hard_deadlines() -> TestResult {
     assert_eq!(a.next_deadline(), T0 + PING_AFTER);
     assert_eq!(a.hard_deadline, T0 + MAX_SESSION_DURATION);
     // §13: at most 24 hours.
-    assert_eq!(MAX_SESSION_DURATION, Duration::from_secs(86_400));
+    assert_eq!(MAX_SESSION_DURATION.as_secs(), 86_400);
     a.last_received = T0 + MAX_SESSION_DURATION;
     assert_eq!(
         a.poll(T0 + MAX_SESSION_DURATION),
