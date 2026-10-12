@@ -533,3 +533,50 @@ fn error_frames_and_codes_are_not_sent_before_the_gate() -> TestResult {
     );
     Ok(())
 }
+
+/// The session lifetime ends when the earlier binding expires, measured
+/// from the time the session started, not from when the long-lived
+/// `LocalIdentity` was built (§2).
+#[test]
+fn session_lifetime_is_computed_from_the_session_start_time() -> TestResult {
+    use crate::identity::binding::CLOCK_SKEW_SECONDS;
+    use crate::identity::test_support::{DAY, T0, time};
+    use crate::session::WallClock;
+    let alice = Device::valid_until(T0 + 300 * DAY)?;
+    let bob = Device::new()?;
+    let mut alice_store = store_pairing(&bob, GENERATION)?;
+    let mut bob_store = store_pairing(&alice, GENERATION)?;
+    let (alice_key, bob_key) = (alice.key(), bob.key());
+    // 100 seconds before Bob's binding expires.
+    let bob_expiry = T0 + 30 * DAY;
+    let started = WallClock::new(time(bob_expiry - 100)?, START);
+    let initiator_authority = alice_store.session_authority(&bob_key)?;
+    let plan = initiator_authority.initiator_plan(LOCATOR)?;
+    let responder_authority = bob_store.session_authority(&alice_key)?;
+    let hello =
+        todoke_proto::session::Hello::client(SessionMode::Contact, GENERATION, LOCATOR, [1; 16])?;
+    let responder_plan = responder_authority.responder_plan(&hello)?;
+    // Both identities were built long ago, at WALL.
+    let mut initiator = Side::initiator(alice.local()?, initiator_authority);
+    let mut responder = Side::responder(bob.local()?, responder_authority, responder_plan);
+    initiator.wall = started;
+    responder.wall = started;
+    let mut harness = Harness::new(initiator, responder, plan)?;
+    harness.drain();
+    let expected = START + core::time::Duration::from_secs(100 + CLOCK_SKEW_SECONDS);
+    for side in [
+        harness
+            .initiator
+            .core()
+            .ok_or("initiator open")?
+            .hard_deadline(),
+        harness
+            .responder
+            .core()
+            .ok_or("responder open")?
+            .hard_deadline(),
+    ] {
+        assert_eq!(side, expected);
+    }
+    Ok(())
+}

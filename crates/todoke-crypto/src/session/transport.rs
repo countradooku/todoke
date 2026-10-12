@@ -610,6 +610,11 @@ impl SessionCore {
     }
 
     #[cfg(test)]
+    pub(crate) fn hard_deadline(&self) -> Duration {
+        self.hard_deadline
+    }
+
+    #[cfg(test)]
     pub(crate) fn transport(&self) -> &FrameTransport {
         &self.transport
     }

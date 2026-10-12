@@ -15,13 +15,14 @@ use todoke_proto::session::{
     CIPHERTEXT_PREFIX_LEN, ErrorRecord, FrameType, Hello, PRELUDE_PREFIX_LEN, SessionMode,
     ciphertext_len, prelude_record_len,
 };
+use todoke_proto::time::UnixTime;
 
 use super::authority::PeerAuthority;
 use super::engine::Entropy;
 use super::establish::{Establishment, Phase};
 use super::handshake::{self, HandshakeDriver, InitiatorPlan, ResponderPlan};
 use super::transport::{Frame, Limits, SessionCore};
-use super::{HANDSHAKE_TIMEOUT, LocalIdentity, Role, SessionError, UnauditedSuite0001};
+use super::{HANDSHAKE_TIMEOUT, LocalIdentity, Role, SessionError, UnauditedSuite0001, WallClock};
 use crate::identity::{KeyStore, VerifiedDeviceBinding};
 use crate::rng;
 
@@ -237,6 +238,7 @@ async fn run<IO, T, K, A>(
     mut conn: Conn<IO, T>,
     mut driver: HandshakeDriver,
     local: &LocalIdentity<'_, K>,
+    wall: WallClock,
     authority: &mut A,
 ) -> Result<Session<IO, T>, SessionError>
 where
@@ -255,7 +257,7 @@ where
         }
     }
     let split = driver.finish()?;
-    let mut establishment = Establishment::new(split, conn.now(), Limits::SPEC);
+    let mut establishment = Establishment::new(split, conn.now(), wall, Limits::SPEC);
     match establish(&mut conn, &mut establishment, local, authority).await {
         Ok(()) => {}
         Err(error) => return Err(establishment.failure(error, authority)),
@@ -341,14 +343,23 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     /// Completes the handshake, identity confirmation, and ratchet as
     /// responder.
     ///
+    /// `now` is the current wall-clock time from a trusted clock (§1: an
+    /// unknown or regressed clock requires local confirmation instead). The
+    /// local binding must be valid at `now`; the peer's binding is verified,
+    /// and the session lifetime computed, at `now` plus the monotonic time
+    /// elapsed since this call.
+    ///
     /// # Errors
     ///
-    /// Any [`SessionError`]. Failures before a journal leave the pairing
-    /// usable; later ones return [`SessionError::RatchetUncertain`] and the
-    /// authority blocks the pairing.
+    /// Any [`SessionError`]; [`SessionError::LocalIdentity`], before
+    /// anything is sent, if the local binding is not valid at `now`.
+    /// Failures before a journal leave the pairing usable; later ones return
+    /// [`SessionError::RatchetUncertain`] and the authority blocks the
+    /// pairing.
     pub async fn respond<K: KeyStore, A: PeerAuthority>(
         self,
         local: &LocalIdentity<'_, K>,
+        now: UnixTime,
         plan: ResponderPlan,
         authority: &mut A,
     ) -> Result<Session<IO, T>, SessionError> {
@@ -358,6 +369,8 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             received_at,
             gate,
         } = self;
+        local.check_valid_at(now)?;
+        let wall = WallClock::new(now, conn.now());
         let (driver, server_hello) = HandshakeDriver::responder(
             gate,
             hello,
@@ -368,7 +381,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             received_at,
         )?;
         conn.write(&server_hello).await?;
-        run(conn, driver, local, authority).await
+        run(conn, driver, local, wall, authority).await
     }
 
     /// Drops the attempt without sending anything.
@@ -401,20 +414,31 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
     /// Runs the initiator side: `ClientHello`, the Noise handshake, identity
     /// confirmation, and the PSK ratchet.
     ///
+    /// `now` is the current wall-clock time from a trusted clock (§1: an
+    /// unknown or regressed clock requires local confirmation instead). The
+    /// local binding must be valid at `now`; the peer's binding is verified,
+    /// and the session lifetime computed, at `now` plus the monotonic time
+    /// elapsed since this call.
+    ///
     /// # Errors
     ///
-    /// Any [`SessionError`]. Failures before a journal leave the pairing
-    /// usable; later ones return [`SessionError::RatchetUncertain`] and the
-    /// authority blocks the pairing.
+    /// Any [`SessionError`]; [`SessionError::LocalIdentity`], before
+    /// anything is sent, if the local binding is not valid at `now`.
+    /// Failures before a journal leave the pairing usable; later ones return
+    /// [`SessionError::RatchetUncertain`] and the authority blocks the
+    /// pairing.
     pub async fn initiate<K: KeyStore, A: PeerAuthority>(
         io: IO,
         timer: T,
         gate: UnauditedSuite0001,
         local: &LocalIdentity<'_, K>,
+        now: UnixTime,
         plan: InitiatorPlan,
         authority: &mut A,
     ) -> Result<Self, SessionError> {
+        local.check_valid_at(now)?;
         let mut conn = Conn::new(io, timer);
+        let wall = WallClock::new(now, conn.now());
         let (driver, client_hello) = HandshakeDriver::initiator(
             gate,
             plan,
@@ -424,7 +448,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
             conn.now(),
         )?;
         conn.write(&client_hello).await?;
-        run(conn, driver, local, authority).await
+        run(conn, driver, local, wall, authority).await
     }
 
     /// This side's handshake role.

@@ -1,7 +1,7 @@
 //! Forged Identity and ratchet records under the real session keys.
 
 use super::*;
-use crate::identity::test_support::{DAY, T0, request};
+use crate::identity::test_support::{DAY, T0, request, time};
 use crate::identity::{BindingError, VerificationState};
 use crate::identity::{IdentityError, MemoryStorage, SoftwareSealer, issue_device_binding};
 use crate::session::ContactAuthority;
@@ -20,6 +20,16 @@ fn record_body(record: &[u8]) -> &[u8] {
 /// Runs the KK handshake between `alice` (initiator) and `bob` and returns
 /// both establishment phases, before either sent anything.
 fn established_pair(alice: &Device, bob: &Device) -> AnyResult<(Establishment, Establishment)> {
+    established_pair_at(alice, bob, WALL)
+}
+
+/// [`established_pair`] with both sides' trusted wall clock at `wall`
+/// (Unix seconds) at monotonic `START`.
+fn established_pair_at(
+    alice: &Device,
+    bob: &Device,
+    wall: u64,
+) -> AnyResult<(Establishment, Establishment)> {
     let (mut initiator, client_hello) = HandshakeDriver::initiator(
         GATE,
         InitiatorPlan::contact(
@@ -50,9 +60,10 @@ fn established_pair(alice: &Device, bob: &Device) -> AnyResult<(Establishment, E
     let first = initiator.receive(record_body(&server_hello), START)?;
     let second = responder.receive(record_body(&first[0]), START)?;
     initiator.receive(record_body(&second[0]), START)?;
+    let wall = crate::session::WallClock::new(time(wall)?, START);
     Ok((
-        Establishment::new(initiator.finish()?, START, Limits::SPEC),
-        Establishment::new(responder.finish()?, START, Limits::SPEC),
+        Establishment::new(initiator.finish()?, START, wall, Limits::SPEC),
+        Establishment::new(responder.finish()?, START, wall, Limits::SPEC),
     ))
 }
 
@@ -181,7 +192,8 @@ fn expired_peer_binding_is_rejected() -> TestResult {
     };
     let bob = Device::new()?;
     let mut bob_store = store_pairing(&alice, GENERATION)?;
-    let (mut initiator, mut responder) = established_pair(&alice, &bob)?;
+    // The session starts after Alice's one-day binding expired.
+    let (mut initiator, mut responder) = established_pair_at(&alice, &bob, T0 + 2 * DAY)?;
     let alice_local = alice.local()?;
     let records = initiator.start(&alice_local, START)?;
     let bob_local = bob.local_at(T0 + 2 * DAY)?;

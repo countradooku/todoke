@@ -291,6 +291,7 @@ fn contact_sessions_with<T: Timer + Clone>(
     timer: &T,
     capacity: usize,
 ) -> AnyResult<Established<T>> {
+    let wall = crate::identity::test_support::time(WALL)?;
     let (alice_end, bob_end) = duplex(capacity);
     let (alice_local, bob_local) = (alice.local()?, bob.local()?);
     let (alice_key, bob_key) = (alice.key(), bob.key());
@@ -301,6 +302,7 @@ fn contact_sessions_with<T: Timer + Clone>(
         timer.clone(),
         GATE,
         &alice_local,
+        wall,
         plan,
         &mut initiator_authority,
     );
@@ -310,7 +312,9 @@ fn contact_sessions_with<T: Timer + Clone>(
         assert_eq!(incoming.client_hello().locator(), &LOCATOR);
         let mut authority = bob_store.session_authority(&alice_key)?;
         let plan = authority.responder_plan(incoming.client_hello())?;
-        incoming.respond(&bob_local, plan, &mut authority).await
+        incoming
+            .respond(&bob_local, wall, plan, &mut authority)
+            .await
     };
     let (initiator, responder) = join(initiator, responder)?;
     Ok((initiator?, responder?))
@@ -379,6 +383,7 @@ fn contact_session_over_a_byte_pipe() -> TestResult {
 
 #[test]
 fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
     let alice = Device::new()?;
     let bob = Device::new()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x6b; 32]));
@@ -405,6 +410,7 @@ fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
             timer.clone(),
             GATE,
             &alice_local,
+            wall,
             plan,
             &mut initiator_authority,
         );
@@ -416,7 +422,7 @@ fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
                 ResponderPlan::code(psk(), transcript())
             };
             incoming
-                .respond(&bob_local, plan, &mut responder_authority)
+                .respond(&bob_local, wall, plan, &mut responder_authority)
                 .await
         };
         let (a, b) = join(initiator, responder)?;
@@ -432,6 +438,7 @@ fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
 
 #[test]
 fn rejected_or_mismatched_attempts_change_nothing() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
     let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
     // Bob's store is one generation behind: Bob reports it locally and
     // drops the stream; Alice sees the stream close.
@@ -448,6 +455,7 @@ fn rejected_or_mismatched_attempts_change_nothing() -> TestResult {
         timer.clone(),
         GATE,
         &alice_local,
+        wall,
         plan,
         &mut authority,
     );
@@ -469,6 +477,7 @@ fn rejected_or_mismatched_attempts_change_nothing() -> TestResult {
 
 #[test]
 fn deadlines_fire_through_the_timer() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
     let (alice, bob, mut alice_store, _) = contacts()?;
     // Nobody answers: the handshake times out after 30 seconds.
     let timer = JumpingTimer::default();
@@ -482,6 +491,7 @@ fn deadlines_fire_through_the_timer() -> TestResult {
         timer.clone(),
         GATE,
         &alice_local,
+        wall,
         plan,
         &mut authority,
     ))?;
@@ -605,6 +615,80 @@ fn local_identity_must_be_consistent_and_current() -> TestResult {
     );
     let local = alice.local()?;
     assert!(!format!("{local:?}").contains("noise"));
+    Ok(())
+}
+
+/// A daemon keeps one `LocalIdentity` for a long time. A session started
+/// later must check the local binding, and verify the peer's, at the time it
+/// is given, not at the time the identity was built (§2).
+#[test]
+fn sessions_use_the_current_time_not_the_identity_build_time() -> TestResult {
+    use crate::identity::test_support::{DAY, T0, time};
+    // Alice's binding lasts 300 days, Bob's 30. Both identities are built
+    // at WALL, one minute after T0; the sessions run 40 days later.
+    let alice = Device::valid_until(T0 + 300 * DAY)?;
+    let bob = Device::new()?;
+    let mut alice_store = store_pairing(&bob, GENERATION)?;
+    let mut bob_store = store_pairing(&alice, GENERATION)?;
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let (alice_key, bob_key) = (alice.key(), bob.key());
+    let later = time(T0 + 40 * DAY)?;
+
+    // Bob's own binding has expired by then: nothing is sent.
+    let (bob_end, mut alice_end) = duplex(4096);
+    let mut authority = bob_store.session_authority(&alice_key)?;
+    let plan = authority.initiator_plan(LOCATOR)?;
+    let refused = block_on(Session::initiate(
+        bob_end,
+        ManualTimer::at(START),
+        GATE,
+        &bob_local,
+        later,
+        plan,
+        &mut authority,
+    ))?;
+    assert_eq!(refused.map(|_| ()).err(), Some(SessionError::LocalIdentity));
+    let mut byte = [0; 1];
+    let read =
+        Pin::new(&mut alice_end).poll_read(&mut Context::from_waker(Waker::noop()), &mut byte);
+    assert!(matches!(read, Poll::Ready(Ok(0))), "nothing was written");
+
+    // Alice's binding is still valid, but Bob's (presented by a peer whose
+    // clock is behind) expired: Alice must reject it before any journal.
+    let timer = ManualTimer::at(START);
+    let (alice_end, bob_end) = duplex(1 << 20);
+    let wall = time(WALL)?;
+    let mut initiator_authority = alice_store.session_authority(&bob_key)?;
+    let plan = initiator_authority.initiator_plan(LOCATOR)?;
+    let initiator = Session::initiate(
+        alice_end,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        later,
+        plan,
+        &mut initiator_authority,
+    );
+    let responder = async {
+        let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
+        let mut authority = bob_store.session_authority(&alice_key)?;
+        let plan = authority.responder_plan(incoming.client_hello())?;
+        incoming
+            .respond(&bob_local, wall, plan, &mut authority)
+            .await
+    };
+    let (initiator, responder) = join(initiator, responder)?;
+    assert!(
+        matches!(
+            initiator.map(|_| ()),
+            Err(SessionError::Identity(
+                crate::identity::IdentityError::Binding(_)
+            ))
+        ),
+        "an expired peer binding must not authenticate"
+    );
+    assert!(responder.is_err());
+    assert_eq!(usable(&alice_store, &bob_key)?, Some((GENERATION, OLD_PSK)));
     Ok(())
 }
 

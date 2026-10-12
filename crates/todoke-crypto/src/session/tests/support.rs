@@ -8,17 +8,19 @@ use todoke_proto::session::{CIPHERTEXT_PREFIX_LEN, ciphertext_len, prelude_recor
 use todoke_proto::time::UnixTime;
 
 use crate::identity::contacts::PairPsk;
-use crate::identity::test_support::{Enrolled, T0, sealer, time};
+use crate::identity::test_support::{Enrolled, T0, request, sealer, time};
 use crate::identity::{
     ContactStore, Ed25519PublicKey, MemoryStorage, SoftwareKeyStore, SoftwareSealer, TrustOrigin,
-    VerifiedDeviceBinding,
+    VerifiedDeviceBinding, issue_device_binding,
 };
 use crate::session::authority::PeerAuthority;
 use crate::session::engine::Entropy;
 use crate::session::establish::{Establishment, Phase};
 use crate::session::handshake::{self, HandshakeDriver, InitiatorPlan, ResponderPlan};
 use crate::session::transport::{Limits, SessionCore};
-use crate::session::{LocalIdentity, NoiseStaticKey, Role, SessionError, UnauditedSuite0001};
+use crate::session::{
+    LocalIdentity, NoiseStaticKey, Role, SessionError, UnauditedSuite0001, WallClock,
+};
 
 pub(crate) type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub(crate) type TestResult = AnyResult<()>;
@@ -48,6 +50,21 @@ impl Device {
         let enrolled = Enrolled::new()?;
         let noise = NoiseStaticKey::generate()?;
         let binding = enrolled.bind_noise(1, *noise.public_key())?;
+        Ok(Self {
+            enrolled,
+            noise,
+            binding,
+        })
+    }
+
+    /// A device whose binding is valid from `T0` until `not_after`.
+    pub(crate) fn valid_until(not_after: u64) -> AnyResult<Self> {
+        let enrolled = Enrolled::new()?;
+        let noise = NoiseStaticKey::generate()?;
+        let mut request = request(0x33, 0x44, 1, T0, not_after)?;
+        request.noise_static = *noise.public_key();
+        let binding =
+            issue_device_binding(&enrolled.store, &enrolled.root, &enrolled.device, request)?;
         Ok(Self {
             enrolled,
             noise,
@@ -125,12 +142,16 @@ pub(crate) struct Side<'l, A: PeerAuthority> {
     inbound: Vec<u8>,
     /// Hold the responder's Ack-queued confirmation for an explicit step.
     pub(crate) defer_ack: bool,
+    /// This side's trusted wall clock: by default the time its
+    /// [`LocalIdentity`] was checked at, at monotonic [`START`].
+    pub(crate) wall: WallClock,
 }
 
 impl<'l, A: PeerAuthority> Side<'l, A> {
     pub(crate) fn initiator(local: LocalIdentity<'l, Keys>, authority: A) -> Self {
         Self {
             role: Role::Initiator,
+            wall: WallClock::new(local.checked_at(), START),
             local,
             authority,
             stage: Stage::Failed(SessionError::Closed),
@@ -146,6 +167,7 @@ impl<'l, A: PeerAuthority> Side<'l, A> {
     ) -> Self {
         Self {
             role: Role::Responder,
+            wall: WallClock::new(local.checked_at(), START),
             local,
             authority,
             stage: Stage::AwaitClientHello(Some(Box::new(plan))),
@@ -263,8 +285,12 @@ impl<'l, A: PeerAuthority> Side<'l, A> {
                 if !driver.is_done() {
                     return Ok((Stage::Handshake(driver), out));
                 }
-                let mut establishment =
-                    Box::new(Establishment::new(driver.finish()?, now, Limits::SPEC));
+                let mut establishment = Box::new(Establishment::new(
+                    driver.finish()?,
+                    now,
+                    self.wall,
+                    Limits::SPEC,
+                ));
                 match establishment.start(&self.local, now) {
                     Ok(records) => out.extend(records),
                     Err(error) => return Err(establishment.failure(error, &mut self.authority)),

@@ -243,9 +243,40 @@ impl From<engine::NoiseError> for SessionError {
     }
 }
 
-/// This device's identity for one session: the key store holding its
-/// device signing key, its verified binding, its Noise static key, and the
-/// trusted wall-clock time at session start.
+/// Wall-clock time anchored to the monotonic clock: the trusted Unix time
+/// the caller supplied when a session started, and the monotonic instant it
+/// was supplied at. Later wall times are derived by adding monotonic elapsed
+/// time (§1: durations use a monotonic clock), so a long session never
+/// verifies or schedules against a stale time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WallClock {
+    at: UnixTime,
+    monotonic: core::time::Duration,
+}
+
+impl WallClock {
+    pub(crate) const fn new(at: UnixTime, monotonic: core::time::Duration) -> Self {
+        Self { at, monotonic }
+    }
+
+    /// The wall-clock time at monotonic instant `now`, clamped to the
+    /// protocol range.
+    pub(crate) fn at(&self, now: core::time::Duration) -> UnixTime {
+        let elapsed = now.saturating_sub(self.monotonic).as_secs();
+        let seconds = self
+            .at
+            .seconds()
+            .saturating_add(elapsed)
+            .min(todoke_proto::time::MAX_UNIX_TIME);
+        UnixTime::new(seconds).unwrap_or(self.at)
+    }
+}
+
+/// This device's identity: the key store holding its device signing key, its
+/// verified binding, and its Noise static key. It may be kept for many
+/// sessions; each session takes the current trusted time separately
+/// ([`Session::initiate`], [`IncomingSession::respond`]) and checks the
+/// binding again at that time.
 pub struct LocalIdentity<'a, K: KeyStore> {
     key_store: &'a K,
     device_key: KeyId,
@@ -258,6 +289,8 @@ impl<'a, K: KeyStore> LocalIdentity<'a, K> {
     /// Checks that `device_key` is the binding's device key, that the
     /// binding certifies `noise_static`, and that the binding is valid at
     /// `now` (§2: expired or future bindings must not start a session).
+    /// Sessions check validity again at their own start time; `now` is not
+    /// used after this call.
     ///
     /// `now` must come from a trusted clock; an unknown or regressed clock
     /// requires local confirmation instead (§1).
@@ -290,10 +323,16 @@ impl<'a, K: KeyStore> LocalIdentity<'a, K> {
         })
     }
 
-    /// The wall-clock time this identity was checked at.
-    #[must_use]
-    pub fn now(&self) -> UnixTime {
+    /// The wall-clock time this identity was checked at, for test fixtures.
+    /// Sessions never use it: they take the current time at their start.
+    #[cfg(test)]
+    pub(crate) fn checked_at(&self) -> UnixTime {
         self.now
+    }
+
+    /// §2: an expired or future local binding must not start a session.
+    pub(crate) fn check_valid_at(&self, now: UnixTime) -> Result<(), SessionError> {
+        check_validity(self.binding.binding().body(), now).map_err(|_| SessionError::LocalIdentity)
     }
 
     pub(crate) fn binding(&self) -> &VerifiedDeviceBinding {
@@ -332,7 +371,7 @@ impl<K: KeyStore> fmt::Debug for LocalIdentity<'_, K> {
         f.debug_struct("LocalIdentity")
             .field("device_key", &self.device_key)
             .field("device", self.binding.device_public())
-            .field("now", &self.now)
+            .field("checked_at", &self.now)
             .finish_non_exhaustive()
     }
 }

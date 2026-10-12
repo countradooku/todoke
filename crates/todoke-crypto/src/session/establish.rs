@@ -29,7 +29,7 @@ use super::engine::Entropy;
 use super::handshake::Split;
 use super::kdf;
 use super::transport::{FrameTransport, Limits, Opened, SessionCore, SessionInfo};
-use super::{ESTABLISH_TIMEOUT, LocalIdentity, Role, SessionError};
+use super::{ESTABLISH_TIMEOUT, LocalIdentity, Role, SessionError, WallClock};
 use crate::identity::binding::CLOCK_SKEW_SECONDS;
 use crate::identity::{
     Ed25519PublicKey, KeyStore, Signature, SigningDomain, VerifiedDeviceBinding,
@@ -65,6 +65,8 @@ pub(crate) struct Establishment {
     peer_static: [u8; 32],
     phase: Phase,
     deadline: Duration,
+    /// Trusted wall-clock time for binding checks and the session lifetime.
+    wall: WallClock,
     peer: Option<VerifiedDeviceBinding>,
     pending: Option<PendingRatchet>,
     journaled: bool,
@@ -79,7 +81,10 @@ const fn malformed() -> SessionError {
 }
 
 impl Establishment {
-    pub(crate) fn new(split: Split, now: Duration, limits: Limits) -> Self {
+    /// `wall` converts monotonic instants to the caller's trusted wall-clock
+    /// time; peer bindings are verified, and the session lifetime computed,
+    /// at the time of each step (§2).
+    pub(crate) fn new(split: Split, now: Duration, wall: WallClock, limits: Limits) -> Self {
         let Split {
             transport,
             role,
@@ -101,6 +106,7 @@ impl Establishment {
             peer_static,
             phase: Phase::AwaitIdentity,
             deadline: now.saturating_add(ESTABLISH_TIMEOUT),
+            wall,
             peer: None,
             pending: None,
             journaled: false,
@@ -294,12 +300,12 @@ impl Establishment {
         }
         match (self.role, self.phase, frame_type) {
             (Role::Responder, Phase::AwaitIdentity, FrameType::IDENTITY) => {
-                self.peer = Some(self.verify_identity(&body, local.now(), authority)?);
+                self.peer = Some(self.verify_identity(&body, self.wall.at(now), authority)?);
                 self.phase = Phase::AwaitReady;
                 Ok(vec![self.identity_record(local, now)?])
             }
             (Role::Initiator, Phase::AwaitIdentity, FrameType::IDENTITY) => {
-                self.peer = Some(self.verify_identity(&body, local.now(), authority)?);
+                self.peer = Some(self.verify_identity(&body, self.wall.at(now), authority)?);
                 self.begin_ratchet(authority)?;
                 self.phase = Phase::AwaitReady;
                 Ok(vec![self.ratchet_record(FrameType::RATCHET_READY, now)?])
@@ -405,8 +411,9 @@ impl Establishment {
             return Err(state());
         }
         let peer = self.peer.ok_or_else(state)?;
-        // §2: an active session closes when either binding expires.
-        let wall = local.now().seconds();
+        // §2: an active session closes when either binding expires,
+        // measured from the current trusted time.
+        let wall = self.wall.at(now).seconds();
         let expiry = |binding: &VerifiedDeviceBinding| {
             binding
                 .binding()
