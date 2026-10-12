@@ -101,3 +101,10 @@ path = "fuzz_targets/crypto_session_record_stream.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "proto_code_pairing"
+path = "fuzz_targets/proto_code_pairing.rs"
+test = false
+doc = false
+bench = false
