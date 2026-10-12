@@ -83,8 +83,9 @@ pub use todoke_proto::session::{
     ErrorCode, ErrorRecord, ErrorScope, FrameClass, FrameType, Hello, SessionMode,
 };
 pub use transport::{
-    BYTE_BUDGET, Frame, IDLE_TIMEOUT, LOCAL_REKEY_INTERVAL, MAX_KEY_AGE, MAX_SESSION_DURATION,
-    MIN_REKEY_INTERVAL, PING_AFTER, PONG_TIMEOUT,
+    BYTE_BUDGET, Frame, IDLE_TIMEOUT, KEY_UPDATE_BURST, LOCAL_REKEY_INTERVAL, MAX_KEY_AGE,
+    MAX_SESSION_DURATION, MIN_PING_INTERVAL, MIN_REKEY_INTERVAL, PING_AFTER, PING_BURST,
+    PONG_TIMEOUT,
 };
 
 pub(crate) use kdf::session_id;

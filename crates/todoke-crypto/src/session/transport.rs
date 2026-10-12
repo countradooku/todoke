@@ -31,6 +31,24 @@ pub const MAX_KEY_AGE: Duration = Duration::from_secs(120);
 pub const LOCAL_REKEY_INTERVAL: Duration = Duration::from_secs(100);
 /// Earliest repeat of a `KeyUpdate` absent byte-budget exhaustion (§5).
 pub const MIN_REKEY_INTERVAL: Duration = Duration::from_secs(1);
+/// Local quota on received `KeyUpdate`s (§13 permits smaller local limits):
+/// up to this many may arrive at once, then one per [`MIN_REKEY_INTERVAL`] on
+/// our monotonic clock. §5 lets a sender update at most once per second
+/// absent byte-budget exhaustion; updates sent a second apart can still
+/// arrive together after a transport stall or retransmission, so a small
+/// burst is tolerated. Four covers a few seconds of such bunching while
+/// keeping a misbehaving peer to one rekey per second on average. Updates
+/// justified by the byte budget are not counted.
+pub const KEY_UPDATE_BURST: u8 = 4;
+/// Local quota on received `Ping`s: up to [`PING_BURST`] at once, then one
+/// per this interval. A peer may have only one Ping outstanding (§13) and
+/// pings after 30 seconds without traffic; this bound tolerates other
+/// keepalive schedules and network bunching while capping the Pongs a peer
+/// can make us send.
+pub const MIN_PING_INTERVAL: Duration = Duration::from_secs(1);
+/// Received `Ping`s accepted at once; see [`MIN_PING_INTERVAL`]. Same
+/// bunching allowance as [`KEY_UPDATE_BURST`].
+pub const PING_BURST: u8 = 4;
 /// Send `Ping` after this long without authenticated traffic (§13).
 pub const PING_AFTER: Duration = Duration::from_secs(30);
 /// `Pong` must arrive within this (§13).
@@ -44,6 +62,27 @@ pub const MAX_SESSION_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 const KEY_UPDATE_CIPHERTEXT_LEN: usize = 28;
 /// Unknown noncritical frames per session (§13).
 const MAX_NONCRITICAL_FRAMES: u8 = 32;
+
+/// A rate limit for received events (generic cell rate algorithm): at most
+/// `burst` events at one instant, then one per `interval`.
+#[derive(Clone, Copy, Debug, Default)]
+struct RateLimit {
+    /// When the next event would conform with no burst credit left.
+    next: Option<Duration>,
+}
+
+impl RateLimit {
+    /// Records an event at `now` if it conforms; `false` if over the limit.
+    fn allow(&mut self, now: Duration, interval: Duration, burst: u8) -> bool {
+        let next = self.next.map_or(now, |next| next.max(now));
+        let credit = interval.saturating_mul(u32::from(burst.saturating_sub(1)));
+        if next.saturating_sub(now) > credit {
+            return false;
+        }
+        self.next = Some(next.saturating_add(interval));
+        true
+    }
+}
 
 /// Tunable bounds; production always uses [`Limits::SPEC`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +157,8 @@ pub(crate) struct FrameTransport {
     send: Direction,
     recv: Direction,
     last_update_sent: Option<Duration>,
+    /// Local quota on received `KeyUpdate`s ([`KEY_UPDATE_BURST`]).
+    received_updates: RateLimit,
     updates_allowed: bool,
     closed: bool,
 }
@@ -142,6 +183,7 @@ impl FrameTransport {
             send: Direction::new(now),
             recv: Direction::new(now),
             last_update_sent: None,
+            received_updates: RateLimit::default(),
             updates_allowed: false,
             closed: false,
         }
@@ -280,6 +322,18 @@ impl FrameTransport {
             if self.recv.epoch.checked_add(1) != Some(epoch) {
                 return Err(protocol(ErrorCode::STATE));
             }
+            // §5: at most one update per second unless the byte budget
+            // forced it, i.e. no further maximum-size ciphertext would have
+            // fit under the old key.
+            let budget_exhausted =
+                self.recv.bytes.saturating_add(MAX_CIPHERTEXT_LEN as u64) > self.limits.byte_budget;
+            if !budget_exhausted
+                && !self
+                    .received_updates
+                    .allow(now, MIN_REKEY_INTERVAL, KEY_UPDATE_BURST)
+            {
+                return Err(protocol(ErrorCode::LIMIT));
+            }
             self.noise.rekey_incoming();
             self.recv = Direction {
                 epoch,
@@ -338,6 +392,8 @@ pub(crate) struct SessionCore {
     deadline_is_expiry: bool,
     noncritical_frames: u8,
     peer_capabilities_seen: bool,
+    /// Local quota on received `Ping`s ([`PING_BURST`]).
+    received_pings: RateLimit,
     outgoing: VecDeque<Vec<u8>>,
 }
 
@@ -363,6 +419,7 @@ impl SessionCore {
             deadline_is_expiry,
             noncritical_frames: 0,
             peer_capabilities_seen: false,
+            received_pings: RateLimit::default(),
             outgoing: VecDeque::new(),
         }
     }
@@ -518,6 +575,12 @@ impl SessionCore {
         match frame_type {
             FrameType::PING => {
                 let nonce = decode_ping(&body).map_err(|_| protocol(ErrorCode::MALFORMED))?;
+                if !self
+                    .received_pings
+                    .allow(now, MIN_PING_INTERVAL, PING_BURST)
+                {
+                    return Err(protocol(ErrorCode::LIMIT));
+                }
                 let records = self
                     .transport
                     .seal(FrameType::PONG, &nonce.to_be_bytes(), now)?;

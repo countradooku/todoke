@@ -541,3 +541,122 @@ fn explicit_rekey_through_the_core() -> TestResult {
     assert!(format!("{a:?}").contains("send_epoch: 1"));
     Ok(())
 }
+
+/// §5 allows at most one `KeyUpdate` per second absent byte-budget
+/// exhaustion. Local quota (§13 permits smaller local limits): a burst of
+/// [`KEY_UPDATE_BURST`] for network bunching, then one per second; more is
+/// a session LIMIT error.
+#[test]
+fn received_key_updates_are_rate_limited() -> TestResult {
+    let second = MIN_REKEY_INTERVAL;
+    // A burst at one instant: the first KEY_UPDATE_BURST pass.
+    let (mut a, mut b) = pair(Limits::SPEC, true)?;
+    for _ in 0..KEY_UPDATE_BURST {
+        let update = a.key_update(T0)?;
+        assert!(matches!(b.open(body(&update)?, T0)?, Opened::KeyUpdated));
+    }
+    let excess = a.key_update(T0)?;
+    assert_eq!(
+        b.open(body(&excess)?, T0 + second / 2).map(|_| ()),
+        protocol_error(ErrorCode::LIMIT)
+    );
+    assert!(b.is_closed());
+    // The quota refills at one per second.
+    let (mut a, mut b) = pair(Limits::SPEC, true)?;
+    for _ in 0..KEY_UPDATE_BURST {
+        b.open(body(&a.key_update(T0)?)?, T0)?;
+    }
+    let later = T0 + second;
+    assert!(matches!(
+        b.open(body(&a.key_update(later)?)?, later)?,
+        Opened::KeyUpdated
+    ));
+    assert_eq!(
+        b.open(body(&a.key_update(later)?)?, later).map(|_| ()),
+        protocol_error(ErrorCode::LIMIT)
+    );
+    // A steady one per second is always accepted.
+    let (mut a, mut b) = pair(Limits::SPEC, true)?;
+    for step in 0..40 {
+        let now = T0 + second * step;
+        assert!(matches!(
+            b.open(body(&a.key_update(now)?)?, now)?,
+            Opened::KeyUpdated
+        ));
+    }
+    Ok(())
+}
+
+/// An update forced by the byte budget is not limited by time: the
+/// receiver accepts it when the previous key carried enough ciphertext that
+/// no further maximum-size frame would have fit.
+#[test]
+fn byte_budget_key_updates_bypass_the_rate_limit() -> TestResult {
+    let limits = Limits {
+        byte_budget: 200_000,
+    };
+    let (mut a, mut b) = pair(limits, true)?;
+    for _ in 0..KEY_UPDATE_BURST {
+        b.open(body(&a.key_update(T0)?)?, T0)?;
+    }
+    // Fill the receive budget to within one maximum-size ciphertext.
+    for _ in 0..3 {
+        let records = a.seal(FrameType::CAPABILITIES, &vec![0; 50_000], T0)?;
+        assert_eq!(records.len(), 1);
+        b.open(body(&records[0])?, T0)?;
+    }
+    assert!(matches!(
+        b.open(body(&a.key_update(T0)?)?, T0)?,
+        Opened::KeyUpdated
+    ));
+    // The new key carried nothing yet: the time quota applies again.
+    assert_eq!(
+        b.open(body(&a.key_update(T0)?)?, T0).map(|_| ()),
+        protocol_error(ErrorCode::LIMIT)
+    );
+    Ok(())
+}
+
+/// §13 allows one outstanding Ping per direction. Local quota: a burst of
+/// [`PING_BURST`], then one per [`MIN_PING_INTERVAL`]; more is a session
+/// LIMIT error, reported once.
+#[test]
+fn received_pings_are_rate_limited() -> TestResult {
+    let (mut a, mut b) = cores(MAX_SESSION_DURATION)?;
+    let ping = |a: &mut SessionCore, nonce: u64, now| -> AnyResult<Vec<u8>> {
+        let records = a
+            .transport
+            .seal(FrameType::PING, &nonce.to_be_bytes(), now)?;
+        Ok(body(&records[0])?.to_vec())
+    };
+    // What `a` sees from `b`, read below the keepalive logic.
+    let replies = |a: &mut SessionCore, b: &mut SessionCore| -> AnyResult<Vec<FrameType>> {
+        let mut types = Vec::new();
+        for record in drain(b) {
+            types.push(frame(a.transport.open(body(&record)?, T0)?)?.0);
+        }
+        Ok(types)
+    };
+    for nonce in 1..=u64::from(PING_BURST) {
+        assert!(b.receive(&ping(&mut a, nonce, T0)?, T0)?.is_none());
+    }
+    assert_eq!(
+        replies(&mut a, &mut b)?,
+        vec![FrameType::PONG; usize::from(PING_BURST)],
+        "every Ping answered"
+    );
+    let later = T0 + MIN_PING_INTERVAL;
+    assert!(b.receive(&ping(&mut a, 99, later)?, later)?.is_none());
+    assert_eq!(replies(&mut a, &mut b)?, vec![FrameType::PONG]);
+    assert_eq!(
+        b.receive(&ping(&mut a, 100, later)?, later).map(|_| ()),
+        Err(SessionError::Protocol(ErrorCode::LIMIT))
+    );
+    let records = drain(&mut b);
+    assert_eq!(records.len(), 1, "one Error, no Pong");
+    let (frame_type, error) = frame(a.transport.open(body(&records[0])?, T0)?)?;
+    assert_eq!(frame_type, FrameType::ERROR);
+    assert_eq!(ErrorRecord::decode(&error)?.code(), ErrorCode::LIMIT);
+    assert!(b.is_closed());
+    Ok(())
+}
