@@ -123,7 +123,7 @@ pub fn handshake_records(data: &[u8]) {
     let driver = if selector & 4 == 0 {
         let plan = match mode {
             SessionMode::Qr => ResponderPlan::qr(psk()),
-            SessionMode::Code => ResponderPlan::code(psk(), transcript()),
+            SessionMode::Code => ResponderPlan::code_with_psk(psk(), transcript()),
             SessionMode::Contact => {
                 ResponderPlan::contact(7, Zeroizing::new(PSK), *initiator_static.public_key())
             }
@@ -142,7 +142,7 @@ pub fn handshake_records(data: &[u8]) {
     } else {
         let plan = match mode {
             SessionMode::Qr => InitiatorPlan::qr([0xa1; 16], *responder_static.public_key(), psk()),
-            SessionMode::Code => InitiatorPlan::code([0xa1; 16], psk(), transcript()),
+            SessionMode::Code => InitiatorPlan::code_with_psk([0xa1; 16], psk(), transcript()),
             SessionMode::Contact => InitiatorPlan::contact(
                 7,
                 [0xa1; 16],

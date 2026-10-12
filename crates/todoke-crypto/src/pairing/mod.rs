@@ -1,24 +1,136 @@
-//! Pairing: the QR payload and human-code pairing (PROTOCOL §3, §10).
+//! QR and human-code pairing (PROTOCOL §3, §4.3, §4.4, §10, §13).
 //!
 //! Pairing is local intent to trust a device, never consent to receive a
 //! file (§3.1, §7). It ends in a contact with pinned keys and a ratcheted
 //! pair PSK, created only after a mutually authenticated session (§4.3)
 //! commits its first ratchet (§4.4).
 //!
+//! # QR pairing (`IKpsk2`)
+//!
+//! The displayer is the responder; the scanner is the initiator.
+//!
+//! ```text
+//! displayer                                   scanner
+//! offers.create_qr(&local, now, mono)
+//!   -> QrPayload::to_text()  ==== shown ====> QrPayload::from_text(text, now)
+//!                                             store.begin_qr_pairing(&payload, now)
+//!                                               -> (plan, authority)
+//! IncomingSession::accept(..)      <--------  Session::initiate(.., plan, &mut authority)
+//! offers.reserve(hello, now, mono)
+//!   -> reservation.into_qr_responder(&mut store)
+//!   -> (plan, authority)
+//! incoming.respond(.., plan, &mut authority)
+//! ```
+//!
+//! Both [`PairingAuthority`] values then do the same: verify the peer's
+//! binding under the root it names (trust in that root originates in this
+//! authenticated pairing, §2), check revocations and expiry, and — on the
+//! scanner — pin the responder's three full keys from the QR against that
+//! binding (§3.1). At the §4.4 journal they durably record the pending
+//! pairing and burn the offer in one write; the commit creates the contact
+//! through the same path as [`ContactStore::pair`](crate::identity::ContactStore::pair).
+//!
+//! # Offers and budgets
+//!
+//! [`PairingOffers`] holds the displayer's offers in memory and enforces
+//! one attempt per offer at a time, the code attempt budget, and the §13
+//! unauthenticated-attempt budget. A reservation that ends without reaching
+//! the journal frees a QR offer and counts as a failed attempt on a code
+//! offer.
+//!
 //! # Secrets
 //!
-//! The QR payload carries the displayer's one-time PSK. It is zeroized,
-//! redacted in `Debug`, and absent from every error. The QR text is
-//! sensitive: anyone who sees it may race to pair (§3.1), so it must not be
-//! logged, uploaded, placed in a URL, or passed across FFI as raw bytes.
-//! How a platform UI renders or scans it without that is open (O5).
+//! The QR payload carries the displayer's one-time PSK and the code is a
+//! password. Both are zeroized, redacted in `Debug`, and absent from every
+//! error. The QR text is sensitive: anyone who sees it may race to pair
+//! (§3.1), so it must not be logged, uploaded, placed in a URL, or passed
+//! across FFI as raw bytes. How a platform UI renders or scans it without
+//! that is open (O5).
 
+mod authority;
 mod base45;
+mod code;
 #[cfg(fuzzing)]
 pub mod fuzzing;
+mod offers;
 mod qr;
 
+use core::fmt;
+
+pub use authority::PairingAuthority;
+pub use code::{CODE_DIGITS, HumanCode, InvalidCode};
+pub use offers::{
+    CODE_ATTEMPT_SPACING, MAX_ATTEMPT_STARTS_PER_MINUTE, MAX_CODE_FAILURES,
+    MAX_CONCURRENT_ATTEMPTS, MAX_OFFERS, OfferKind, OfferReservation, PairingOffers,
+};
 pub use qr::{
     OFFER_LIFETIME_SECONDS, QR_MAGIC, QR_PAYLOAD_LEN, QR_TEXT_LEN, QR_TEXT_PREFIX, QrError,
     QrPayload, QrRendezvousError, RendezvousToken,
 };
+
+/// Why a pairing step was refused. Carries no secret, token, or pairing ID.
+/// Errors about an incoming attempt are for local reporting only: the
+/// stream is closed without telling the peer why (§3.2, §12).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PairingError {
+    /// The QR payload is invalid or expired.
+    Qr(QrError),
+    /// No live offer has this pairing ID (unknown, withdrawn, burned, or
+    /// exhausted), or the stranger token is not the advertised one.
+    UnknownOffer,
+    /// The offer expired.
+    Expired,
+    /// The Hello's mode does not match the offer's.
+    Mode,
+    /// Another attempt holds the offer.
+    OfferBusy,
+    /// Less than 2 seconds since the previous attempt on this code offer.
+    TooSoon,
+    /// The §13 unauthenticated-attempt budget is exhausted for now.
+    RateLimited,
+    /// [`MAX_OFFERS`] offers are live.
+    TooManyOffers,
+    /// This pairing ID was already used, or its pairing was interrupted
+    /// after its journal: scan or enter a new one (§3.1).
+    Burned,
+    /// Another new pairing is journaled in this store and not finished.
+    PairingInProgress,
+    /// The local binding is not valid now.
+    LocalIdentity,
+    /// OS randomness was unavailable.
+    Random,
+    /// The offer table is unusable after a panic elsewhere (fail closed).
+    Unavailable,
+}
+
+impl fmt::Display for PairingError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Qr(error) => write!(f, "QR payload rejected: {error}"),
+            Self::UnknownOffer => f.write_str("no such pairing offer"),
+            Self::Expired => f.write_str("pairing offer expired"),
+            Self::Mode => f.write_str("pairing mode does not match the offer"),
+            Self::OfferBusy => f.write_str("pairing offer is in use by another attempt"),
+            Self::TooSoon => f.write_str("pairing attempt too soon after the previous one"),
+            Self::RateLimited => f.write_str("too many pairing attempts; try again later"),
+            Self::TooManyOffers => f.write_str("too many pairing offers"),
+            Self::Burned => f.write_str("pairing offer already used; create a new one"),
+            Self::PairingInProgress => f.write_str("another pairing is in progress"),
+            Self::LocalIdentity => f.write_str("local identity is not valid now"),
+            Self::Random => f.write_str("randomness unavailable"),
+            Self::Unavailable => f.write_str("pairing offers unavailable"),
+        }
+    }
+}
+
+impl std::error::Error for PairingError {}
+
+impl From<QrError> for PairingError {
+    fn from(error: QrError) -> Self {
+        Self::Qr(error)
+    }
+}
+
+#[cfg(test)]
+mod tests;

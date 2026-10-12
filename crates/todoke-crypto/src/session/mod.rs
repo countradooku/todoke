@@ -29,12 +29,13 @@
 //!
 //! # Limitations
 //!
-//! - Only [`ContactAuthority`] (existing contacts, `KKpsk2`) is public. QR and
-//!   code pairing need an authority that burns the offer and creates the
-//!   contact when the ratchet commits; that belongs to the pairing work.
-//! - Code mode binds a caller-supplied [`CodeTranscript`] into the prologue;
-//!   `CodeOfferRequest`/`CodeOffer`/`CodeShare*` records are not exchanged
-//!   and `CPace` is not implemented (O2).
+//! - Plans come only from authorities: [`ContactAuthority`] for existing
+//!   contacts (`KKpsk2`) and [`PairingAuthority`](crate::pairing::PairingAuthority)
+//!   for QR pairing (`IKpsk2`, see [`crate::pairing`]), which burns the
+//!   offer and creates the contact when the ratchet commits.
+//! - Human-code pairing (`CPace`, then `XXpsk3`) is not wired into the
+//!   handshake yet; code mode exists only with a synthetic transcript in
+//!   tests and fuzzing.
 //! - A [`ContactAuthority`] borrows its [`ContactStore`](crate::identity::ContactStore)
 //!   mutably for the whole establishment, so one store serves one contact
 //!   session establishment at a time. That borrow is the only exclusion:
@@ -61,16 +62,16 @@
 //! temporaries; these residues are recorded under O6 in the ADR and are one
 //! reason this suite stays gated.
 
-mod authority;
+pub(crate) mod authority;
 mod engine;
-mod establish;
+pub(crate) mod establish;
 #[cfg(fuzzing)]
 pub mod fuzzing;
 mod handshake;
 mod io;
 pub(crate) mod kdf;
 mod keys;
-mod transport;
+pub(crate) mod transport;
 
 use core::fmt;
 
@@ -83,9 +84,12 @@ use crate::identity::{
 };
 
 pub use authority::{ContactAuthority, PeerAuthority, PeerPresentation, PendingRatchet};
-pub use handshake::{CodeTranscript, InitiatorPlan, ResponderPlan};
+#[cfg(test)]
+pub(crate) use handshake::CodeTranscript;
+pub use handshake::{InitiatorPlan, ResponderPlan};
 pub use io::{IncomingSession, Session, Timer};
-pub use keys::{InvalidNoiseKey, NoiseStaticKey, PairingPsk};
+pub(crate) use keys::PairingPsk;
+pub use keys::{InvalidNoiseKey, NoiseStaticKey};
 pub use todoke_proto::session::{
     ErrorCode, ErrorRecord, ErrorScope, FrameClass, FrameType, Hello, SessionMode,
 };
@@ -218,6 +222,8 @@ pub enum SessionError {
     /// An explicit rekey was requested less than one second after the last
     /// one (§5).
     RekeyTooSoon,
+    /// A pairing offer or pairing step was refused (§3). Local only.
+    Pairing(crate::pairing::PairingError),
 }
 
 impl fmt::Display for SessionError {
@@ -240,6 +246,7 @@ impl fmt::Display for SessionError {
             Self::Random => f.write_str("randomness unavailable"),
             Self::Usage => f.write_str("operation not permitted by the session layer"),
             Self::RekeyTooSoon => f.write_str("rekey requested too soon"),
+            Self::Pairing(error) => write!(f, "pairing refused: {error}"),
         }
     }
 }
@@ -392,4 +399,4 @@ impl<K: KeyStore> fmt::Debug for LocalIdentity<'_, K> {
 #[cfg(test)]
 pub(crate) mod test_vectors;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

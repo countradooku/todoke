@@ -5,7 +5,7 @@ use super::support::*;
 use crate::identity::VerificationState;
 use crate::identity::contacts::Unavailable;
 use crate::identity::{MemoryStorage, SoftwareSealer};
-use crate::session::authority::testing::{Journal, PairingAuthority, Recording};
+use crate::session::authority::testing::{Journal, Recording, ScriptedAuthority};
 use crate::session::establish::Phase;
 use crate::session::handshake::{CODE_OFFER_LEN, CODE_SHARE_LEN};
 use crate::session::{
@@ -172,16 +172,16 @@ fn qr_and_code_sessions_complete_with_pairing_authorities() -> TestResult {
                 ResponderPlan::qr(psk()),
             ),
             _ => (
-                InitiatorPlan::code(LOCATOR, psk(), transcript()),
-                ResponderPlan::code(psk(), transcript()),
+                InitiatorPlan::code_with_psk(LOCATOR, psk(), transcript()),
+                ResponderPlan::code_with_psk(psk(), transcript()),
             ),
         };
         // The QR scanner pins the displayer's device key; the displayer and
         // both code parties rely on the PSK alone.
         let pin = (mode == SessionMode::Qr).then(|| bob.key());
         let mut harness = Harness::new(
-            Side::initiator(alice.local()?, PairingAuthority::new(pin)),
-            Side::responder(bob.local()?, PairingAuthority::new(None), responder_plan),
+            Side::initiator(alice.local()?, ScriptedAuthority::new(pin)),
+            Side::responder(bob.local()?, ScriptedAuthority::new(None), responder_plan),
             plan,
         )?;
         harness.drain();
@@ -226,11 +226,11 @@ fn authorities_see_the_presented_peer_and_the_journaled_transaction() -> TestRes
     let mut harness = Harness::new(
         Side::initiator(
             alice.local()?,
-            Recording::new(PairingAuthority::new(Some(bob.key()))),
+            Recording::new(ScriptedAuthority::new(Some(bob.key()))),
         ),
         Side::responder(
             bob.local()?,
-            Recording::new(PairingAuthority::new(None)),
+            Recording::new(ScriptedAuthority::new(None)),
             ResponderPlan::qr(psk()),
         ),
         InitiatorPlan::qr(LOCATOR, *bob.noise.public_key(), psk()),
@@ -289,7 +289,7 @@ fn contact_authority_refuses_peers_of_pairing_sessions() -> TestResult {
         Side::initiator(alice_local, c.alice_store.session_authority(&bob_key)?),
         Side::responder(
             c.bob.local()?,
-            PairingAuthority::new(None),
+            ScriptedAuthority::new(None),
             ResponderPlan::qr(psk()),
         ),
         InitiatorPlan::qr(LOCATOR, *c.bob.noise.public_key(), psk()),
@@ -346,10 +346,10 @@ fn qr_pin_mismatch_fails_before_any_journal() -> TestResult {
     let bob = Device::new()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
     let mut harness = Harness::new(
-        Side::initiator(alice.local()?, PairingAuthority::new(Some(alice.key()))),
+        Side::initiator(alice.local()?, ScriptedAuthority::new(Some(alice.key()))),
         Side::responder(
             bob.local()?,
-            PairingAuthority::new(None),
+            ScriptedAuthority::new(None),
             ResponderPlan::qr(psk()),
         ),
         InitiatorPlan::qr(LOCATOR, *bob.noise.public_key(), psk()),
@@ -375,8 +375,8 @@ fn persistence_failure_at_each_step() -> TestResult {
     let bob = Device::new()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
     for (failing_side, step) in [(0, 1), (1, 1), (0, 2), (1, 2), (0, 3), (1, 3)] {
-        let mut initiator_authority = PairingAuthority::new(None);
-        let mut responder_authority = PairingAuthority::new(None);
+        let mut initiator_authority = ScriptedAuthority::new(None);
+        let mut responder_authority = ScriptedAuthority::new(None);
         if failing_side == 0 {
             initiator_authority.fail_step = Some(step);
         } else {

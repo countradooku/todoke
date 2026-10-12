@@ -14,8 +14,10 @@ use futures_io::{AsyncRead, AsyncWrite};
 use zeroize::Zeroizing;
 
 use super::support::*;
+use crate::identity::contacts::PairOutcome;
 use crate::identity::contacts::Unavailable;
-use crate::session::authority::testing::PairingAuthority;
+use crate::pairing::{PairingOffers, QrPayload};
+use crate::session::authority::testing::ScriptedAuthority;
 use crate::session::{
     ErrorCode, ErrorRecord, ErrorScope, FrameType, IncomingSession, InitiatorPlan, PairingPsk,
     ResponderPlan, Role, Session, SessionError, SessionMode, Timer, UnauditedSuite0001,
@@ -385,8 +387,62 @@ fn contact_session_over_a_byte_pipe() -> TestResult {
     Ok(())
 }
 
+/// Real QR pairing over the pipe: the displayer offers, the scanner reads
+/// the QR text, the displayer reserves its offer for the incoming Hello,
+/// and both create the contact.
 #[test]
-fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
+fn qr_pairing_over_a_byte_pipe() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let mut alice_store = empty_store()?;
+    let mut bob_store = empty_store()?;
+    let timer = ManualTimer::at(START);
+    let offers = PairingOffers::new();
+    let text = offers
+        .create_qr(&bob.local()?, wall, timer.now())?
+        .to_text();
+    let payload = QrPayload::from_text(&text, wall)?;
+    let (alice_end, bob_end) = duplex(4096);
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let (plan, mut initiator_authority) = alice_store.begin_qr_pairing(&payload, wall)?;
+    let initiator = Session::initiate(
+        alice_end,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        wall,
+        plan,
+        &mut initiator_authority,
+    );
+    let responder = async {
+        let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
+        let reservation = offers.reserve(incoming.client_hello(), wall, timer.now())?;
+        let (plan, mut authority) = reservation.into_qr_responder(&mut bob_store)?;
+        let session = incoming
+            .respond(&bob_local, wall, plan, &mut authority)
+            .await?;
+        Ok::<_, Box<dyn std::error::Error>>((session, authority.outcome()))
+    };
+    let (a, b) = join(initiator, responder)?;
+    let (a, (b, outcome)) = (a?, b?);
+    assert_eq!(a.mode(), SessionMode::Qr);
+    assert_eq!(a.handshake_hash(), b.handshake_hash());
+    assert_eq!(b.peer_binding().device_public(), &alice.key());
+    assert_eq!(outcome, Some(PairOutcome::New));
+    assert_eq!(initiator_authority.outcome(), Some(PairOutcome::New));
+    drop(initiator_authority);
+    let next =
+        crate::session::kdf::psk_next(a.handshake_hash(), payload.psk()).map_err(|_| "kdf")?;
+    assert_eq!(usable(&alice_store, &bob.key())?, Some((1, *next)));
+    assert_eq!(usable(&bob_store, &alice.key())?, Some((1, *next)));
+    Ok(())
+}
+
+/// The code-mode handshake over the pipe with a synthetic transcript and
+/// PSK, through the scripted authority (no `CPace`).
+#[test]
+fn synthetic_code_session_over_a_byte_pipe() -> TestResult {
     let wall = crate::identity::test_support::time(WALL)?;
     let alice = Device::new()?;
     let bob = Device::new()?;
@@ -398,46 +454,43 @@ fn qr_and_code_sessions_over_a_byte_pipe() -> TestResult {
             [3; crate::session::handshake::CODE_SHARE_LEN],
         )
     };
-    for mode in [SessionMode::Qr, SessionMode::Code] {
-        let timer = ManualTimer::at(START);
-        let (alice_end, bob_end) = duplex(4096);
-        let (alice_local, bob_local) = (alice.local()?, bob.local()?);
-        let plan = if mode == SessionMode::Qr {
-            InitiatorPlan::qr(LOCATOR, *bob.noise.public_key(), psk())
-        } else {
-            InitiatorPlan::code(LOCATOR, psk(), transcript())
-        };
-        let mut initiator_authority = PairingAuthority::new(Some(bob.key()));
-        let mut responder_authority = PairingAuthority::new(None);
-        let initiator = Session::initiate(
-            alice_end,
-            timer.clone(),
-            GATE,
-            &alice_local,
-            wall,
-            plan,
-            &mut initiator_authority,
-        );
-        let responder = async {
-            let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
-            let plan = if incoming.client_hello().mode() == SessionMode::Qr {
-                ResponderPlan::qr(psk())
-            } else {
-                ResponderPlan::code(psk(), transcript())
-            };
-            incoming
-                .respond(&bob_local, wall, plan, &mut responder_authority)
-                .await
-        };
-        let (a, b) = join(initiator, responder)?;
-        let (a, b) = (a?, b?);
-        assert_eq!(a.mode(), mode);
-        assert_eq!(a.handshake_hash(), b.handshake_hash());
-        assert_eq!(b.peer_binding().device_public(), &alice.key());
-        assert_eq!(initiator_authority.committed_generation, Some(1));
-        assert_eq!(responder_authority.committed_generation, Some(1));
-    }
+    let timer = ManualTimer::at(START);
+    let (alice_end, bob_end) = duplex(4096);
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let plan = InitiatorPlan::code_with_psk(LOCATOR, psk(), transcript());
+    let mut initiator_authority = ScriptedAuthority::new(Some(bob.key()));
+    let mut responder_authority = ScriptedAuthority::new(None);
+    let initiator = Session::initiate(
+        alice_end,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        wall,
+        plan,
+        &mut initiator_authority,
+    );
+    let responder = async {
+        let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
+        let plan = ResponderPlan::code_with_psk(psk(), transcript());
+        incoming
+            .respond(&bob_local, wall, plan, &mut responder_authority)
+            .await
+    };
+    let (a, b) = join(initiator, responder)?;
+    let (a, b) = (a?, b?);
+    assert_eq!(a.mode(), SessionMode::Code);
+    assert_eq!(a.handshake_hash(), b.handshake_hash());
+    assert_eq!(b.peer_binding().device_public(), &alice.key());
+    assert_eq!(initiator_authority.committed_generation, Some(1));
+    assert_eq!(responder_authority.committed_generation, Some(1));
     Ok(())
+}
+
+fn empty_store() -> AnyResult<Store> {
+    Ok(crate::identity::ContactStore::open(
+        crate::identity::test_support::sealer(9),
+        crate::identity::MemoryStorage::new(),
+    )?)
 }
 
 #[test]
@@ -1172,7 +1225,7 @@ fn refused_plans_send_nothing_and_a_dead_pipe_stays_closed() -> TestResult {
     let bob_local = bob.local()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
     let (alice_end, bob_end) = duplex(4096);
-    let mut authority = PairingAuthority::new(None);
+    let mut authority = ScriptedAuthority::new(None);
     let result = block_on(Session::initiate(
         alice_end,
         ManualTimer::at(START),
@@ -1206,7 +1259,7 @@ fn refused_plans_send_nothing_and_a_dead_pipe_stays_closed() -> TestResult {
     );
     let responder = async {
         let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
-        let mut authority = PairingAuthority::new(None);
+        let mut authority = ScriptedAuthority::new(None);
         incoming
             .respond(&bob_local, wall, ResponderPlan::qr(psk()), &mut authority)
             .await

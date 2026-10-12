@@ -10,7 +10,7 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `proto_revoke` | `todoke_proto::identity::Revoke::decode` (PROTOCOL §2) |
 | `crypto_binding_verification` | Ed25519 public-key validation, then binding key (Ed25519, X25519 small-order, ML-KEM) and strict signature checks under that key as root |
 | `crypto_keystore_plaintext` | Software key store blob plaintext (local format) |
-| `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations (local format) |
+| `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations and the pairing section (pending-pairing journal and burned pairing ledger) (local format) |
 | `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
 | `crypto_qr_payload` | `QrPayload::from_bytes` and `QrPayload::from_text`: exact lengths, `TODOKE:` prefix, canonical RFC 9285 Base45, magic, version, suite, pairing ID, Ed25519/X25519/ML-KEM key validation, and expiry, checked at the expiry the input claims so that expiry never masks the other checks (PROTOCOL §3.1) |
 | `proto_session_prelude` | Prelude length prefix and record split, `ClientHello`/`ServerHello` (echo check on a split input), and `NoiseHandshake` records for every mode (PROTOCOL §4.1, §4.2.5) |

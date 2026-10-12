@@ -181,7 +181,7 @@ fn code_pair(
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x44; 32]));
     let (initiator, client_hello) = HandshakeDriver::initiator(
         GATE,
-        InitiatorPlan::code([0x21; 16], psk(), transcript()),
+        InitiatorPlan::code_with_psk([0x21; 16], psk(), transcript()),
         &init_static,
         [0x22; 16],
         Entropy::Os,
@@ -191,7 +191,7 @@ fn code_pair(
     let (responder, server_hello) = HandshakeDriver::responder(
         GATE,
         hello,
-        ResponderPlan::code(psk(), responder_transcript),
+        ResponderPlan::code_with_psk(psk(), responder_transcript),
         &resp_static,
         [0x23; 16],
         Entropy::Os,
@@ -272,7 +272,7 @@ fn plan_and_hello_must_agree() -> TestResult {
         HandshakeDriver::responder(GATE, hello, plan, &key, [3; 16], Entropy::Os, T).map(|_| ())
     };
     assert_eq!(
-        mismatch(qr, ResponderPlan::code(psk(), transcript())),
+        mismatch(qr, ResponderPlan::code_with_psk(psk(), transcript())),
         Err(SessionError::Usage)
     );
     assert_eq!(
@@ -283,7 +283,7 @@ fn plan_and_hello_must_agree() -> TestResult {
         mismatch(contact, ResponderPlan::qr(psk())),
         Err(SessionError::Usage)
     );
-    assert!(mismatch(code, ResponderPlan::code(psk(), transcript())).is_ok());
+    assert!(mismatch(code, ResponderPlan::code_with_psk(psk(), transcript())).is_ok());
     assert!(mismatch(qr, ResponderPlan::qr(psk())).is_ok());
     // A zero locator cannot start a session.
     assert_eq!(
@@ -428,7 +428,10 @@ fn plans_do_not_print_locators_or_keys() {
     };
     let debug = [
         format!("{:?}", InitiatorPlan::qr([0xa7; 16], [0xb8; 32], psk())),
-        format!("{:?}", InitiatorPlan::code([0xa7; 16], psk(), transcript())),
+        format!(
+            "{:?}",
+            InitiatorPlan::code_with_psk([0xa7; 16], psk(), transcript())
+        ),
         format!(
             "{:?}",
             InitiatorPlan::contact(9, [0xa7; 16], Zeroizing::new([0x44; 32]), [0xb8; 32])

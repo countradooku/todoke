@@ -121,13 +121,6 @@ pub struct QrPayload {
 
 impl QrPayload {
     /// Assembles a payload from already validated keys (offer creation).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by QR offers, added with the pairing authority"
-        )
-    )]
     pub(crate) fn new(
         pairing_id: [u8; 16],
         expires_at: UnixTime,
@@ -311,10 +304,6 @@ impl QrPayload {
             .map_err(|_| QrRendezvousError)
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the QR pairing authority, added next")
-    )]
     pub(crate) fn psk(&self) -> &Zeroizing<[u8; 32]> {
         &self.psk
     }

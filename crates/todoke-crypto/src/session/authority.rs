@@ -4,8 +4,8 @@
 //! [`PeerAuthority`] is sealed: only this crate implements it, because its
 //! methods handle the next pair PSK. [`ContactAuthority`] serves existing
 //! contacts (`KKpsk2`) from a [`ContactStore`]. QR and code pairing create a
-//! new contact when their ratchet commits; that authority belongs to the
-//! pairing work and is not implemented yet.
+//! new contact when their ratchet commits through
+//! [`PairingAuthority`](crate::pairing::PairingAuthority).
 
 use core::fmt;
 
@@ -43,6 +43,13 @@ impl PeerPresentation<'_> {
     #[must_use]
     pub fn binding(&self) -> &DeviceBinding {
         self.binding
+    }
+
+    /// The trusted wall-clock time of this step, derived from the time the
+    /// session started plus monotonic elapsed time.
+    #[must_use]
+    pub fn now(&self) -> UnixTime {
+        self.now
     }
 }
 
@@ -89,6 +96,10 @@ impl PendingRatchet {
     pub fn peer(&self) -> &VerifiedDeviceBinding {
         &self.peer
     }
+
+    pub(crate) fn psk_next(&self) -> &[u8; 32] {
+        &self.psk_next
+    }
 }
 
 impl fmt::Debug for PendingRatchet {
@@ -101,7 +112,7 @@ impl fmt::Debug for PendingRatchet {
     }
 }
 
-mod sealed {
+pub(crate) mod sealed {
     pub trait Sealed {}
 }
 
@@ -332,8 +343,12 @@ impl<S: Sealer, B: BlobStorage> fmt::Debug for ContactAuthority<'_, S, B> {
     }
 }
 
-/// A pairing-mode authority for tests: no stored contact, an optional pin
-/// of the peer's full keys, and an in-memory journal with failure injection.
+/// A scripted pairing-mode authority for session-layer tests: no stored
+/// contact, an optional pin of the peer's device key, and an in-memory
+/// journal with step-by-step failure injection. Real QR pairing uses
+/// [`PairingAuthority`](crate::pairing::PairingAuthority) (tested in
+/// `pairing::tests`); this one remains for injecting a failure at an exact
+/// step and for the synthetic code-mode transcript.
 #[cfg(test)]
 pub(crate) mod testing {
     use super::*;
@@ -349,7 +364,7 @@ pub(crate) mod testing {
     }
 
     #[derive(Debug)]
-    pub(crate) struct PairingAuthority {
+    pub(crate) struct ScriptedAuthority {
         pub(crate) pinned_device: Option<Ed25519PublicKey>,
         pub(crate) journal: Journal,
         pub(crate) committed_psk: Option<Zeroizing<[u8; 32]>>,
@@ -359,7 +374,7 @@ pub(crate) mod testing {
         pub(crate) fail_step: Option<u8>,
     }
 
-    impl PairingAuthority {
+    impl ScriptedAuthority {
         pub(crate) fn new(pinned_device: Option<Ed25519PublicKey>) -> Self {
             Self {
                 pinned_device,
@@ -381,9 +396,9 @@ pub(crate) mod testing {
         }
     }
 
-    impl sealed::Sealed for PairingAuthority {}
+    impl sealed::Sealed for ScriptedAuthority {}
 
-    impl PeerAuthority for PairingAuthority {
+    impl PeerAuthority for ScriptedAuthority {
         fn confirm_peer(
             &mut self,
             presented: &PeerPresentation<'_>,

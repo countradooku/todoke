@@ -6,7 +6,7 @@ use crate::identity::{BindingError, VerificationState};
 use crate::identity::{IdentityError, MemoryStorage, SoftwareSealer, issue_device_binding};
 use crate::session::ContactAuthority;
 use crate::session::NoiseStaticKey;
-use crate::session::authority::testing::{Journal, PairingAuthority, Substituting};
+use crate::session::authority::testing::{Journal, ScriptedAuthority, Substituting};
 use crate::session::handshake::{HandshakeDriver, InitiatorPlan, ResponderPlan, read_client_hello};
 use crate::session::tests::support::*;
 use todoke_proto::session::ErrorScope;
@@ -416,13 +416,13 @@ fn open_pair(
 ) -> AnyResult<(
     Establishment,
     Establishment,
-    PairingAuthority,
-    PairingAuthority,
+    ScriptedAuthority,
+    ScriptedAuthority,
 )> {
     let (mut initiator, mut responder) = established_pair(alice, bob)?;
     let (alice_local, bob_local) = (alice.local()?, bob.local()?);
-    let mut alice_authority = PairingAuthority::new(Some(bob.key()));
-    let mut bob_authority = PairingAuthority::new(None);
+    let mut alice_authority = ScriptedAuthority::new(Some(bob.key()));
+    let mut bob_authority = ScriptedAuthority::new(None);
     let mut to_responder = initiator.start(&alice_local, START)?;
     while let Some(record) = to_responder.pop() {
         for reply in
@@ -450,7 +450,7 @@ fn phase_guards_around_the_open_gate() -> TestResult {
     let alice = Device::new()?;
     let bob = Device::new()?;
     let (mut initiator, _) = established_pair(&alice, &bob)?;
-    let mut authority = PairingAuthority::new(None);
+    let mut authority = ScriptedAuthority::new(None);
     assert_eq!(initiator.ack_queued(&mut authority), Err(state()));
     assert_eq!(
         initiator
@@ -492,7 +492,7 @@ fn an_authority_that_confirms_other_keys_is_refused() -> TestResult {
     let (mut initiator, mut responder) = established_pair(&alice, &bob)?;
     let records = initiator.start(&alice.local()?, START)?;
     let mut authority = Substituting {
-        inner: PairingAuthority::new(None),
+        inner: ScriptedAuthority::new(None),
         substitute: alice.enrolled.bind_noise(2, *alice.noise.public_key())?,
     };
     assert_eq!(
@@ -559,7 +559,7 @@ fn generation_exhaustion_requires_new_pairing() -> TestResult {
     let (mut initiator, _) = established_pair(&alice, &bob)?;
     initiator.generation = u64::MAX;
     initiator.peer = Some(bob.binding.clone());
-    let mut authority = crate::session::authority::testing::PairingAuthority::new(None);
+    let mut authority = crate::session::authority::testing::ScriptedAuthority::new(None);
     assert_eq!(
         initiator.begin_ratchet(&mut authority),
         Err(SessionError::GenerationExhausted)

@@ -31,12 +31,10 @@ pub(crate) const CODE_SHARE_LEN: usize = 49;
 /// The public code-pairing records that §3.2 binds into the XX prologue:
 /// `code_offer = CodeOfferRequest || CodeOffer` and both `CPace` shares.
 ///
-/// The code-pairing layer (`CPace`, O2) is not implemented: this crate does
-/// not exchange or validate these records. They are supplied by the caller
-/// and only enter the prologue `code_offer || ClientHello || ServerHello ||
+/// They enter the prologue `code_offer || ClientHello || ServerHello ||
 /// CodeShareA || CodeShareB`.
 #[derive(Clone, PartialEq, Eq)]
-pub struct CodeTranscript {
+pub(crate) struct CodeTranscript {
     code_offer: [u8; CODE_OFFER_LEN],
     share_a: [u8; CODE_SHARE_LEN],
     share_b: [u8; CODE_SHARE_LEN],
@@ -44,8 +42,9 @@ pub struct CodeTranscript {
 
 impl CodeTranscript {
     /// Wraps the exact public bodies.
+    #[cfg(any(test, fuzzing))]
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         code_offer: [u8; CODE_OFFER_LEN],
         share_a: [u8; CODE_SHARE_LEN],
         share_b: [u8; CODE_SHARE_LEN],
@@ -66,6 +65,9 @@ impl fmt::Debug for CodeTranscript {
 
 /// What the initiator needs before sending `ClientHello`. `Debug` omits
 /// the locator (§14.2: contact tokens are not logged) and the keys.
+///
+/// Only authorities build plans: [`ContactAuthority::initiator_plan`](crate::session::ContactAuthority::initiator_plan)
+/// and [`ContactStore::begin_qr_pairing`](crate::identity::ContactStore::begin_qr_pairing).
 pub struct InitiatorPlan {
     mode: SessionMode,
     generation: u64,
@@ -79,7 +81,11 @@ impl InitiatorPlan {
     /// QR pairing (`IKpsk2`): the scanner pins the responder's Noise static
     /// key from the QR payload and uses its one-time PSK (§3.1).
     #[must_use]
-    pub fn qr(pairing_id: [u8; 16], responder_noise_static: [u8; 32], psk: PairingPsk) -> Self {
+    pub(crate) fn qr(
+        pairing_id: [u8; 16],
+        responder_noise_static: [u8; 32],
+        psk: PairingPsk,
+    ) -> Self {
         Self {
             mode: SessionMode::Qr,
             generation: 0,
@@ -90,9 +96,16 @@ impl InitiatorPlan {
         }
     }
 
-    /// Code pairing (`XXpsk3`) with a CPace-derived PSK (§3.2).
+    /// Code-mode handshake with a caller-chosen PSK and transcript, for the
+    /// public `XXpsk3` fixture and handshake tests only: real code pairing
+    /// derives both from `CPace` (§3.2).
+    #[cfg(any(test, fuzzing))]
     #[must_use]
-    pub fn code(pairing_id: [u8; 16], psk: PairingPsk, transcript: CodeTranscript) -> Self {
+    pub(crate) fn code_with_psk(
+        pairing_id: [u8; 16],
+        psk: PairingPsk,
+        transcript: CodeTranscript,
+    ) -> Self {
         Self {
             mode: SessionMode::Code,
             generation: 0,
@@ -128,6 +141,9 @@ impl InitiatorPlan {
 
 /// What the responder needs after reading `ClientHello`. `Debug` omits
 /// the keys.
+///
+/// Only authorities build plans: [`ContactAuthority::responder_plan`](crate::session::ContactAuthority::responder_plan)
+/// and [`OfferReservation::into_qr_responder`](crate::pairing::OfferReservation::into_qr_responder).
 pub struct ResponderPlan {
     mode: SessionMode,
     generation: u64,
@@ -139,7 +155,7 @@ pub struct ResponderPlan {
 impl ResponderPlan {
     /// QR pairing: the displayer's one-time PSK (§3.1).
     #[must_use]
-    pub fn qr(psk: PairingPsk) -> Self {
+    pub(crate) fn qr(psk: PairingPsk) -> Self {
         Self {
             mode: SessionMode::Qr,
             generation: 0,
@@ -149,9 +165,10 @@ impl ResponderPlan {
         }
     }
 
-    /// Code pairing with a CPace-derived PSK (§3.2).
+    /// See [`InitiatorPlan::code_with_psk`]: fixture and tests only.
+    #[cfg(any(test, fuzzing))]
     #[must_use]
-    pub fn code(psk: PairingPsk, transcript: CodeTranscript) -> Self {
+    pub(crate) fn code_with_psk(psk: PairingPsk, transcript: CodeTranscript) -> Self {
         Self {
             mode: SessionMode::Code,
             generation: 0,

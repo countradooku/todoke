@@ -85,14 +85,15 @@ impl std::error::Error for InvalidNoiseKey {}
 /// A 32-byte pairing PSK: a QR one-time PSK (§3.1) or a CPace-derived PSK
 /// (§3.2). Zeroized on drop; `Debug` is redacted; there is no accessor.
 ///
-/// Contact sessions never use this type: their PSK stays inside the
-/// [`ContactStore`](crate::identity::ContactStore).
-pub struct PairingPsk(pub(crate) Zeroizing<[u8; 32]>);
+/// It never leaves this crate: pairing authorities build it from a QR
+/// payload, an offer, or the `CPace` result. Contact sessions never use it;
+/// their PSK stays inside the [`ContactStore`](crate::identity::ContactStore).
+pub(crate) struct PairingPsk(pub(crate) Zeroizing<[u8; 32]>);
 
 impl PairingPsk {
     /// Wraps PSK bytes obtained from a QR payload or the PAKE layer.
     #[must_use]
-    pub fn from_bytes(bytes: Zeroizing<[u8; 32]>) -> Self {
+    pub(crate) fn from_bytes(bytes: Zeroizing<[u8; 32]>) -> Self {
         Self(bytes)
     }
 }

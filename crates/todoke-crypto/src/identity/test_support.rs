@@ -125,6 +125,14 @@ impl SwitchableStorage {
         (storage, switch)
     }
 
+    /// Storage that already holds `blob`, failing writes while `failing`
+    /// is on: what a restarted process sees.
+    pub(crate) fn restarted(blob: Option<Vec<u8>>, failing: Rc<Cell<bool>>) -> Self {
+        let mut inner = MemoryStorage::new();
+        inner.set_blob(blob);
+        Self { inner, failing }
+    }
+
     /// The last successfully stored blob.
     pub(crate) fn blob(&self) -> Option<&[u8]> {
         self.inner.blob()
