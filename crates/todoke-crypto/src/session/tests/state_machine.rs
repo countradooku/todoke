@@ -220,7 +220,7 @@ fn run(ops: &[Op]) -> Result<(), TestCaseError> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(48))]
+    #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
     fn adversarial_wire_and_crashes_preserve_the_ratchet_policy(
