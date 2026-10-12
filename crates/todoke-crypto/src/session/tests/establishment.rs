@@ -755,3 +755,108 @@ fn exhausted_generation_blocks_the_contact_until_re_pairing() -> TestResult {
     assert_eq!(usable(&c.alice_store, &bob_key)?, Some((0, [0x42; 32])));
     Ok(())
 }
+
+/// Blob storage that fails every write once switched.
+#[derive(Default)]
+struct Flaky {
+    blob: Option<Vec<u8>>,
+    fail: std::rc::Rc<std::cell::Cell<bool>>,
+}
+
+impl crate::identity::BlobStorage for Flaky {
+    fn load(
+        &self,
+        max_len: usize,
+    ) -> Result<Option<Vec<u8>>, crate::identity::storage::StorageError> {
+        Ok(self.blob.clone().filter(|blob| blob.len() <= max_len))
+    }
+
+    fn store(&mut self, bytes: &[u8]) -> Result<(), crate::identity::storage::StorageError> {
+        if self.fail.get() {
+            return Err(crate::identity::storage::StorageError::Io(
+                std::io::ErrorKind::Other,
+            ));
+        }
+        self.blob = Some(bytes.to_vec());
+        Ok(())
+    }
+}
+
+/// A contact store whose writes fail during the session: a failed identity
+/// update (a renewed peer binding) or a failed journal write surfaces as
+/// [`SessionError::Storage`], nothing is journaled durably, and the durable
+/// pairing stays at the old generation and PSK.
+#[test]
+fn contact_store_write_failures_surface_as_storage_errors() -> TestResult {
+    for renewed in [true, false] {
+        let alice = Device::new()?;
+        let bob = Device::new()?;
+        let fail = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut alice_store = crate::identity::ContactStore::open(
+            crate::identity::test_support::sealer(9),
+            Flaky {
+                blob: None,
+                fail: std::rc::Rc::clone(&fail),
+            },
+        )?;
+        alice_store.pair(
+            &bob.binding,
+            crate::identity::TrustOrigin::QrPairing,
+            crate::identity::contacts::PairPsk::new(OLD_PSK),
+            GENERATION,
+            crate::identity::test_support::time(crate::identity::test_support::T0)?,
+        )?;
+        let mut bob_store = store_pairing(&alice, GENERATION)?;
+        // A renewed binding of Bob's (serial 2) makes Alice's store record
+        // the newer serial, which is a write.
+        let bob_binding = if renewed {
+            bob.enrolled.bind_noise(2, *bob.noise.public_key())?
+        } else {
+            bob.binding.clone()
+        };
+        let bob_local = crate::session::LocalIdentity::new(
+            &bob.enrolled.store,
+            bob.enrolled.device,
+            &bob_binding,
+            &bob.noise,
+            todoke_proto::time::UnixTime::new(WALL).ok_or("time")?,
+        )?;
+        let (bob_key, alice_key) = (bob.key(), alice.key());
+        let initiator_authority = alice_store.session_authority(&bob_key)?;
+        let plan = initiator_authority.initiator_plan(LOCATOR)?;
+        let responder_authority = bob_store.session_authority(&alice_key)?;
+        let hello = todoke_proto::session::Hello::client(
+            SessionMode::Contact,
+            GENERATION,
+            LOCATOR,
+            [1; 16],
+        )?;
+        let responder_plan = responder_authority.responder_plan(&hello)?;
+        let mut harness = Harness::new(
+            Side::initiator(alice.local()?, initiator_authority),
+            Side::responder(bob_local, responder_authority, responder_plan),
+            plan,
+        )?;
+        fail.set(true);
+        harness.drain();
+        harness.finish();
+        assert!(
+            matches!(harness.initiator.error(), Some(SessionError::Storage(_))),
+            "renewed {renewed}: {:?}",
+            harness.initiator.error()
+        );
+        drop(harness);
+        // Durable state: still the old pairing, no journal.
+        let mut storage = MemoryStorage::new();
+        storage.set_blob(alice_store.storage().blob.clone());
+        let durable =
+            crate::identity::ContactStore::open(crate::identity::test_support::sealer(9), storage)?;
+        assert_eq!(
+            usable(&durable, &bob_key)?,
+            Some((GENERATION, OLD_PSK)),
+            "renewed {renewed}"
+        );
+        assert_eq!(usable(&bob_store, &alice_key)?, Some((GENERATION, OLD_PSK)));
+    }
+    Ok(())
+}
