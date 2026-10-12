@@ -373,6 +373,10 @@ fn forged_ready_after_the_initiator_journaled_blocks_it() -> TestResult {
         let ready =
             initiator.receive(record_body(&reply[0]), &alice_local, &mut authority, START)?;
         assert_eq!(ready.len(), 1);
+        // The journaled transaction is this contact's next generation.
+        let pending = initiator.pending.as_ref().ok_or("nothing journaled")?;
+        assert_eq!(pending.generation_next(), GENERATION + 1);
+        assert_eq!(pending.handshake_hash(), &initiator.handshake_hash);
         let forged = seal(
             &mut responder,
             FrameType::RATCHET_READY,
