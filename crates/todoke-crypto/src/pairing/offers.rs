@@ -30,9 +30,9 @@ use todoke_proto::session::{Hello, SessionMode};
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
-use super::PairingError;
 use super::code::HumanCode;
 use super::qr::{OFFER_LIFETIME_SECONDS, QrPayload};
+use super::{PairingError, UnauditedCodePairing};
 use crate::identity::KeyStore;
 use crate::rng;
 use crate::session::LocalIdentity;
@@ -237,7 +237,31 @@ impl PairingOffers {
     ///
     /// [`PairingError::OfferBusy`] while an attempt holds the current code,
     /// [`PairingError::TooManyOffers`], or [`PairingError::Random`].
-    pub fn create_code(&self, now: UnixTime, mono: Duration) -> Result<HumanCode, PairingError> {
+    ///
+    /// Human-code pairing is disabled for production (PROTOCOL §16, O2), so
+    /// this needs the [`UnauditedCodePairing`] acknowledgement: a build
+    /// without the `unaudited-code-pairing` feature cannot create a code
+    /// that no path there could honour.
+    ///
+    #[cfg_attr(not(feature = "unaudited-code-pairing"), doc = "```compile_fail")]
+    #[cfg_attr(feature = "unaudited-code-pairing", doc = "```")]
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use core::time::Duration;
+    /// use todoke_crypto::pairing::{PairingOffers, UnauditedCodePairing};
+    /// let offers = PairingOffers::new();
+    /// let now = todoke_proto::time::UnixTime::new(1_800_000_000).ok_or("time")?;
+    /// let gate = UnauditedCodePairing::acknowledge_not_production_ready();
+    /// let code = offers.create_code(gate, now, Duration::ZERO)?;
+    /// assert_eq!(code.as_str().len(), 10);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_code(
+        &self,
+        _gate: UnauditedCodePairing,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<HumanCode, PairingError> {
         let code = HumanCode::generate().map_err(|_| PairingError::Random)?;
         let mut table = self.lock()?;
         if table
@@ -287,12 +311,31 @@ impl PairingOffers {
     /// (`advertised`, from the discovery layer). The offer is public; any
     /// number of requests may receive it, and none reserves it.
     ///
+    /// Needs the [`UnauditedCodePairing`] acknowledgement, like every
+    /// code-pairing entry point:
+    ///
+    #[cfg_attr(not(feature = "unaudited-code-pairing"), doc = "```compile_fail")]
+    #[cfg_attr(feature = "unaudited-code-pairing", doc = "```")]
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use core::time::Duration;
+    /// use todoke_crypto::pairing::{PairingError, PairingOffers, UnauditedCodePairing};
+    /// let offers = PairingOffers::new();
+    /// let now = todoke_proto::time::UnixTime::new(1_800_000_000).ok_or("time")?;
+    /// let request = todoke_proto::pairing::CodeOfferRequest::new([7; 8])?;
+    /// let gate = UnauditedCodePairing::acknowledge_not_production_ready();
+    /// let answer = offers.answer_code_request(gate, &request, &[7; 8], now, Duration::ZERO);
+    /// assert_eq!(answer.err(), Some(PairingError::UnknownOffer));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
     /// # Errors
     ///
     /// [`PairingError::UnknownOffer`] for a stale or unknown token or when
     /// no code offer is live: close the stream silently.
     pub fn answer_code_request(
         &self,
+        _gate: UnauditedCodePairing,
         request: &CodeOfferRequest,
         advertised: &[u8; STRANGER_TOKEN_LEN],
         now: UnixTime,

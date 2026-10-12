@@ -415,7 +415,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
     /// Hello.
     pub async fn answer(
         self,
-        _code_gate: UnauditedCodePairing,
+        code_gate: UnauditedCodePairing,
         offers: &PairingOffers,
         advertised: &[u8; STRANGER_TOKEN_LEN],
         now: UnixTime,
@@ -428,7 +428,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
             permit,
         } = self;
         let offer = offers
-            .answer_code_request(&request, advertised, now, conn.now())
+            .answer_code_request(code_gate, &request, advertised, now, conn.now())
             .map_err(SessionError::Pairing)?;
         let record = encode_prelude_record(PreludeKind::CodeOffer, &offer.encode())
             .map_err(|_| SessionError::Usage)?;

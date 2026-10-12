@@ -9,6 +9,7 @@ use crate::pairing::QrPayload;
 use crate::session::tests::support::{AnyResult, Device, TestResult};
 
 const MONO: Duration = Duration::from_secs(1_000);
+const CODE_GATE: UnauditedCodePairing = UnauditedCodePairing::acknowledge_not_production_ready();
 
 fn now() -> AnyResult<UnixTime> {
     Ok(UnixTime::new(T0 + 60).ok_or("time")?)
@@ -158,7 +159,7 @@ fn reserve_checks_id_mode_and_expiry() -> TestResult {
 #[test]
 fn code_offers_count_failures_and_space_attempts() -> TestResult {
     let offers = PairingOffers::new();
-    let code = offers.create_code(now()?, MONO)?;
+    let code = offers.create_code(CODE_GATE, now()?, MONO)?;
     assert_eq!(code.as_str().len(), 10);
     let id = offers.code_pairing_id().ok_or("code offer")?;
     let mut mono = MONO;
@@ -196,7 +197,7 @@ fn code_offers_count_failures_and_space_attempts() -> TestResult {
             .err(),
         Some(PairingError::UnknownOffer)
     );
-    let fresh = offers.create_code(now()?, mono)?;
+    let fresh = offers.create_code(CODE_GATE, now()?, mono)?;
     let fresh_id = offers.code_pairing_id().ok_or("code offer")?;
     assert_ne!(fresh_id, id);
     assert_ne!(fresh.as_str(), "");
@@ -206,13 +207,13 @@ fn code_offers_count_failures_and_space_attempts() -> TestResult {
 #[test]
 fn a_new_code_replaces_the_old_one() -> TestResult {
     let offers = PairingOffers::new();
-    offers.create_code(now()?, MONO)?;
+    offers.create_code(CODE_GATE, now()?, MONO)?;
     let first = offers.code_pairing_id().ok_or("first")?;
     // While an attempt holds the code, a new code is refused instead of
     // silently replacing it, and the attempt keeps its offer.
     let held = offers.reserve(&hello(SessionMode::Code, first)?, now()?, MONO)?;
     assert_eq!(
-        offers.create_code(now()?, MONO).err(),
+        offers.create_code(CODE_GATE, now()?, MONO).err(),
         Some(PairingError::OfferBusy)
     );
     assert_eq!(offers.code_pairing_id(), Some(first));
@@ -220,7 +221,7 @@ fn a_new_code_replaces_the_old_one() -> TestResult {
     drop(held);
     assert_eq!(offers.failures(&first), Some(1));
     // Free again: the new code replaces it.
-    offers.create_code(now()?, MONO)?;
+    offers.create_code(CODE_GATE, now()?, MONO)?;
     let second = offers.code_pairing_id().ok_or("second")?;
     assert_ne!(first, second);
     assert_eq!(offers.live(OfferKind::Code, now()?, MONO), 1);
@@ -242,7 +243,7 @@ fn a_new_code_replaces_the_old_one() -> TestResult {
         MONO + CODE_ATTEMPT_SPACING,
     )?;
     offers.cancel_all();
-    offers.create_code(now()?, MONO + CODE_ATTEMPT_SPACING)?;
+    offers.create_code(CODE_GATE, now()?, MONO + CODE_ATTEMPT_SPACING)?;
     let third = offers.code_pairing_id().ok_or("third")?;
     assert_ne!(third, second);
     assert!(!stale.still_offered());
@@ -260,7 +261,7 @@ fn a_new_code_replaces_the_old_one() -> TestResult {
 #[test]
 fn code_hellos_without_the_offer_exchange_never_reserve() -> TestResult {
     let offers = PairingOffers::new();
-    offers.create_code(now()?, MONO)?;
+    offers.create_code(CODE_GATE, now()?, MONO)?;
     let id = offers.code_pairing_id().ok_or("code offer")?;
     let bare = hello(SessionMode::Code, id)?;
     for attempt in 0..u32::from(MAX_CODE_FAILURES) * 5 {
@@ -307,22 +308,22 @@ fn code_requests_need_the_advertised_token_and_never_reserve() -> TestResult {
     let request = CodeOfferRequest::new([0x5e; 8])?;
     assert_eq!(
         offers
-            .answer_code_request(&request, &[0x5e; 8], now()?, MONO)
+            .answer_code_request(CODE_GATE, &request, &[0x5e; 8], now()?, MONO)
             .err(),
         Some(PairingError::UnknownOffer)
     );
-    offers.create_code(now()?, MONO)?;
+    offers.create_code(CODE_GATE, now()?, MONO)?;
     let id = offers.code_pairing_id().ok_or("code offer")?;
     assert_eq!(
         offers
-            .answer_code_request(&request, &[0x5f; 8], now()?, MONO)
+            .answer_code_request(CODE_GATE, &request, &[0x5f; 8], now()?, MONO)
             .err(),
         Some(PairingError::UnknownOffer)
     );
     let _held = offers.reserve(&hello(SessionMode::Code, id)?, now()?, MONO)?;
     // Concurrent requests still receive the public offer.
     for _ in 0..3 {
-        let offer = offers.answer_code_request(&request, &[0x5e; 8], now()?, MONO)?;
+        let offer = offers.answer_code_request(CODE_GATE, &request, &[0x5e; 8], now()?, MONO)?;
         assert_eq!(offer.pairing_id(), &id);
         assert_eq!(offer.stranger_token(), &[0x5e; 8]);
         assert_eq!(
@@ -332,7 +333,7 @@ fn code_requests_need_the_advertised_token_and_never_reserve() -> TestResult {
     }
     assert_eq!(
         offers
-            .answer_code_request(&request, &[0x5e; 8], later(300)?, MONO)
+            .answer_code_request(CODE_GATE, &request, &[0x5e; 8], later(300)?, MONO)
             .err(),
         Some(PairingError::UnknownOffer)
     );
@@ -534,7 +535,7 @@ proptest! {
                     }
                     let count = model.values().filter(|m| live(m) || (m.reserved && !m.burned && !m.restarted)).count();
                     let result = if code {
-                        offers.create_code(wall, mono).map(|_| offers.code_pairing_id())
+                        offers.create_code(CODE_GATE, wall, mono).map(|_| offers.code_pairing_id())
                     } else {
                         offers.create_qr(&local, wall, mono).map(|payload| Some(*payload.pairing_id()))
                     };

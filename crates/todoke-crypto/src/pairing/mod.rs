@@ -39,7 +39,7 @@
 //!
 //! ```text
 //! displayer                                   entrant
-//! offers.create_code(now, mono) -> HumanCode == shown ==> HumanCode::parse(typed)
+//! offers.create_code(gate, ..) -> HumanCode == shown ==> HumanCode::parse(typed)
 //! IncomingSession::accept_any(..)  <-- CodeOfferRequest --  Session::initiate_code_pairing(
 //!   -> request.answer(gate, &offers, token, now)              .., token, &code, &mut store)
 //!                                  --- CodeOffer --->

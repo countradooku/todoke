@@ -48,9 +48,9 @@ struct CodePairing {
 impl CodePairing {
     fn new() -> AnyResult<Self> {
         let offers = PairingOffers::new();
-        let shown = offers.create_code(wall()?, MONO)?;
+        let shown = offers.create_code(CODE_GATE, wall()?, MONO)?;
         let request = CodeOfferRequest::new(TOKEN)?;
-        let offer = offers.answer_code_request(&request, &TOKEN, wall()?, MONO)?;
+        let offer = offers.answer_code_request(CODE_GATE, &request, &TOKEN, wall()?, MONO)?;
         Ok(Self {
             entrant: Device::new()?,
             displayer: Device::new()?,
@@ -226,7 +226,7 @@ fn a_man_in_the_middle_with_a_guessed_code_fails_on_both_sides() -> TestResult {
     // Mallory as the displayer towards Alice, with Bob's offer records.
     let right = HumanCode::parse(p.shown.as_str())?;
     let mallory_offers = PairingOffers::new();
-    mallory_offers.create_code(wall()?, MONO)?;
+    mallory_offers.create_code(CODE_GATE, wall()?, MONO)?;
     let mallory_id = mallory_offers.code_pairing_id().ok_or("offer")?;
     let reservation = mallory_offers.reserve(
         &Hello::client(SessionMode::Code, 0, mallory_id, CLIENT_NONCE)?,
@@ -277,7 +277,7 @@ fn a_withdrawn_or_replaced_code_stops_an_attempt_in_flight() -> TestResult {
         let mut replacement = None;
         let mut was_confirmed = false;
         let result = code_run(&mut p, &right, false, |harness| {
-            replace_while_held = Some(offers.create_code(now, MONO).map(|_| ()));
+            replace_while_held = Some(offers.create_code(CODE_GATE, now, MONO).map(|_| ()));
             if confirmed {
                 while !matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady)
                 {
@@ -288,7 +288,7 @@ fn a_withdrawn_or_replaced_code_stops_an_attempt_in_flight() -> TestResult {
                 was_confirmed = matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady);
             }
             offers.cancel_all();
-            replacement = Some(offers.create_code(now, MONO).map(|_| ()));
+            replacement = Some(offers.create_code(CODE_GATE, now, MONO).map(|_| ()));
             harness.drain();
         })?;
         let label = format!("confirmed {confirmed}");

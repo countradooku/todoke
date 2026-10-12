@@ -459,7 +459,7 @@ fn code_pairing_over_a_byte_pipe() -> TestResult {
     let bob = Device::new()?;
     let offers = PairingOffers::new();
     let timer = ManualTimer::at(START);
-    let shown = offers.create_code(wall, timer.now())?;
+    let shown = offers.create_code(CODE_GATE, wall, timer.now())?;
     let id = offers.code_pairing_id().ok_or("offer")?;
     let right = HumanCode::parse(shown.as_str())?;
     let mut wrong_digits = shown.as_str().as_bytes().to_vec();
@@ -540,7 +540,7 @@ fn code_offer_exchange_refusals() -> TestResult {
     let bob = Device::new()?;
     let offers = PairingOffers::new();
     let timer = ManualTimer::at(START);
-    let shown = offers.create_code(wall, timer.now())?;
+    let shown = offers.create_code(CODE_GATE, wall, timer.now())?;
     let code = HumanCode::parse(shown.as_str())?;
     // Stale token.
     let mut alice_store = empty_store()?;
@@ -623,7 +623,7 @@ fn bare_code_hellos_do_not_consume_the_code_offer() -> TestResult {
     let wall = crate::identity::test_support::time(WALL)?;
     let offers = PairingOffers::new();
     let timer = ManualTimer::at(START);
-    offers.create_code(wall, timer.now())?;
+    offers.create_code(CODE_GATE, wall, timer.now())?;
     let id = offers.code_pairing_id().ok_or("offer")?;
     for _ in 0..=crate::pairing::MAX_CODE_FAILURES {
         let (alice_end, bob_end) = duplex(4096);
@@ -1552,7 +1552,7 @@ fn accepted_streams_count_against_the_concurrent_attempt_budget() -> TestResult 
     let wall = crate::identity::test_support::time(WALL)?;
     let offers = PairingOffers::new();
     let timer = ManualTimer::at(START);
-    offers.create_code(wall, timer.now())?;
+    offers.create_code(CODE_GATE, wall, timer.now())?;
     let id = offers.code_pairing_id().ok_or("offer")?;
     let mut clients = Vec::new();
     let mut idle = Vec::new();
@@ -1691,7 +1691,7 @@ fn the_hello_after_a_code_offer_is_bounded_by_the_exchange_window() -> TestResul
     let wall = crate::identity::test_support::time(WALL)?;
     let timer = JumpingTimer::default();
     let offers = PairingOffers::new();
-    offers.create_code(wall, timer.now())?;
+    offers.create_code(CODE_GATE, wall, timer.now())?;
     let id = offers.code_pairing_id().ok_or("offer")?;
     let (client, server) = duplex(4096);
     let mut writer = client;
