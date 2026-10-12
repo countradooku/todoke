@@ -719,3 +719,288 @@ fn session_errors_render_without_detail() {
     assert_eq!(Role::Initiator.peer(), Role::Responder);
     assert_eq!(Role::Responder.to_u8(), 1);
 }
+
+/// A pipe end whose writer stops making progress once `writes` successful
+/// `poll_write` calls are used up: every later write stays pending forever
+/// (a peer that stopped reading). `None` means unlimited.
+struct Stalling {
+    end: End,
+    state: Arc<Mutex<StallState>>,
+}
+
+#[derive(Default)]
+struct StallState {
+    writes: Option<usize>,
+    stalled: bool,
+}
+
+impl Stalling {
+    fn new(end: End, writes: Option<usize>) -> (Self, Arc<Mutex<StallState>>) {
+        let state = Arc::new(Mutex::new(StallState {
+            writes,
+            stalled: false,
+        }));
+        (
+            Self {
+                end,
+                state: Arc::clone(&state),
+            },
+            state,
+        )
+    }
+}
+
+fn stalled(state: &Mutex<StallState>) -> bool {
+    state.lock().is_ok_and(|state| state.stalled)
+}
+
+fn stall_now(state: &Mutex<StallState>) {
+    if let Ok(mut state) = state.lock() {
+        state.writes = Some(0);
+    }
+}
+
+impl AsyncRead for Stalling {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.end).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Stalling {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| io::Error::other("poisoned"))?;
+            match state.writes {
+                Some(0) => {
+                    // Never woken: the peer stopped reading for good.
+                    state.stalled = true;
+                    return Poll::Pending;
+                }
+                Some(ref mut left) => *left -= 1,
+                None => {}
+            }
+        }
+        Pin::new(&mut self.end).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.end).poll_flush(cx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.end).poll_close(cx)
+    }
+}
+
+/// Polls both futures concurrently inside one task.
+async fn both<A: Future, B: Future>(a: A, b: B) -> (A::Output, B::Output) {
+    let (mut a, mut b) = (pin!(a), pin!(b));
+    let (mut a_out, mut b_out) = (None, None);
+    std::future::poll_fn(|cx| {
+        if a_out.is_none()
+            && let Poll::Ready(value) = a.as_mut().poll(cx)
+        {
+            a_out = Some(value);
+        }
+        if b_out.is_none()
+            && let Poll::Ready(value) = b.as_mut().poll(cx)
+        {
+            b_out = Some(value);
+        }
+        match (a_out.take(), b_out.take()) {
+            (Some(a), Some(b)) => Poll::Ready((a, b)),
+            (a, b) => {
+                (a_out, b_out) = (a, b);
+                Poll::Pending
+            }
+        }
+    })
+    .await
+}
+
+/// Waits until a write is stuck on `state`, then moves `timer` by `by`.
+async fn advance_once_stalled(state: &Mutex<StallState>, timer: &ManualTimer, by: Duration) {
+    while !stalled(state) {
+        futures_yield().await;
+    }
+    timer.advance(by);
+}
+
+/// Both sides' results and stores, and both devices.
+type StalledAttempt = (
+    Result<(), SessionError>,
+    Result<(), SessionError>,
+    Store,
+    Store,
+    Device,
+    Device,
+);
+
+/// A contact session attempt over stalling pipe ends, with a clock that
+/// jumps by `advance` once `watch` (0 Alice, 1 Bob) has a write stuck.
+fn stalled_contact_attempt(
+    alice_writes: Option<usize>,
+    bob_writes: Option<usize>,
+    watch: usize,
+    advance: Duration,
+) -> AnyResult<StalledAttempt> {
+    let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+    let wall = crate::identity::test_support::time(WALL)?;
+    let timer = ManualTimer::at(START);
+    let (alice_end, bob_end) = duplex(1 << 20);
+    let (alice_io, alice_state) = Stalling::new(alice_end, alice_writes);
+    let (bob_io, bob_state) = Stalling::new(bob_end, bob_writes);
+    let watched = if watch == 0 { alice_state } else { bob_state };
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let (alice_key, bob_key) = (alice.key(), bob.key());
+    let (initiator, responder) = {
+        let mut initiator_authority = alice_store.session_authority(&bob_key)?;
+        let plan = initiator_authority.initiator_plan(LOCATOR)?;
+        let initiator = async {
+            Session::initiate(
+                alice_io,
+                timer.clone(),
+                GATE,
+                &alice_local,
+                wall,
+                plan,
+                &mut initiator_authority,
+            )
+            .await
+            .map(|_| ())
+        };
+        let responder = async {
+            let incoming = IncomingSession::accept(bob_io, timer.clone(), GATE).await?;
+            let mut authority = bob_store.session_authority(&alice_key)?;
+            let plan = authority.responder_plan(incoming.client_hello())?;
+            incoming
+                .respond(&bob_local, wall, plan, &mut authority)
+                .await
+                .map(|_| ())
+        };
+        let clock = advance_once_stalled(&watched, &timer, advance);
+        join(initiator, both(responder, clock))?
+    };
+    Ok((initiator, responder.0, alice_store, bob_store, alice, bob))
+}
+
+/// §13: the handshake deadline also bounds writes. A peer that never reads
+/// the `ClientHello` makes the attempt time out, not hang.
+#[test]
+fn stalled_handshake_write_times_out() -> TestResult {
+    let (alice, bob, mut alice_store, _) = contacts()?;
+    let timer = JumpingTimer::default();
+    let (alice_end, _peer) = duplex(4096);
+    let (alice_io, state) = Stalling::new(alice_end, Some(0));
+    let alice_local = alice.local()?;
+    let bob_key = bob.key();
+    let mut authority = alice_store.session_authority(&bob_key)?;
+    let plan = authority.initiator_plan(LOCATOR)?;
+    let result = block_on(Session::initiate(
+        alice_io,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        crate::identity::test_support::time(WALL)?,
+        plan,
+        &mut authority,
+    ))?;
+    assert!(stalled(&state));
+    assert_eq!(result.map(|_| ()).err(), Some(SessionError::Timeout));
+    assert_eq!(timer.now(), crate::session::HANDSHAKE_TIMEOUT);
+    Ok(())
+}
+
+/// §13: identity and ratchet writes are bounded by the 10-second
+/// establishment deadline. Before a journal the pairing stays usable.
+#[test]
+fn stalled_identity_write_times_out_before_the_journal() -> TestResult {
+    // Alice writes ClientHello and Noise message 1, then her Identity
+    // write never completes.
+    let (alice, bob, alice_store, bob_store, alice_device, bob_device) =
+        stalled_contact_attempt(Some(2), None, 0, crate::session::ESTABLISH_TIMEOUT)?;
+    assert_eq!(alice, Err(SessionError::Timeout));
+    assert!(bob.is_err());
+    assert_eq!(
+        usable(&alice_store, &bob_device.key())?,
+        Some((GENERATION, OLD_PSK))
+    );
+    assert_eq!(
+        usable(&bob_store, &alice_device.key())?,
+        Some((GENERATION, OLD_PSK))
+    );
+    Ok(())
+}
+
+/// A stalled write after the journal is a fatal close through the §4.4
+/// failure path: the pairing is blocked until re-pairing.
+#[test]
+fn stalled_ratchet_write_after_the_journal_blocks_the_pairing() -> TestResult {
+    // Bob writes ServerHello, Noise message 2, and his Identity; his
+    // RatchetReady (sent after journaling) never completes.
+    let (alice, bob, alice_store, bob_store, alice_device, bob_device) =
+        stalled_contact_attempt(None, Some(3), 1, crate::session::ESTABLISH_TIMEOUT)?;
+    assert_eq!(bob, Err(SessionError::RatchetUncertain));
+    assert_eq!(alice, Err(SessionError::RatchetUncertain));
+    assert_eq!(usable(&bob_store, &alice_device.key())?, None);
+    assert_eq!(usable(&alice_store, &bob_device.key())?, None);
+    Ok(())
+}
+
+/// §5, §13: on an established session a peer that stops reading cannot
+/// block `send` past the idle deadline.
+#[test]
+fn stalled_session_write_times_out_at_the_idle_deadline() -> TestResult {
+    let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+    let wall = crate::identity::test_support::time(WALL)?;
+    let timer = ManualTimer::at(START);
+    let (alice_end, bob_end) = duplex(1 << 20);
+    let (alice_io, state) = Stalling::new(alice_end, None);
+    let (bob_io, _) = Stalling::new(bob_end, None);
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let (alice_key, bob_key) = (alice.key(), bob.key());
+    let mut initiator_authority = alice_store.session_authority(&bob_key)?;
+    let plan = initiator_authority.initiator_plan(LOCATOR)?;
+    let initiator = Session::initiate(
+        alice_io,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        wall,
+        plan,
+        &mut initiator_authority,
+    );
+    let responder = async {
+        let incoming = IncomingSession::accept(bob_io, timer.clone(), GATE).await?;
+        let mut authority = bob_store.session_authority(&alice_key)?;
+        let plan = authority.responder_plan(incoming.client_hello())?;
+        incoming
+            .respond(&bob_local, wall, plan, &mut authority)
+            .await
+    };
+    let (a, b) = join(initiator, responder)?;
+    let (mut a, _b) = (a?, b?);
+    stall_now(&state);
+    let (sent, ()) = join(
+        a.send(FrameType::CAPABILITIES, b"caps"),
+        advance_once_stalled(&state, &timer, crate::session::IDLE_TIMEOUT),
+    )?;
+    assert_eq!(sent, Err(SessionError::Timeout));
+    assert!(a.is_closed());
+    assert_eq!(
+        block_on(a.send(FrameType::CAPABILITIES, b"x"))?,
+        Err(SessionError::Closed)
+    );
+    Ok(())
+}

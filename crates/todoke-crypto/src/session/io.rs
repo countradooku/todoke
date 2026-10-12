@@ -131,6 +131,28 @@ fn io_error(error: &io::Error) -> SessionError {
     SessionError::Io(error.kind())
 }
 
+/// Writes the rest of `record` from `written` on, then flushes.
+fn poll_write_all<W: AsyncWrite + Unpin>(
+    io: &mut W,
+    record: &[u8],
+    written: &mut usize,
+    cx: &mut Context<'_>,
+) -> Poll<Result<(), SessionError>> {
+    while *written < record.len() {
+        match Pin::new(&mut *io).poll_write(cx, &record[*written..]) {
+            Poll::Ready(Ok(0)) => {
+                return Poll::Ready(Err(SessionError::Io(io::ErrorKind::WriteZero)));
+            }
+            Poll::Ready(Ok(count)) => *written += count,
+            Poll::Ready(Err(error)) => return Poll::Ready(Err(io_error(&error))),
+            Poll::Pending => return Poll::Pending,
+        }
+    }
+    Pin::new(&mut *io)
+        .poll_flush(cx)
+        .map_err(|error| io_error(&error))
+}
+
 /// The byte pipe plus the state that must survive cancellation.
 struct Conn<IO, T> {
     io: IO,
@@ -166,25 +188,25 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Conn<IO, T> {
         }
     }
 
-    async fn write(&mut self, record: &[u8]) -> Result<(), SessionError> {
+    /// Writes and flushes one record, racing it against `deadline` (§13: a
+    /// peer that stops reading must not block us forever). The write is
+    /// polled before the timer, so a pipe with room still takes a final
+    /// record (such as a closing `Error`) after the deadline. Expiry, like
+    /// any write failure, leaves the connection unusable.
+    async fn write(&mut self, record: &[u8], deadline: Duration) -> Result<(), SessionError> {
         self.usable()?;
         self.writing = true;
         let mut written = 0;
+        let mut sleep = pin!(self.timer.sleep_until(deadline));
         let io = &mut self.io;
         let result = poll_fn(|cx| {
-            while written < record.len() {
-                match Pin::new(&mut *io).poll_write(cx, &record[written..]) {
-                    Poll::Ready(Ok(0)) => {
-                        return Poll::Ready(Err(SessionError::Io(io::ErrorKind::WriteZero)));
-                    }
-                    Poll::Ready(Ok(count)) => written += count,
-                    Poll::Ready(Err(error)) => return Poll::Ready(Err(io_error(&error))),
-                    Poll::Pending => return Poll::Pending,
-                }
+            if let Poll::Ready(result) = poll_write_all(io, record, &mut written, cx) {
+                return Poll::Ready(result);
             }
-            Pin::new(&mut *io)
-                .poll_flush(cx)
-                .map_err(|error| io_error(&error))
+            if sleep.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(Err(SessionError::Timeout));
+            }
+            Poll::Pending
         })
         .await;
         match result {
@@ -253,7 +275,7 @@ where
             .await?
             .ok_or(SessionError::Timeout)?;
         for reply in driver.receive(&record, conn.now())? {
-            conn.write(&reply).await?;
+            conn.write(&reply, driver.deadline()).await?;
         }
     }
     let split = driver.finish()?;
@@ -279,7 +301,7 @@ where
     A: PeerAuthority,
 {
     for record in establishment.start(local, conn.now())? {
-        conn.write(&record).await?;
+        conn.write(&record, establishment.deadline()).await?;
     }
     while establishment.phase() != Phase::Open {
         let record = conn
@@ -287,7 +309,7 @@ where
             .await?
             .ok_or(SessionError::Timeout)?;
         for reply in establishment.receive(&record, local, authority, conn.now())? {
-            conn.write(&reply).await?;
+            conn.write(&reply, establishment.deadline()).await?;
         }
         if establishment.phase() == Phase::AckPending {
             // The Ack is written and flushed: the responder's gate opens.
@@ -380,8 +402,10 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             Entropy::Os,
             received_at,
         )?;
-        conn.write(&server_hello).await?;
-        run(conn, driver, local, wall, authority).await
+        conn.write(&server_hello, driver.deadline()).await?;
+        // Boxed: the handshake and establishment state make this future
+        // large (clippy::large_futures for every caller otherwise).
+        Box::pin(run(conn, driver, local, wall, authority)).await
     }
 
     /// Drops the attempt without sending anything.
@@ -405,6 +429,11 @@ impl<IO, T> fmt::Debug for IncomingSession<IO, T> {
 /// `send` and `recv` take `&mut self`; a full-duplex split is not provided
 /// yet. `recv` also runs keepalive and time-based rekeying, so callers keep
 /// a `recv` pending while the session is idle.
+///
+/// Every write is bounded by a §13 deadline: the handshake (30 s) and
+/// establishment (10 s) deadlines while connecting, then the session's idle,
+/// Pong, and lifetime deadlines. A peer that stops reading closes the
+/// session with [`SessionError::Timeout`] instead of blocking it.
 pub struct Session<IO, T> {
     conn: Conn<IO, T>,
     core: SessionCore,
@@ -447,8 +476,10 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
             Entropy::Os,
             conn.now(),
         )?;
-        conn.write(&client_hello).await?;
-        run(conn, driver, local, wall, authority).await
+        conn.write(&client_hello, driver.deadline()).await?;
+        // Boxed: the handshake and establishment state make this future
+        // large (clippy::large_futures for every caller otherwise).
+        Box::pin(run(conn, driver, local, wall, authority)).await
     }
 
     /// This side's handshake role.
@@ -487,9 +518,13 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
         &self.core.info().peer_binding
     }
 
+    /// Writes queued records. Each write is bounded by the session's close
+    /// deadline (idle, Pong, binding/24-hour lifetime): a peer that stops
+    /// reading closes the session with [`SessionError::Timeout`].
     async fn flush_outgoing(&mut self) -> Result<(), SessionError> {
         while let Some(record) = self.core.pop_outgoing() {
-            self.conn.write(&record).await?;
+            let deadline = self.core.close_deadline();
+            self.conn.write(&record, deadline).await?;
         }
         Ok(())
     }

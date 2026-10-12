@@ -597,6 +597,20 @@ impl SessionCore {
         Ok(())
     }
 
+    /// When the session closes for lack of progress: the hard deadline, the
+    /// idle deadline, or an outstanding Ping's Pong deadline (§5, §13). A
+    /// blocked write cannot run [`Self::poll`], so the adapter bounds writes
+    /// by this instant.
+    pub(crate) fn close_deadline(&self) -> Duration {
+        let mut deadline = self
+            .hard_deadline
+            .min(self.last_received.saturating_add(IDLE_TIMEOUT));
+        if let Some((_, sent)) = self.ping {
+            deadline = deadline.min(sent.saturating_add(PONG_TIMEOUT));
+        }
+        deadline
+    }
+
     /// The next instant [`Self::poll`] has work to do.
     pub(crate) fn next_deadline(&self) -> Duration {
         let keepalive = match self.ping {
