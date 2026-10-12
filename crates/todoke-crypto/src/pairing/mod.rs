@@ -15,8 +15,8 @@
 //!   -> QrPayload::to_text()  ==== shown ====> QrPayload::from_text(text, now)
 //!                                             store.begin_qr_pairing(&payload, now)
 //!                                               -> (plan, authority)
-//! IncomingSession::accept(..)      <--------  Session::initiate(.., plan, &mut authority)
-//! offers.reserve(hello, now, mono)
+//! IncomingSession::accept_any(..)  <--------  Session::initiate(.., plan, &mut authority)
+//! incoming.reserve_offer(&offers, now)
 //!   -> reservation.into_qr_responder(&mut store)
 //!   -> (plan, authority)
 //! incoming.respond(.., plan, &mut authority)
@@ -44,7 +44,7 @@
 //!   -> request.answer(gate, &offers, token, now)              .., token, &code, &mut store)
 //!                                  --- CodeOffer --->
 //!                                  <-- ClientHello ---
-//! offers.reserve(hello, now, mono)
+//! incoming.reserve_offer(&offers, now)
 //!   -> reservation.into_code_responder(gate, &mut store)
 //! incoming.respond(.., plan, &mut authority)
 //!            ServerHello, CodeShareA/B (CPace), XX messages, Identity, ratchet
@@ -60,9 +60,10 @@
 //!
 //! [`PairingOffers`] holds the displayer's offers in memory and enforces
 //! one attempt per offer at a time, the code attempt budget, and the §13
-//! unauthenticated-attempt budget. A reservation that ends without reaching
-//! the journal frees a QR offer and counts as a failed attempt on a code
-//! offer.
+//! unauthenticated-attempt budget. Only a stream that began with the code
+//! offer exchange may attempt a code offer. A reservation that ends
+//! without reaching the journal frees a QR offer and counts as a failed
+//! attempt on a code offer.
 //!
 //! # Secrets
 //!
@@ -113,6 +114,9 @@ pub enum PairingError {
     Mode,
     /// Another attempt holds the offer.
     OfferBusy,
+    /// A code-mode `ClientHello` on a stream that did not begin with the
+    /// `CodeOfferRequest`/`CodeOffer` exchange (§3.2).
+    NoOfferExchange,
     /// Less than 2 seconds since the previous attempt on this code offer.
     TooSoon,
     /// The §13 unauthenticated-attempt budget is exhausted for now.
@@ -143,6 +147,9 @@ impl fmt::Display for PairingError {
             Self::Expired => f.write_str("pairing offer expired"),
             Self::Mode => f.write_str("pairing mode does not match the offer"),
             Self::OfferBusy => f.write_str("pairing offer is in use by another attempt"),
+            Self::NoOfferExchange => {
+                f.write_str("code pairing attempt without the code offer exchange")
+            }
             Self::TooSoon => f.write_str("pairing attempt too soon after the previous one"),
             Self::RateLimited => f.write_str("too many pairing attempts; try again later"),
             Self::TooManyOffers => f.write_str("too many pairing offers"),

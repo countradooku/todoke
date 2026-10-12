@@ -8,10 +8,10 @@
 //!
 //! | Rule | Where |
 //! | --- | --- |
-//! | One authenticated attempt per offer at a time; unauthenticated failures do not consume a QR offer | [`PairingOffers::reserve`], [`OfferReservation`] |
-//! | A code offer: at most 5 failed attempts, at least 2 s between attempts, one `CPace` at a time | [`PairingOffers::reserve`] |
+//! | One authenticated attempt per offer at a time; unauthenticated failures do not consume a QR offer | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer), [`OfferReservation`] |
+//! | A code offer: at most 5 failed attempts, at least 2 s between attempts, one `CPace` at a time, only after the stream's offer exchange | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer) |
 //! | Offers expire after 300 s, measured on both the wall and the monotonic clock | every operation |
-//! | At most 4 unauthenticated attempts at once and 20 starts per minute | the shared budget of [`PairingOffers::reserve`] |
+//! | At most 4 unauthenticated attempts at once and 20 starts per minute | the shared budget of [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer) |
 //!
 //! The §13 budget here covers pairing attempts. Contact sessions share the
 //! same §13 limits; applying them to contact attempts is the caller's job
@@ -308,7 +308,23 @@ impl PairingOffers {
             .map_err(|_| PairingError::UnknownOffer)
     }
 
+    /// Reserves the offer named by `hello`'s locator for one attempt, as
+    /// [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer)
+    /// does for a stream that exchanged the code offer records (tests).
+    #[cfg(test)]
+    pub(crate) fn reserve(
+        &self,
+        hello: &Hello,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<OfferReservation, PairingError> {
+        self.reserve_attempt(hello, true, now, mono)
+    }
+
     /// Reserves the offer named by `hello`'s locator for this attempt.
+    /// `exchanged` says whether the stream began with the
+    /// `CodeOfferRequest`/`CodeOffer` exchange; only such a stream may
+    /// attempt a code offer (§3.2).
     ///
     /// The `ClientHello` is untrusted: this only decides whether an attempt
     /// may start. The reservation ends when it is burned (the attempt
@@ -318,17 +334,24 @@ impl PairingOffers {
     ///
     /// # Errors
     ///
-    /// [`PairingError::UnknownOffer`] (unknown, withdrawn, burned, or
-    /// exhausted), [`PairingError::Expired`], [`PairingError::Mode`] for a
-    /// Hello of the other pairing mode, [`PairingError::OfferBusy`] while
-    /// another attempt holds it, [`PairingError::TooSoon`] within 2 s of
-    /// the previous code attempt, or [`PairingError::RateLimited`].
-    pub fn reserve(
+    /// [`PairingError::NoOfferExchange`] for a code-mode Hello on a stream
+    /// without the offer exchange, before anything else is checked or
+    /// counted, [`PairingError::UnknownOffer`] (unknown, withdrawn,
+    /// burned, or exhausted), [`PairingError::Expired`],
+    /// [`PairingError::Mode`] for a Hello of the other pairing mode,
+    /// [`PairingError::OfferBusy`] while another attempt holds it,
+    /// [`PairingError::TooSoon`] within 2 s of the previous code attempt,
+    /// or [`PairingError::RateLimited`].
+    pub(crate) fn reserve_attempt(
         &self,
         hello: &Hello,
+        exchanged: bool,
         now: UnixTime,
         mono: Duration,
     ) -> Result<OfferReservation, PairingError> {
+        if hello.mode() == SessionMode::Code && !exchanged {
+            return Err(PairingError::NoOfferExchange);
+        }
         let mut guard = self.lock()?;
         let table = &mut *guard;
         let pairing_id = *hello.locator();

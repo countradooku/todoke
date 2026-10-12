@@ -31,7 +31,9 @@ use super::{
 };
 use crate::identity::contacts::PairOutcome;
 use crate::identity::{BlobStorage, ContactStore, KeyStore, Sealer, VerifiedDeviceBinding};
-use crate::pairing::{HumanCode, PairingOffers, UnauditedCodePairing};
+use crate::pairing::{
+    HumanCode, OfferReservation, PairingError, PairingOffers, UnauditedCodePairing,
+};
 use crate::rng;
 
 /// §3.2: the code offer request and its answer happen within 5 seconds.
@@ -390,8 +392,8 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
     /// the stranger token this device currently advertises, then reads the
     /// entrant's `ClientHello`, which must be a code-mode Hello for exactly
     /// that offer. Reserve the offer next, with
-    /// [`PairingOffers::reserve`] and
-    /// [`OfferReservation::into_code_responder`](crate::pairing::OfferReservation::into_code_responder).
+    /// [`IncomingSession::reserve_offer`] and
+    /// [`OfferReservation::into_code_responder`].
     ///
     /// `now` is the trusted wall-clock time.
     ///
@@ -549,6 +551,30 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     #[must_use]
     pub fn client_hello(&self) -> &Hello {
         &self.hello
+    }
+
+    /// Reserves the pairing offer this stream's `ClientHello` names, for
+    /// [`OfferReservation::into_qr_responder`] or
+    /// [`OfferReservation::into_code_responder`]. `now` is the trusted
+    /// wall-clock time; `offers` must use this stream's [`Timer`] as its
+    /// monotonic clock.
+    ///
+    /// A code-mode Hello is accepted only on a stream that began with the
+    /// code offer exchange ([`IncomingCodeRequest::answer`]); any other is
+    /// refused before the offer is looked at, so it costs the offer none
+    /// of its attempts (§3.2).
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::NoOfferExchange`], and every refusal of an offer
+    /// that is unknown, expired, busy, too soon, or over the §13 budget.
+    /// Close the stream silently (§12).
+    pub fn reserve_offer(
+        &self,
+        offers: &PairingOffers,
+        now: UnixTime,
+    ) -> Result<OfferReservation, PairingError> {
+        offers.reserve_attempt(&self.hello, self.code_offer.is_some(), now, self.conn.now())
     }
 
     /// Completes the handshake, identity confirmation, and ratchet as

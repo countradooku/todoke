@@ -423,7 +423,7 @@ fn qr_pairing_over_a_byte_pipe() -> TestResult {
         else {
             return Err("expected a ClientHello".into());
         };
-        let reservation = offers.reserve(incoming.client_hello(), wall, timer.now())?;
+        let reservation = incoming.reserve_offer(&offers, wall)?;
         let (plan, mut authority) = reservation.into_qr_responder(&mut bob_store)?;
         let session = incoming
             .respond(&bob_local, wall, plan, &mut authority)
@@ -490,7 +490,7 @@ fn code_pairing_over_a_byte_pipe() -> TestResult {
             let incoming = request.answer(CODE_GATE, &offers, &TOKEN, wall).await?;
             assert!(format!("{incoming:?}").contains("code_offer_exchanged: true"));
             assert_eq!(incoming.client_hello().mode(), SessionMode::Code);
-            let reservation = offers.reserve(incoming.client_hello(), wall, timer.now())?;
+            let reservation = incoming.reserve_offer(&offers, wall)?;
             let (plan, mut authority) =
                 reservation.into_code_responder(CODE_GATE, &mut bob_store)?;
             let session = incoming
@@ -598,6 +598,58 @@ fn code_offer_exchange_refusals() -> TestResult {
     assert_eq!(
         block_on(incoming.respond(&bob_local, wall, plan, &mut authority))?.err(),
         Some(SessionError::Usage)
+    );
+    Ok(())
+}
+
+/// A code-mode `ClientHello` record for `pairing_id`, sent on a stream
+/// that skipped the `CodeOfferRequest`/`CodeOffer` exchange.
+fn bare_code_hello(pairing_id: [u8; 16]) -> AnyResult<Vec<u8>> {
+    let hello = todoke_proto::session::Hello::client(SessionMode::Code, 0, pairing_id, [1; 16])?;
+    let mut record = vec![0, 67, 1];
+    record.extend_from_slice(&hello.encode());
+    Ok(record)
+}
+
+/// Anyone who knows the public pairing ID can send code-mode Hellos
+/// without the offer exchange. They are refused before the offer is
+/// reserved and never consume its five attempts (§3.2).
+#[test]
+fn bare_code_hellos_do_not_consume_the_code_offer() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    offers.create_code(wall, timer.now())?;
+    let id = offers.code_pairing_id().ok_or("offer")?;
+    for _ in 0..=crate::pairing::MAX_CODE_FAILURES {
+        let (alice_end, bob_end) = duplex(4096);
+        let mut writer = alice_end;
+        block_on(futures_write_all(&mut writer, &bare_code_hello(id)?))??;
+        let Accepted::Hello(incoming) =
+            block_on(IncomingSession::accept_any(bob_end, timer.clone(), GATE))??
+        else {
+            return Err("expected a ClientHello".into());
+        };
+        assert_eq!(
+            incoming.reserve_offer(&offers, wall).err(),
+            Some(PairingError::NoOfferExchange)
+        );
+        timer.advance(crate::pairing::CODE_ATTEMPT_SPACING);
+    }
+    // The same over a plain accept.
+    let (alice_end, bob_end) = duplex(4096);
+    let mut writer = alice_end;
+    block_on(futures_write_all(&mut writer, &bare_code_hello(id)?))??;
+    let incoming = block_on(IncomingSession::accept(bob_end, timer.clone(), GATE))??;
+    assert_eq!(
+        incoming.reserve_offer(&offers, wall).err(),
+        Some(PairingError::NoOfferExchange)
+    );
+    assert_eq!(offers.failures(&id), Some(0));
+    assert_eq!(offers.active_attempts(), 0);
+    assert_eq!(
+        offers.live(crate::pairing::OfferKind::Code, wall, timer.now()),
+        1
     );
     Ok(())
 }

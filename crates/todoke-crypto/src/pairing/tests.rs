@@ -671,6 +671,7 @@ fn errors_and_debug_output() -> TestResult {
         PairingError::Expired,
         PairingError::Mode,
         PairingError::OfferBusy,
+        PairingError::NoOfferExchange,
         PairingError::TooSoon,
         PairingError::RateLimited,
         PairingError::TooManyOffers,
