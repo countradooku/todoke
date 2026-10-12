@@ -120,6 +120,17 @@ cargo metadata --offline --format-version 1 --manifest-path "$scratch/gate/Cargo
 expect_manifest "unaudited suite feature in a shipped graph" "$scratch/gate/Cargo.toml" \
     'todoke-crypto feature unaudited-suite-0001 is enabled outside dev-dependencies'
 
+# A shipped crate enabling the unaudited code-pairing gate (PROTOCOL §16, O2).
+workspace_copy "$scratch/code-gate"
+cat >> "$scratch/code-gate/crates/todoke-core/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["unaudited-code-pairing"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/code-gate/Cargo.toml" > /dev/null
+expect_manifest "unaudited code-pairing feature in a shipped graph" "$scratch/code-gate/Cargo.toml" \
+    'todoke-crypto feature unaudited-code-pairing is enabled outside dev-dependencies'
+
 # The runtime Noise engine with Snow's raw traffic-key export.
 workspace_copy "$scratch/raw-split"
 mutate crates/todoke-crypto/Cargo.toml "$scratch/raw-split/crates/todoke-crypto/Cargo.toml" \

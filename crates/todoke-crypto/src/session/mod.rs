@@ -63,7 +63,7 @@
 //! reason this suite stays gated.
 
 pub(crate) mod authority;
-mod engine;
+pub(crate) mod engine;
 pub(crate) mod establish;
 #[cfg(fuzzing)]
 pub mod fuzzing;

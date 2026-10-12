@@ -143,6 +143,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 
 [[package]]
+name = "const-oid"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
 name = "constant_time_eq"
 version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -238,6 +244,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1dd6dbb5841937940781866fa1281a1ff7bd3bf827091440879f9994983d5c2"
 dependencies = [
  "block-buffer",
+ "const-oid",
  "crypto-common",
  "ctutils",
  "zeroize",
@@ -411,6 +418,15 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "hkdf"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4aaa26c720c68b866f2c96ef5c1264b3e6f473fe5d4ce61cd44bbe913e553018"
+dependencies = [
+ "hmac",
+]
 
 [[package]]
 name = "hmac"
@@ -698,6 +714,49 @@ name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+
+[[package]]
+name = "pakery-core"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b181aa224b059e14903b78438ab68d99562d2baeb68e9f7f92bea83a51081e92"
+dependencies = [
+ "pkg-config",
+ "rand_core",
+ "rustversion",
+ "subtle",
+ "zeroize",
+ "zeroize_derive",
+]
+
+[[package]]
+name = "pakery-cpace"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31a4472fbeedd39c477e4b5a9959ea47f7612a7534469e35f6f3976d429f595"
+dependencies = [
+ "pakery-core",
+ "rand_core",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
+name = "pakery-crypto"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a70b3d1a9bae143cc38538d5116c821536cb9308930ea03d6b07e5e02d65868a"
+dependencies = [
+ "curve25519-dalek",
+ "digest",
+ "hkdf",
+ "hmac",
+ "pakery-core",
+ "rand_core",
+ "sha2",
+ "subtle",
+ "zeroize",
+]
 
 [[package]]
 name = "pastey"
@@ -1015,7 +1074,11 @@ dependencies = [
  "libcrux-ml-kem",
  "libcrux-secrets",
  "libcrux-sha2",
+ "pakery-core",
+ "pakery-cpace",
+ "pakery-crypto",
  "proptest",
+ "rand_core",
  "serde_json",
  "sha2",
  "snow",
@@ -1179,6 +1242,20 @@ name = "zeroize"
 version = "1.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13084392c5e4bc371903e2935a5eaeed24905a7511356b883835e18a78f6879"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "zmij"

@@ -318,3 +318,46 @@ releases, each upgrade must update the stores (`cargo vet regenerate exemptions`
 only for versions nobody has reviewed, keeping the notes). Replacing the
 exemptions for runtime cryptography (libcrux, dalek, snow, blake3, zeroize)
 with real audits remains part of production gate O6.
+
+## Pairing dependencies (2026-10-13)
+
+QR pairing (PROTOCOL §3.1) adds no runtime dependency: the Base45 codec is
+a small fixed-purpose function in `todoke-crypto`. The `base45 3.2.0` pin
+moved to `[workspace.dependencies]` because `todoke-crypto` now uses it as
+a development dependency for the cross-check (it was already one of
+`todoke-proto`).
+
+Human-code pairing (§3.2) uses CPace from the `pakery` crates, selected in
+[ADR 0002](../docs/adr/0002-cpace.md). They are **optional** dependencies of
+`todoke-crypto`, compiled only with the non-default `unaudited-code-pairing`
+feature (and in its unit tests through the development dependencies):
+
+| Package | Why | Notes |
+| --- | --- | --- |
+| `pakery-cpace 0.6.0` (2026-09-22) | CPACE-RISTR255-SHA512, draft-irtf-cfrg-cpace-21 | MIT OR Apache-2.0, `forbid(unsafe_code)`. Latest release. Passes the draft's Appendix A and B.3 vectors through todoke's adapter. |
+| `pakery-crypto 0.6.0` | Ristretto255 group and SHA-512 for that suite | `default-features = false`, `ristretto255` only. Uses the `curve25519-dalek 5.0.0` and `sha2 0.11.0` already in the graph. |
+| `pakery-core 0.6.0` | Encoding helpers and traits used by both | Its `__ctgrind` feature (Valgrind) is never enabled. |
+| `hkdf 0.13.0`, `const-oid 0.10.2`, `zeroize_derive 1.5.0` | Transitive: `pakery-crypto`'s `ristretto255` feature, and `pakery-core`'s `Zeroize` derive | Latest releases. `hmac 0.13.0` was already in the lock as a development dependency. |
+| `rand_core 0.10.1` | The RNG trait pakery's API takes | Already in the lock; now a direct optional pin. |
+
+The pakery pins and `rand_core` are workspace dependencies because
+`todoke-crypto` names them both as optional normal and as development
+dependencies (cargo-deny `workspace-duplicate`). No new license, source,
+advisory, or duplicate-version exception was needed. `const-oid` enters
+through `digest`'s `oid` feature, which the pakery graph turns on.
+
+`scripts/ci/deny-exceptions-dev-only.sh` now also fails if any shipped
+(non-dev) graph enables `todoke-crypto/unaudited-code-pairing`, and its
+test script covers that with a mutated workspace copy. The fuzz workspace
+enables the feature for its code-pairing harness, so its lock gained the
+same packages (versions identical to the root lock).
+
+cargo-vet: each new package has an exact-version exemption with a "Not yet
+reviewed" note naming code pairing, in both stores. `hmac 0.13.0`'s root
+exemption was raised from `safe-to-run` to `safe-to-deploy` because
+`pakery-crypto` uses it at runtime; the fuzz store also exempts `cmov
+0.5.4` and `ctutils 0.4.3`, which the feature brings into that graph. No audit was recorded; replacing these exemptions with real reviews
+is part of gate O2.
+
+Not upgraded here: `sha2 0.11.1` was released on 2026-10-12, after the
+current `0.11.0` pin; this change keeps `0.11.0` to stay focused (follow-up).

@@ -50,10 +50,20 @@
 mod authority;
 mod base45;
 mod code;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "wired into the code-pairing handshake next")
+)]
+pub(crate) mod cpace;
 #[cfg(fuzzing)]
 pub mod fuzzing;
 mod offers;
 mod qr;
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "wired into the code-pairing handshake next")
+)]
+pub(crate) mod transcript;
 
 use core::fmt;
 
@@ -125,6 +135,40 @@ impl fmt::Display for PairingError {
 }
 
 impl std::error::Error for PairingError {}
+
+/// Acknowledgement that human-code pairing is not production-ready
+/// (PROTOCOL §16: gate O2 is open; `CPace` comes from an unreviewed library,
+/// `docs/adr/0002-cpace.md`, and the §3.2 context needs conformance
+/// vectors). Required by every code-pairing entry point.
+///
+/// It can be obtained only through
+/// `UnauditedCodePairing::acknowledge_not_production_ready()`, which exists
+/// only in this crate's unit tests and with the non-default
+/// `unaudited-code-pairing` feature. Without that feature there is also no
+/// `CPace` backend. CI (`scripts/ci/deny-exceptions-dev-only.sh`) fails if
+/// any shipped graph enables the feature.
+///
+/// Without the feature, this does not compile:
+///
+#[cfg_attr(not(feature = "unaudited-code-pairing"), doc = "```compile_fail")]
+#[cfg_attr(feature = "unaudited-code-pairing", doc = "```")]
+/// let _gate = todoke_crypto::pairing::UnauditedCodePairing::acknowledge_not_production_ready();
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnauditedCodePairing(());
+
+impl UnauditedCodePairing {
+    /// Acknowledges that human-code pairing, its `CPace` library, and its
+    /// transcript bindings are unaudited and disabled for production.
+    ///
+    /// Exists only with the `unaudited-code-pairing` feature or in this
+    /// crate's unit tests.
+    #[cfg(any(test, feature = "unaudited-code-pairing"))]
+    #[must_use]
+    pub const fn acknowledge_not_production_ready() -> Self {
+        Self(())
+    }
+}
 
 impl From<QrError> for PairingError {
     fn from(error: QrError) -> Self {

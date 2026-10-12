@@ -14,8 +14,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "=0.4.13"
-# The session harnesses drive suite 0x0001, which is gated (PROTOCOL §16).
-todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["unaudited-suite-0001"] }
+# The session and code-pairing harnesses drive suite 0x0001 and CPace, both
+# gated (PROTOCOL §16); `unaudited-code-pairing` implies the suite gate.
+todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["unaudited-code-pairing"] }
 todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
 
 [[bin]]
