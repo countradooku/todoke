@@ -206,9 +206,15 @@ gated:
   copy in `HandshakeState::psks`; the default `Hash::hmac`/`hkdf` pads and
   intermediate outputs; `Split` temporaries; DH output arrays; the KEM
   shared-secret buffer in `Ekem1` processing. None has a `Drop` that zeroizes.
-- **libcrux:** stack copies made when passing the ML-KEM private key and
-  seeds by value; HACL SHA-256, HMAC, HKDF, and ChaCha20-Poly1305 internal
-  state.
+- **libcrux:** the stack copies made when passing the 64-byte ML-KEM key
+  generation seed and the 32-byte encapsulation randomness by value (the
+  0.0.11 API has no by-reference form), copies left by moving the generated
+  key pair apart, and libcrux's internal ML-KEM scratch; HACL SHA-256, HMAC,
+  HKDF, and ChaCha20-Poly1305 internal state. Since 2026-10-12 the 2400-byte
+  decapsulation key is no longer passed by value: the engine builds
+  libcrux's key object from a reference (`From<&[u8; N]>`) and wipes that
+  object in place after decapsulation and after key generation, instead of
+  converting it back into another by-value array.
 
 Recommended path: propose zeroization upstream to Snow (alongside PR #210),
 then re-evaluate; if that does not land, decide between a reviewed fork and a

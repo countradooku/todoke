@@ -379,11 +379,14 @@ impl Kem for MlKem768 {
             self.failed.store(true, Ordering::SeqCst);
             return;
         }
+        // libcrux takes the seed by value: that stack copy is not wiped
+        // (O6 residue, docs/adr/0001-noise-crate.md).
         let pair = mlkem768::generate_key_pair(*seed);
-        let (private, public) = pair.into_parts();
-        let mut private_bytes: [u8; KEM_PRIVATE_LEN] = private.into();
-        self.private.copy_from_slice(&private_bytes);
-        private_bytes.zeroize();
+        let (mut private, public) = pair.into_parts();
+        // Copy from a reference and wipe libcrux's key object in place,
+        // rather than converting it into another by-value array.
+        self.private.copy_from_slice(private.as_slice());
+        private[0..].zeroize();
         *self.public = public.into();
     }
 
@@ -407,6 +410,7 @@ impl Kem for MlKem768 {
         self.entropy
             .fill(randomness.as_mut_slice())
             .map_err(|_| snow::Error::Rng)?;
+        // libcrux takes `m` by value: that stack copy is not wiped (O6).
         let (ciphertext, shared) = mlkem768::encapsulate(&public, *randomness);
         let shared = Zeroizing::new(shared);
         shared_out
@@ -424,10 +428,11 @@ impl Kem for MlKem768 {
         let ciphertext = MlKem768Ciphertext::try_from(ciphertext).map_err(|_| snow::Error::Kem)?;
         // Constant-time implicit rejection: a bad ciphertext yields an
         // unrelated secret and the following payload tag fails (§4.2.6).
-        let private = MlKem768PrivateKey::from(*self.private);
+        // Built from a reference (no by-value 2400-byte array argument) and
+        // wiped in place after use.
+        let mut private = MlKem768PrivateKey::from(&*self.private);
         let shared = Zeroizing::new(mlkem768::decapsulate(&private, &ciphertext));
-        let mut private_bytes: [u8; KEM_PRIVATE_LEN] = private.into();
-        private_bytes.zeroize();
+        private[0..].zeroize();
         shared_out
             .get_mut(..KEM_SHARED_LEN)
             .ok_or(snow::Error::Kem)?

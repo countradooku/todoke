@@ -660,3 +660,14 @@ fn debug_output_names_no_secret() -> TestResult {
     assert_eq!(format!("{:?}", Entropy::Os), "Entropy::Os");
     Ok(())
 }
+
+/// The engine wipes libcrux's ML-KEM key objects in place through
+/// `IndexMut<RangeFrom<usize>>` instead of copying them out by value; check
+/// that this reaches every byte of the 2400-byte key.
+#[test]
+fn mlkem_private_key_wipe_covers_the_whole_key() {
+    let mut private = MlKem768PrivateKey::from(&[0x5a; KEM_PRIVATE_LEN]);
+    assert_eq!(private.as_slice(), &[0x5a; KEM_PRIVATE_LEN]);
+    private[0..].zeroize();
+    assert_eq!(private.as_slice(), &[0; KEM_PRIVATE_LEN]);
+}
