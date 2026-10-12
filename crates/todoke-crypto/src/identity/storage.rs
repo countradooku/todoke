@@ -324,15 +324,18 @@ mod tests {
         Ok(())
     }
 
-    /// Only a missing file means "nothing stored"; any other open failure
-    /// is an error, never an empty store.
+    /// Only a missing file means "nothing stored"; any other failure is an
+    /// error, never an empty store. A directory in the blob's place fails on
+    /// every platform: Unix opens it but cannot read it as a file, and
+    /// Windows refuses to open it. (A path whose parent is a regular file is
+    /// not used here: Windows reports that as "not found".)
     #[test]
     fn load_reports_errors_other_than_absence() -> TestResult {
         let scratch = Scratch::new()?;
-        let file = scratch.0.join("file");
-        fs::write(&file, b"not a directory")?;
-        let storage = FileStorage::new(file.join("blob"));
-        assert!(matches!(storage.load(64), Err(StorageError::Io(_))));
+        let blob = scratch.0.join("blob");
+        fs::create_dir(&blob)?;
+        let storage = FileStorage::new(&blob);
+        assert!(matches!(storage.load(1 << 20), Err(StorageError::Io(_))));
         Ok(())
     }
 
