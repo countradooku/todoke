@@ -454,3 +454,118 @@ fn generation_exhaustion_requires_new_pairing() -> TestResult {
     assert!(format!("{initiator:?}").contains("journaled: false"));
     Ok(())
 }
+
+/// HMAC-SHA-256 from `RustCrypto`, independent of the libcrux code under test.
+fn reference_hmac(key: &[u8], message: &[u8]) -> AnyResult<[u8; 32]> {
+    use hmac::{KeyInit as _, Mac as _};
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(key).map_err(|_| "hmac key")?;
+    mac.update(message);
+    Ok(mac.finalize().into_bytes().into())
+}
+
+/// §4.3, built literally from the spec table: the `Identity` signature input
+/// is `"todoke/v1/identity\0" || h || role:u8 || B3(binding)`, checked with
+/// libcrux's Ed25519 verifier rather than the code under test.
+#[test]
+fn identity_signature_covers_the_spec_byte_layout() -> TestResult {
+    let alice = Device::new()?;
+    let local = alice.local()?;
+    let hash = [0x6d; 32];
+    let device_public = *alice.key().as_bytes();
+    let binding = alice.binding.encode();
+    assert_eq!(binding.len(), 1438);
+    for (role, role_byte) in [(Role::Initiator, 0_u8), (Role::Responder, 1)] {
+        let identity = local.sign_identity(&hash, role)?;
+        let mut signed = Vec::new();
+        signed.extend_from_slice(b"todoke/v1/identity\x00");
+        signed.extend_from_slice(&hash);
+        signed.push(role_byte);
+        signed.extend_from_slice(blake3::hash(&binding).as_bytes());
+        assert_eq!(signed.len(), 19 + 32 + 1 + 32);
+        libcrux_ed25519::verify(&signed, &device_public, identity.signature())
+            .map_err(|_| format!("{role:?}: signature does not cover the spec layout"))?;
+        // A different role byte must not verify.
+        signed[19 + 32] ^= 1;
+        assert!(libcrux_ed25519::verify(&signed, &device_public, identity.signature()).is_err());
+        // The 1536-byte record: binding_len || binding || h || signature.
+        let encoded = identity.encode();
+        assert_eq!(encoded.len(), 1536);
+        assert_eq!(&encoded[..2], &1438_u16.to_be_bytes());
+        assert_eq!(&encoded[2..1440], binding.as_slice());
+        assert_eq!(&encoded[1440..1472], &hash);
+        assert_eq!(&encoded[1472..], identity.signature());
+    }
+    Ok(())
+}
+
+/// §4.4, built literally from the spec: `psk_next = HKDF(h, psk,
+/// "todoke/v1/psk-ratchet\0", 32)` and `confirmation = HMAC-SHA256(psk_next,
+/// "todoke/v1/ratchet-confirm\0" || type:u16 || role:u8 || session_id ||
+/// generation_next:u64)`, recomputed with `RustCrypto` HMAC. Checks the
+/// confirmation function for every type and role, and the actual
+/// `RatchetReady` body an initiator sends.
+#[test]
+fn ratchet_confirmation_covers_the_spec_byte_layout() -> TestResult {
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let mut alice_store = store_pairing(&bob, GENERATION)?;
+    let mut bob_store = store_pairing(&alice, GENERATION)?;
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let (alice_key, bob_key) = (alice.key(), bob.key());
+    let (mut initiator, mut responder) = established_pair(&alice, &bob)?;
+    let hash = initiator.handshake_hash;
+    // session_id = B3("todoke/v1/session\0" || h) (§4.2.6).
+    let mut session_input = b"todoke/v1/session\x00".to_vec();
+    session_input.extend_from_slice(&hash);
+    let session_id = *blake3::hash(&session_input).as_bytes();
+    assert_eq!(initiator.session_id, session_id);
+    // HKDF-SHA-256 Extract then Expand to 32 bytes (one block, RFC 5869).
+    let prk = reference_hmac(&hash, &OLD_PSK)?;
+    let psk_next = reference_hmac(&prk, b"todoke/v1/psk-ratchet\x00\x01")?;
+    let generation_next = GENERATION + 1;
+    let confirmation = |frame_type: u16, role: u8| -> AnyResult<[u8; 32]> {
+        let mut message = b"todoke/v1/ratchet-confirm\x00".to_vec();
+        message.extend_from_slice(&frame_type.to_be_bytes());
+        message.push(role);
+        message.extend_from_slice(&session_id);
+        message.extend_from_slice(&generation_next.to_be_bytes());
+        assert_eq!(message.len(), 26 + 2 + 1 + 32 + 8);
+        reference_hmac(&psk_next, &message)
+    };
+    for (frame_type, raw_type) in [
+        (FrameType::RATCHET_READY, 0x0002),
+        (FrameType::RATCHET_COMMIT, 0x0003),
+        (FrameType::RATCHET_ACK, 0x0004),
+    ] {
+        for (role, role_byte) in [(Role::Initiator, 0), (Role::Responder, 1)] {
+            let next = Zeroizing::new(psk_next);
+            assert_eq!(
+                kdf::ratchet_confirmation(&next, frame_type, role, &session_id, generation_next),
+                confirmation(raw_type, role_byte)?,
+                "{frame_type:?} {role:?}"
+            );
+        }
+    }
+    // The initiator's real RatchetReady, opened under the session keys.
+    let identity = initiator.start(&alice_local, START)?;
+    let reply = {
+        let mut authority: Authority<'_> = bob_store.session_authority(&alice_key)?;
+        responder.receive(record_body(&identity[0]), &bob_local, &mut authority, START)?
+    };
+    let ready = {
+        let mut authority: Authority<'_> = alice_store.session_authority(&bob_key)?;
+        initiator.receive(record_body(&reply[0]), &alice_local, &mut authority, START)?
+    };
+    let Opened::Frame(frame_type, body) = responder
+        .transport_mut()
+        .open(record_body(&ready[0]), START)?
+    else {
+        return Err("expected a frame".into());
+    };
+    assert_eq!(frame_type, FrameType::RATCHET_READY);
+    let mut expected = session_id.to_vec();
+    expected.extend_from_slice(&generation_next.to_be_bytes());
+    expected.extend_from_slice(&confirmation(0x0002, 0)?);
+    assert_eq!(body.as_slice(), expected.as_slice());
+    Ok(())
+}

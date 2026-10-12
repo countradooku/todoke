@@ -27,7 +27,7 @@ base45 = "=3.2.0"
 blake3 = { workspace = true, features = ["traits-preview"] }
 ed25519-dalek.workspace = true
 hex.workspace = true
-hmac = { version = "=0.13.0", features = ["zeroize"] }
+hmac.workspace = true
 libcrux-curve25519.workspace = true
 libcrux-chacha20poly1305.workspace = true
 libcrux-ed25519.workspace = true

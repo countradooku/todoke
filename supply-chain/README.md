@@ -266,3 +266,17 @@ target, the non-dev graph (`cargo tree -e no-dev --format '{p}|{f}'`) enables
 feature (enabled only by the fixture generator's development dependency), or
 if either package is missing from that graph. The fuzz workspace enables
 `unaudited-suite-0001`; it is never shipped. No dependency changed.
+
+## Independent layout-test dependencies (2026-10-12)
+
+`todoke-crypto` gains two **development** dependencies for byte-layout tests
+of the §4.3 `Identity` signature input and the §4.4 ratchet confirmation, so
+that those tests recompute HMAC-SHA-256 with a different implementation from
+the libcrux code under test:
+
+| Package | Notes |
+| --- | --- |
+| `hmac 0.13.0` | Already a development dependency of `todoke-proto` (fixture generator); the pin moved to `[workspace.dependencies]` (cargo-deny `workspace-duplicate`). Latest release. |
+| `sha2 0.11.0` | `default-features = false`. Already in the lock through `ed25519-dalek`; latest release. |
+
+No package was added to the lock, and no exception was added.

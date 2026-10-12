@@ -52,8 +52,12 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 hex.workspace = true
+# Independent HMAC-SHA-256 (RustCrypto) for the §4.3/§4.4 byte-layout tests,
+# so they do not recompute with the libcrux code under test.
+hmac.workspace = true
 # Independent reference for signing tests only. Not a runtime dependency: its
 # 0.0.10 signer leaves the expanded secret key on the stack unwiped (§14.2).
 libcrux-ed25519.workspace = true
 proptest.workspace = true
 serde_json.workspace = true
+sha2 = { version = "=0.11.0", default-features = false }
