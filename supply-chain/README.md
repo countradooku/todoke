@@ -1,11 +1,11 @@
 # Dependency review
 
 This store was initialized with `cargo-vet 0.10.2` against the scaffold's empty
-third-party dependency graph. The protocol-vector examples now introduce pinned
-reference development dependencies. `audits.toml` and `imports.lock` remain empty;
-`config.toml` contains no exemptions or trusted publishers. These new dependencies
-have not received cargo-vet audits. Running reference vectors does not certify
-todoke's security or approve these crates for production secrets.
+third-party dependency graph. Since 2026-10-13 it imports the published audits
+of six organisations and records an exact-version exemption, labelled "Not yet
+reviewed", for every other package (see "cargo-vet adoption" below). Exemptions
+are not reviews: `cargo vet` passing does not certify todoke's security or
+approve any crate for production secrets.
 
 Run the same tool versions as CI:
 
@@ -26,10 +26,11 @@ the dependency change; never silence the policy broadly to get a passing build.
 
 Add dependency reviews and any supporting, explicitly trusted imported audits in
 the same pull request as a dependency change. Record only reviews actually
-performed. If an exemption is necessary, scope it to the exact package version,
-explain the reason, and track the outstanding review. Do not re-run `cargo vet
-init` to blanket-exempt new dependencies. Commit the root `Cargo.lock` and all
-generated store files, including `imports.lock`.
+performed. Every new package or version needs an audit, an imported audit, or a
+new exact-version exemption with a reason, added in the same pull request, so it
+is visible in review. The one-time exemption of the existing graph at adoption
+(2026-10-13) does not extend to later additions. Commit the root `Cargo.lock`
+and all generated store files, including `imports.lock`.
 
 When an isolated fuzz workspace is introduced, its dependency graph and lockfile
 must receive the same checks and their own audit store; see
@@ -292,3 +293,28 @@ each toolchain fails on 1.89 through 1.93 and passes on 1.94.0. The
 workspace and fuzz `rust-version`, the CI `msrv` job, `README.md`,
 `CONTRIBUTING.md`, and ADR 0001 now say 1.94.0. Local MSRV checks must cover
 an x86_64 target as well as the host.
+
+## cargo-vet adoption (2026-10-13)
+
+The maintainer chose to make `cargo vet --locked` pass instead of leaving it
+permanently failing. Both stores (`supply-chain/` and `fuzz/supply-chain/`)
+now:
+
+- **Import trusted audits** from the cargo-vet registry: Mozilla, Google,
+  Bytecode Alliance, ISRG, Zcash, and Embark Studios. Their audits are real
+  reviews by those organisations, pinned in `imports.lock`. They fully cover 21
+  root packages (18 in `fuzz/`) and partly cover 5 more.
+- **Exempt everything else** at its exact current version: 96 root entries and
+  92 fuzz entries, generated with `cargo vet regenerate exemptions`. Each carries
+  `notes = "Not yet reviewed. …"`. They include all libcrux crates, the dalek
+  crates, and snow. No audit was recorded for work not performed.
+
+This reverses the earlier rule against blanket exemptions, once, for the graph
+as it stood at adoption. It follows cargo-vet's documented way of adopting
+cargo-vet in an existing project. From now on, `cargo vet --locked` fails for
+any new package or version until it is audited, covered by an import, or
+exempted in a reviewed change. Because the project always moves to the latest
+releases, each upgrade must update the stores (`cargo vet regenerate exemptions`
+only for versions nobody has reviewed, keeping the notes). Replacing the
+exemptions for runtime cryptography (libcrux, dalek, snow, blake3, zeroize)
+with real audits remains part of production gate O6.

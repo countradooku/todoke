@@ -40,8 +40,9 @@ runtime libcrux dependencies, so the root advisory ignore still matches. Since
 that only the root graph needs would be reported as an unmatched warning, which
 that CI step does not deny. `libfuzzer-sys` has an NCSA license exception because it bundles
 LLVM libFuzzer, and it is never shipped. `fuzz/supply-chain` was initialized with
-`cargo vet init`, and every generated exemption was removed, matching the root
-store: `cargo vet` fails until real audits exist.
+`cargo vet init`. Like the root store, it imports trusted organisations' audits
+and exempts every other package at its exact version with a "Not yet reviewed"
+note (see supply-chain/README.md, "cargo-vet adoption").
 
 Every parser must gain a `cargo-fuzz` target in the same pull request that adds
 the parser, including protocol framing, discovery, manifests, archive metadata,
@@ -64,9 +65,10 @@ When adding a parser:
    versioned path dependencies for the todoke crates under test. Seed the lock
    from the root `Cargo.lock` so both graphs use the same versions. Record real
    audits or justified, narrowly scoped, reviewed exemptions in
-   `fuzz/supply-chain`; never record an audit not performed. (`cargo vet init`
-   rejects `--manifest-path`; run it from inside `fuzz/` if the store is ever
-   recreated, then remove its blanket exemptions.)
+   `fuzz/supply-chain`; never record an audit not performed. New versions need
+   an audit, an import, or a new exemption with a reason. (`cargo vet` store
+   commands such as `init`, `import` and `regenerate` reject `--manifest-path`;
+   run them from inside `fuzz/`.)
 4. Run both dependency checks from the repository root:
 
    ```sh
