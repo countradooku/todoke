@@ -439,6 +439,81 @@ pub(crate) mod testing {
         }
     }
 
+    /// What a presentation showed through its public accessors and `Debug`.
+    #[derive(Debug)]
+    pub(crate) struct SeenPresentation {
+        pub(crate) mode: SessionMode,
+        pub(crate) binding: DeviceBinding,
+        pub(crate) debug: String,
+    }
+
+    /// What a journaled transaction showed through its public accessors and
+    /// `Debug`.
+    #[derive(Debug)]
+    pub(crate) struct SeenJournal {
+        pub(crate) role: Role,
+        pub(crate) generation_next: u64,
+        pub(crate) handshake_hash: [u8; 32],
+        pub(crate) peer: Ed25519PublicKey,
+        pub(crate) debug: String,
+    }
+
+    /// Wraps an authority and records what it was shown.
+    pub(crate) struct Recording<A> {
+        pub(crate) inner: A,
+        pub(crate) presented: Option<SeenPresentation>,
+        pub(crate) journaled: Option<SeenJournal>,
+    }
+
+    impl<A> Recording<A> {
+        pub(crate) fn new(inner: A) -> Self {
+            Self {
+                inner,
+                presented: None,
+                journaled: None,
+            }
+        }
+    }
+
+    impl<A: PeerAuthority> sealed::Sealed for Recording<A> {}
+
+    impl<A: PeerAuthority> PeerAuthority for Recording<A> {
+        fn confirm_peer(
+            &mut self,
+            presented: &PeerPresentation<'_>,
+        ) -> Result<VerifiedDeviceBinding, SessionError> {
+            self.presented = Some(SeenPresentation {
+                mode: presented.mode(),
+                binding: presented.binding().clone(),
+                debug: format!("{presented:?}"),
+            });
+            self.inner.confirm_peer(presented)
+        }
+
+        fn journal(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.journaled = Some(SeenJournal {
+                role: pending.role(),
+                generation_next: pending.generation_next(),
+                handshake_hash: *pending.handshake_hash(),
+                peer: *pending.peer().device_public(),
+                debug: format!("{pending:?}"),
+            });
+            self.inner.journal(pending)
+        }
+
+        fn commit(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.inner.commit(pending)
+        }
+
+        fn clear(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.inner.clear(pending)
+        }
+
+        fn abandon(&mut self, pending: &PendingRatchet) {
+            self.inner.abandon(pending);
+        }
+    }
+
     /// Wraps an authority and runs `after` once step `step` (0 confirm,
     /// 1 journal, 2 commit, 3 clear) succeeded: slow durable I/O.
     pub(crate) struct Delayed<A> {

@@ -385,6 +385,11 @@ fn forged_ready_after_the_initiator_journaled_blocks_it() -> TestResult {
         );
     }
     assert_eq!(usable(&alice_store, &bob_key)?, None);
+    // Abandoned, not merely interrupted: the block is recorded now and the
+    // journaled next PSK is dropped rather than kept until a restart.
+    let contact = alice_store.contact(&bob_key).ok_or("contact")?;
+    assert_eq!(contact.state(), VerificationState::RatchetUncertain);
+    assert!(!contact.ratchet_pending());
     let restarted = reopen(&alice_store)?;
     let contact = restarted.contact(&bob_key).ok_or("contact")?;
     assert_eq!(contact.state(), VerificationState::RatchetUncertain);

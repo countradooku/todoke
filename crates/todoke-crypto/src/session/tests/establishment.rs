@@ -5,7 +5,7 @@ use super::support::*;
 use crate::identity::VerificationState;
 use crate::identity::contacts::Unavailable;
 use crate::identity::{MemoryStorage, SoftwareSealer};
-use crate::session::authority::testing::{Journal, PairingAuthority};
+use crate::session::authority::testing::{Journal, PairingAuthority, Recording};
 use crate::session::establish::Phase;
 use crate::session::handshake::{CODE_OFFER_LEN, CODE_SHARE_LEN};
 use crate::session::{
@@ -212,6 +212,131 @@ fn qr_and_code_sessions_complete_with_pairing_authorities() -> TestResult {
             &alice.key()
         );
     }
+    Ok(())
+}
+
+/// Each authority is shown exactly the authenticated peer and the §4.4
+/// transaction (its own role, generation + 1, this session's `h`, the
+/// verified peer), and neither view prints the next PSK.
+#[test]
+fn authorities_see_the_presented_peer_and_the_journaled_transaction() -> TestResult {
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
+    let mut harness = Harness::new(
+        Side::initiator(
+            alice.local()?,
+            Recording::new(PairingAuthority::new(Some(bob.key()))),
+        ),
+        Side::responder(
+            bob.local()?,
+            Recording::new(PairingAuthority::new(None)),
+            ResponderPlan::qr(psk()),
+        ),
+        InitiatorPlan::qr(LOCATOR, *bob.noise.public_key(), psk()),
+    )?;
+    harness.drain();
+    let hash = harness
+        .initiator
+        .core()
+        .ok_or("initiator not open")?
+        .info()
+        .handshake_hash;
+    assert!(harness.responder.is_open());
+    let psk_next = kdf::psk_next(&hash, &[0x9a; 32]).map_err(|_| "kdf")?;
+    for (authority, role, peer) in [
+        (&harness.initiator.authority, Role::Initiator, &bob),
+        (&harness.responder.authority, Role::Responder, &alice),
+    ] {
+        let presented = authority.presented.as_ref().ok_or("nothing presented")?;
+        assert_eq!(presented.mode, SessionMode::Qr);
+        assert_eq!(&presented.binding, peer.binding.binding());
+        assert!(
+            presented
+                .debug
+                .starts_with("PeerPresentation { mode: Qr, binding: ")
+        );
+        let journaled = authority.journaled.as_ref().ok_or("nothing journaled")?;
+        assert_eq!(
+            (
+                journaled.role,
+                journaled.generation_next,
+                journaled.handshake_hash,
+                journaled.peer
+            ),
+            (role, 1, hash, peer.key())
+        );
+        assert!(journaled.debug.starts_with(&format!(
+            "PendingRatchet {{ role: {role:?}, generation_next: 1, peer: "
+        )));
+        for debug in [&presented.debug, &journaled.debug] {
+            assert!(!debug.contains("psk"), "{debug}");
+            assert!(!debug.contains(&format!("{:?}", &psk_next[..8])), "{debug}");
+        }
+    }
+    Ok(())
+}
+
+/// A contact authority confirms peers of contact sessions only: used for a
+/// QR attempt it refuses the peer, and the contact is left untouched.
+#[test]
+fn contact_authority_refuses_peers_of_pairing_sessions() -> TestResult {
+    let mut c = contacts()?;
+    let bob_key = c.bob.key();
+    let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
+    let alice_local = c.alice.local()?;
+    let mut harness = Harness::new(
+        Side::initiator(alice_local, c.alice_store.session_authority(&bob_key)?),
+        Side::responder(
+            c.bob.local()?,
+            PairingAuthority::new(None),
+            ResponderPlan::qr(psk()),
+        ),
+        InitiatorPlan::qr(LOCATOR, *c.bob.noise.public_key(), psk()),
+    )?;
+    harness.drain();
+    harness.finish();
+    assert_eq!(harness.initiator.error(), Some(SessionError::Usage));
+    assert_eq!(harness.responder.authority.journal, Journal::Clean);
+    drop(harness);
+    assert_eq!(
+        usable(&c.alice_store, &bob_key)?,
+        Some((GENERATION, OLD_PSK))
+    );
+    assert!(
+        !c.alice_store
+            .contact(&bob_key)
+            .ok_or("contact")?
+            .ratchet_pending()
+    );
+    Ok(())
+}
+
+/// `Debug` of the local identity and of a contact authority is structural
+/// and prints no secret key or PSK.
+#[test]
+fn identity_and_authority_debug_output_is_structural() -> TestResult {
+    let mut c = contacts()?;
+    let bob_key = c.bob.key();
+    let local = c.alice.local()?;
+    let debug = format!("{local:?}");
+    assert!(debug.starts_with("LocalIdentity { device_key: "), "{debug}");
+    assert!(
+        debug.contains(&format!("device: {:?}", c.alice.key())),
+        "{debug}"
+    );
+    assert!(debug.contains(&format!("checked_at: {:?}", local.checked_at())));
+    assert!(
+        !debug.contains(&format!("{:?}", c.alice.noise.secret())),
+        "{debug}"
+    );
+    let authority = c.alice_store.session_authority(&bob_key)?;
+    assert_eq!(authority.device(), &bob_key);
+    let debug = format!("{authority:?}");
+    assert_eq!(
+        debug,
+        format!("ContactAuthority {{ device: {bob_key:?}, .. }}")
+    );
     Ok(())
 }
 
