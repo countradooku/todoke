@@ -209,6 +209,8 @@ impl From<QrError> for PairingError {
 }
 
 #[cfg(test)]
+mod authority_tests;
+#[cfg(test)]
 mod code_tests;
 #[cfg(test)]
 mod tests;
