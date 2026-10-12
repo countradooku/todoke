@@ -433,6 +433,24 @@ impl<IO, T> fmt::Debug for IncomingSession<IO, T> {
 /// ratchet committed (PROTOCOL §4–§5). Authentication only: it grants no
 /// consent to receive anything (§7).
 ///
+/// # Caller obligations (§6, §11, §13)
+///
+/// A new session is in §11's "Ratchet committed" state, which this type
+/// does not model. Until a Capabilities step is implemented in this crate,
+/// the caller must:
+///
+/// - send exactly one `Capabilities` frame before any transfer or `Revoke`
+///   frame, with local capabilities fixed before reading the peer's;
+/// - accept exactly one `Capabilities` from the peer, received within 5
+///   seconds of the session being returned (the ratchet gate opening), and
+///   close the session (for example with a session `Error`) if it is late,
+///   repeated, or preceded by another application frame;
+/// - treat the session as §11 "Ready" only after both are exchanged.
+///
+/// [`Self::recv`] passes `Capabilities`, transfer frames, and `Revoke`
+/// through without an exactly-once, deadline, or state check. The session
+/// layer only uses Capabilities to admit noncritical extension frames.
+///
 /// `send` and `recv` take `&mut self`; a full-duplex split is not provided
 /// yet. `recv` also runs keepalive and time-based rekeying, so callers keep
 /// a `recv` pending while the session is idle.
@@ -584,6 +602,10 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
 
     /// Receives the next frame for the caller. Ping/Pong, `KeyUpdate`,
     /// skipped extensions, and timers are handled internally.
+    ///
+    /// Application frames, including `Capabilities`, transfer frames, and
+    /// `Revoke`, are returned without §6/§11 state checks; see "Caller
+    /// obligations" on [`Session`].
     ///
     /// # Errors
     ///

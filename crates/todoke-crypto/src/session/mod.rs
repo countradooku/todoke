@@ -44,6 +44,13 @@
 //! - [`Session`] has no full-duplex split; `send` and `recv` take `&mut self`.
 //! - Capabilities (§6), transfers (§7), the "one session per device pair" rule,
 //!   and unauthenticated-attempt rate limits (§13) belong to higher layers.
+//!   In particular, until a Capabilities step exists here, the **caller** must
+//!   model §11's "Ratchet committed" state: send exactly one Capabilities
+//!   frame first, accept exactly one from the peer within 5 seconds of the
+//!   gate opening (§13; close otherwise), and refuse transfer frames and
+//!   `Revoke` before both are exchanged. [`Session::recv`] passes
+//!   Capabilities, transfer frames, and `Revoke` through without checking
+//!   any of this.
 //!
 //! # Secrets
 //!
