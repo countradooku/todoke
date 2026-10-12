@@ -6,7 +6,6 @@ use core::fmt;
 use todoke_proto::identity::KEM_STATIC_LEN;
 use todoke_proto::session::SessionMode;
 use todoke_proto::time::UnixTime;
-use zeroize::Zeroizing;
 
 use todoke_proto::pairing::{CODE_OFFER_TRANSCRIPT_LEN, CodeOffer, CodeOfferRequest};
 
@@ -170,7 +169,8 @@ impl OfferReservation {
             return Err(PairingError::Mode);
         };
         store.check_can_pair(self.pairing_id())?;
-        let plan = ResponderPlan::qr(PairingPsk::from_bytes(Zeroizing::new(**psk)));
+        // A zeroizing clone: no plain copy of the PSK on the way.
+        let plan = ResponderPlan::qr(PairingPsk::from_bytes(psk.clone()));
         let authority = PairingAuthority {
             store,
             mode: SessionMode::Qr,

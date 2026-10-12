@@ -3,6 +3,7 @@
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
+use super::code::HumanCode;
 use super::qr::{QR_PAYLOAD_LEN, QrPayload};
 
 /// Decodes a binary QR payload, checking expiry at the time it claims (so
@@ -28,6 +29,29 @@ pub fn qr_text(text: &str) -> Option<Zeroizing<String>> {
     QrPayload::from_text(text, now)
         .ok()
         .map(|payload| payload.to_text())
+}
+
+/// Parses typed code input both ways: [`HumanCode::parse_and_wipe`] on
+/// a copy of `data`, which must end up all zeroes, and
+/// [`HumanCode::parse`] on `data` as text. Both must agree, and an
+/// accepted code must be exactly the input bytes.
+///
+/// # Panics
+///
+/// On any violation of the above, which is a bug.
+pub fn human_code(data: &[u8]) {
+    let mut typed = data.to_vec();
+    let wiped = HumanCode::parse_and_wipe(&mut typed);
+    assert!(typed.iter().all(|&byte| byte == 0), "input not wiped");
+    let parsed = core::str::from_utf8(data).ok().map(HumanCode::parse);
+    match (wiped, parsed) {
+        (Ok(code), Some(Ok(same))) => {
+            assert_eq!(code.as_str().as_bytes(), data);
+            assert_eq!(same.as_str(), code.as_str());
+        }
+        (Err(_), None | Some(Err(_))) => {}
+        _ => panic!("parse and parse_and_wipe disagree"),
+    }
 }
 
 fn claimed_expiry(data: &[u8]) -> Option<UnixTime> {

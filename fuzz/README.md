@@ -19,6 +19,7 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_session_transport` | `SessionCore::receive` and its timers on an established session: peer frames of any type, `KeyUpdate`, Ping/Pong, `Error`, corrupted and raw records, clock jumps, and local sends, optionally under a small byte budget (PROTOCOL §5, §12, §13) |
 | `crypto_session_record_stream` | The async adapter's incremental length-prefixed record reader (prelude and transport framing) on arbitrary bytes delivered in short reads with `Pending` in between; checked against a direct split of the same bytes (PROTOCOL §4.1, §5, §13) |
 | `proto_session_frames` | Transport length prefix, decrypted frame header, and `Identity`, ratchet, `Error`, `KeyUpdate`, and `Ping` bodies (PROTOCOL §4.3, §4.4, §5, §12, §13) |
+| `crypto_human_code` | `HumanCode::parse_and_wipe` and `HumanCode::parse` on typed code input: exactly ten ASCII digits, both agree, and the buffer is wiped (PROTOCOL §3.2) |
 | `crypto_code_pairing` | Human-code pairing handshake driver (responder and initiator, right or wrong code): the `CodeShareA`/`CodeShareB` exchange through `CPace` and then the `XXpsk3` messages, with fixed public inputs and scripted randomness (PROTOCOL §3.2, §4.2) |
 | `proto_code_pairing` | `todoke_proto::pairing` bodies: `CodeOfferRequest`, `CodeOffer` (alone and as the echoing reply to a request), and `CodeShareA`/`CodeShareB` (PROTOCOL §3.2, §4.1) |
 

@@ -4,7 +4,7 @@
 
 use core::fmt;
 
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::rng::{self, RandomError};
 
@@ -19,7 +19,7 @@ const ACCEPT_BELOW: u64 = u64::MAX - u64::MAX % CODE_SPACE;
 /// A 10-digit pairing code. Zeroized on drop and redacted in `Debug`.
 ///
 /// The displayer shows it ([`Self::as_str`]); the entrant types it
-/// ([`Self::parse`]). Its bytes are exactly the ten ASCII digits, with no
+/// ([`Self::parse_and_wipe`], or [`Self::parse`]). Its bytes are exactly the ten ASCII digits, with no
 /// Unicode or integer normalization (§3.2).
 #[derive(Clone)]
 pub struct HumanCode(Zeroizing<[u8; CODE_DIGITS]>);
@@ -48,19 +48,22 @@ impl HumanCode {
         for _ in 0..32 {
             let mut bytes = Zeroizing::new([0; 8]);
             rng::fill(bytes.as_mut_slice())?;
-            let value = Zeroizing::new(u64::from_be_bytes(*bytes));
+            let mut value = Zeroizing::new(u64::from_be_bytes(*bytes));
             if *value < ACCEPT_BELOW {
-                return Ok(Self::from_value(*value % CODE_SPACE));
+                *value %= CODE_SPACE;
+                return Ok(Self::from_value(&mut value));
             }
         }
         Err(RandomError)
     }
 
-    fn from_value(mut value: u64) -> Self {
+    /// The ten digits of `value` (below 10^10), which is used up in place
+    /// and wiped by its owner, never copied into an unwiped temporary.
+    fn from_value(value: &mut Zeroizing<u64>) -> Self {
         let mut digits = Zeroizing::new([b'0'; CODE_DIGITS]);
         for digit in digits.iter_mut().rev() {
-            *digit = b'0' + u8::try_from(value % 10).unwrap_or(0);
-            value /= 10;
+            *digit = b'0' + u8::try_from(**value % 10).unwrap_or(0);
+            **value /= 10;
         }
         Self(digits)
     }
@@ -68,15 +71,38 @@ impl HumanCode {
     /// Parses an entered code: exactly ten ASCII digits `0`–`9`, nothing
     /// else (no spaces, separators, or non-ASCII digits).
     ///
+    /// `input` stays in the caller's memory; prefer
+    /// [`Self::parse_and_wipe`] for typed input the caller can hand over.
+    ///
     /// # Errors
     ///
     /// [`InvalidCode`] for any other input.
     pub fn parse(input: &str) -> Result<Self, InvalidCode> {
-        let bytes: &[u8; CODE_DIGITS] = input.as_bytes().try_into().map_err(|_| InvalidCode)?;
-        if !bytes.iter().all(u8::is_ascii_digit) {
+        Self::from_digits(input.as_bytes())
+    }
+
+    /// Parses an entered code like [`Self::parse`] from a buffer the caller
+    /// owns (for example the bytes of the text field), then wipes the
+    /// whole buffer, valid or not, so the typed code does not outlive the
+    /// returned value.
+    ///
+    /// # Errors
+    ///
+    /// [`InvalidCode`] if the input is not exactly ten ASCII digits; the
+    /// buffer is wiped then too.
+    pub fn parse_and_wipe(input: &mut [u8]) -> Result<Self, InvalidCode> {
+        let parsed = Self::from_digits(input);
+        input.zeroize();
+        parsed
+    }
+
+    fn from_digits(input: &[u8]) -> Result<Self, InvalidCode> {
+        if input.len() != CODE_DIGITS || !input.iter().all(u8::is_ascii_digit) {
             return Err(InvalidCode);
         }
-        Ok(Self(Zeroizing::new(*bytes)))
+        let mut digits = Zeroizing::new([0; CODE_DIGITS]);
+        digits.copy_from_slice(input);
+        Ok(Self(digits))
     }
 
     /// The ten digits, for display to the local user only. Never log it or
@@ -125,11 +151,50 @@ mod tests {
         Ok(())
     }
 
+    /// Typed input in a buffer the caller owns is wiped after parsing,
+    /// whether or not it was a valid code.
+    #[test]
+    fn parse_and_wipe_wipes_the_input() -> Result<(), InvalidCode> {
+        let mut typed = *b"0123456789";
+        assert_eq!(
+            HumanCode::parse_and_wipe(&mut typed)?.as_str(),
+            "0123456789"
+        );
+        assert_eq!(typed, [0; CODE_DIGITS]);
+        for bad in [
+            "",
+            "012345678",
+            "01234567890",
+            "012345678a",
+            "01234 6789",
+            " 0123456789",
+            "٠١٢٣٤٥٦٧٨٩",
+            "０１２３４５６７８９",
+        ] {
+            let mut typed = bad.as_bytes().to_vec();
+            assert_eq!(
+                HumanCode::parse_and_wipe(&mut typed).err(),
+                Some(InvalidCode),
+                "{bad:?}"
+            );
+            assert!(typed.iter().all(|&byte| byte == 0), "{bad:?}");
+            assert_eq!(typed.len(), bad.len());
+        }
+        Ok(())
+    }
+
     #[test]
     fn values_map_to_zero_padded_digits() {
-        assert_eq!(HumanCode::from_value(0).as_str(), "0000000000");
-        assert_eq!(HumanCode::from_value(42).as_str(), "0000000042");
-        assert_eq!(HumanCode::from_value(CODE_SPACE - 1).as_str(), "9999999999");
+        for (value, digits) in [
+            (0, "0000000000"),
+            (42, "0000000042"),
+            (CODE_SPACE - 1, "9999999999"),
+        ] {
+            let mut value = Zeroizing::new(value);
+            assert_eq!(HumanCode::from_value(&mut value).as_str(), digits);
+            // Used up in place.
+            assert_eq!(*value, 0);
+        }
         const { assert!(ACCEPT_BELOW.is_multiple_of(CODE_SPACE)) };
         const { assert!(u64::MAX - ACCEPT_BELOW < CODE_SPACE) };
     }

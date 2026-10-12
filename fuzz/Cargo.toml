@@ -123,3 +123,10 @@ path = "fuzz_targets/crypto_code_pairing.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_human_code"
+path = "fuzz_targets/crypto_human_code.rs"
+test = false
+doc = false
+bench = false
