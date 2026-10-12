@@ -304,6 +304,26 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<BTreeMap<KeyId, Entry>, LocalFormat
     Ok(keys)
 }
 
+/// Deterministic keys for known-answer tests and fuzz harnesses. Never
+/// compiled into a release build.
+#[cfg(any(test, fuzzing))]
+impl<S: Sealer, B: BlobStorage> EncryptedKeyStore<S, B> {
+    /// Inserts a fixed public test seed, for known-answer tests and
+    /// deterministic fuzz setups only.
+    pub(crate) fn insert_fixed_seed(
+        &mut self,
+        role: KeyRole,
+        seed: [u8; 32],
+    ) -> Result<KeyId, KeyStoreError> {
+        let entry = Entry::from_seed(role, ExportPolicy::NonExportable, Zeroizing::new(seed))
+            .map_err(map_format)?;
+        let id = KeyId::random()?;
+        self.keys.insert(id, entry);
+        self.persist()?;
+        Ok(id)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,22 +363,6 @@ mod tests {
         )
         .ok()?;
         seed.as_slice().try_into().ok()
-    }
-
-    impl<S: Sealer, B: BlobStorage> EncryptedKeyStore<S, B> {
-        /// Inserts a fixed public test seed, for known-answer tests only.
-        pub(crate) fn insert_fixed_seed(
-            &mut self,
-            role: KeyRole,
-            seed: [u8; 32],
-        ) -> Result<KeyId, KeyStoreError> {
-            let entry = Entry::from_seed(role, ExportPolicy::NonExportable, Zeroizing::new(seed))
-                .map_err(map_format)?;
-            let id = KeyId::random()?;
-            self.keys.insert(id, entry);
-            self.persist()?;
-            Ok(id)
-        }
     }
 
     /// RFC 8032 §7.1 TEST 1–3 through the store's own signing path, and

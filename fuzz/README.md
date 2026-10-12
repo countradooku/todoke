@@ -14,6 +14,8 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
 | `proto_session_prelude` | Prelude length prefix and record split, `ClientHello`/`ServerHello` (echo check on a split input), and `NoiseHandshake` records for every mode (PROTOCOL §4.1, §4.2.5) |
 | `crypto_session_handshake` | Session handshake driver (responder and initiator, all three modes) fed fuzzer-supplied prelude records, set up deterministically from the public §4.2 fixture inputs so mutated fixture records reach the Noise layer (PROTOCOL §4.1, §4.2) |
+| `crypto_session_establishment` | `Establishment::receive`: identity confirmation and the PSK ratchet transaction against an honest peer, with fuzzer-chosen wire operations (deliver, corrupt, replay, drop, swap, raw bytes, clock jumps, deadline checks) after a deterministic contact handshake between fixed public test identities (PROTOCOL §4.3, §4.4, §13) |
+| `crypto_session_transport` | `SessionCore::receive` and its timers on an established session: peer frames of any type, `KeyUpdate`, Ping/Pong, `Error`, corrupted and raw records, clock jumps, and local sends, optionally under a small byte budget (PROTOCOL §5, §12, §13) |
 | `proto_session_frames` | Transport length prefix, decrypted frame header, and `Identity`, ratchet, `Error`, `KeyUpdate`, and `Ping` bodies (PROTOCOL §4.3, §4.4, §5, §12, §13) |
 
 The `crypto_*` targets call `todoke_crypto::identity::fuzzing` or

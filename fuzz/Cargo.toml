@@ -80,3 +80,17 @@ path = "fuzz_targets/crypto_session_handshake.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_session_establishment"
+path = "fuzz_targets/crypto_session_establishment.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_session_transport"
+path = "fuzz_targets/crypto_session_transport.rs"
+test = false
+doc = false
+bench = false
