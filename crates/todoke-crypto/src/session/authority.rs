@@ -514,6 +514,41 @@ pub(crate) mod testing {
         }
     }
 
+    /// Confirms through `inner` but returns `substitute`: an authority that
+    /// does not confirm the presented keys.
+    pub(crate) struct Substituting<A> {
+        pub(crate) inner: A,
+        pub(crate) substitute: VerifiedDeviceBinding,
+    }
+
+    impl<A: PeerAuthority> sealed::Sealed for Substituting<A> {}
+
+    impl<A: PeerAuthority> PeerAuthority for Substituting<A> {
+        fn confirm_peer(
+            &mut self,
+            presented: &PeerPresentation<'_>,
+        ) -> Result<VerifiedDeviceBinding, SessionError> {
+            self.inner.confirm_peer(presented)?;
+            Ok(self.substitute.clone())
+        }
+
+        fn journal(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.inner.journal(pending)
+        }
+
+        fn commit(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.inner.commit(pending)
+        }
+
+        fn clear(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            self.inner.clear(pending)
+        }
+
+        fn abandon(&mut self, pending: &PendingRatchet) {
+            self.inner.abandon(pending);
+        }
+    }
+
     /// Wraps an authority and runs `after` once step `step` (0 confirm,
     /// 1 journal, 2 commit, 3 clear) succeeded: slow durable I/O.
     pub(crate) struct Delayed<A> {

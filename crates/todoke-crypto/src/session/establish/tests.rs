@@ -6,6 +6,7 @@ use crate::identity::{BindingError, VerificationState};
 use crate::identity::{IdentityError, MemoryStorage, SoftwareSealer, issue_device_binding};
 use crate::session::ContactAuthority;
 use crate::session::NoiseStaticKey;
+use crate::session::authority::testing::{Journal, PairingAuthority, Substituting};
 use crate::session::handshake::{HandshakeDriver, InitiatorPlan, ResponderPlan, read_client_hello};
 use crate::session::tests::support::*;
 use todoke_proto::session::ErrorScope;
@@ -400,6 +401,109 @@ fn forged_ready_after_the_initiator_journaled_blocks_it() -> TestResult {
     );
     // Bob never journaled.
     assert_eq!(usable(&bob_store, &alice_key)?, Some((GENERATION, OLD_PSK)));
+    Ok(())
+}
+
+/// Runs the honest establishment between pairing authorities to the open
+/// gate on both sides.
+fn open_pair(
+    alice: &Device,
+    bob: &Device,
+) -> AnyResult<(
+    Establishment,
+    Establishment,
+    PairingAuthority,
+    PairingAuthority,
+)> {
+    let (mut initiator, mut responder) = established_pair(alice, bob)?;
+    let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+    let mut alice_authority = PairingAuthority::new(Some(bob.key()));
+    let mut bob_authority = PairingAuthority::new(None);
+    let mut to_responder = initiator.start(&alice_local, START)?;
+    while let Some(record) = to_responder.pop() {
+        for reply in
+            responder.receive(record_body(&record), &bob_local, &mut bob_authority, START)?
+        {
+            if responder.phase() == Phase::AckPending {
+                responder.ack_queued(&mut bob_authority)?;
+            }
+            to_responder.extend(initiator.receive(
+                record_body(&reply),
+                &alice_local,
+                &mut alice_authority,
+                START,
+            )?);
+        }
+    }
+    Ok((initiator, responder, alice_authority, bob_authority))
+}
+
+/// The phase guards: `ack_queued` only after the responder queued its Ack,
+/// `into_core` only once the gate is open, and a failure reported after the
+/// gate opened neither blocks the committed pairing nor hides the error.
+#[test]
+fn phase_guards_around_the_open_gate() -> TestResult {
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let (mut initiator, _) = established_pair(&alice, &bob)?;
+    let mut authority = PairingAuthority::new(None);
+    assert_eq!(initiator.ack_queued(&mut authority), Err(state()));
+    assert_eq!(
+        initiator
+            .into_core(&alice.local()?, Entropy::Os, START)
+            .map(|_| ()),
+        Err(state())
+    );
+    let (mut initiator, mut responder, mut alice_authority, mut bob_authority) =
+        open_pair(&alice, &bob)?;
+    assert_eq!(
+        (initiator.phase(), responder.phase()),
+        (Phase::Open, Phase::Open)
+    );
+    assert_eq!(responder.ack_queued(&mut bob_authority), Err(state()));
+    for (establishment, authority) in [
+        (&mut initiator, &mut alice_authority),
+        (&mut responder, &mut bob_authority),
+    ] {
+        assert_eq!(
+            establishment.failure(SessionError::Timeout, authority),
+            SessionError::Timeout
+        );
+        assert_eq!(establishment.phase(), Phase::Open);
+        assert_eq!(authority.journal, Journal::Cleared);
+        assert_eq!(authority.committed_generation, Some(GENERATION + 1));
+    }
+    let core = responder.into_core(&bob.local()?, Entropy::Os, START)?;
+    assert_eq!(core.info().role, Role::Responder);
+    Ok(())
+}
+
+/// §4.3: the authority must confirm exactly the presented binding; one that
+/// answers with another binding is treated as an authentication failure
+/// before anything is journaled.
+#[test]
+fn an_authority_that_confirms_other_keys_is_refused() -> TestResult {
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let (mut initiator, mut responder) = established_pair(&alice, &bob)?;
+    let records = initiator.start(&alice.local()?, START)?;
+    let mut authority = Substituting {
+        inner: PairingAuthority::new(None),
+        substitute: alice.enrolled.bind_noise(2, *alice.noise.public_key())?,
+    };
+    assert_eq!(
+        responder
+            .receive(
+                record_body(&records[0]),
+                &bob.local()?,
+                &mut authority,
+                START
+            )
+            .map(|_| ()),
+        Err(SessionError::Authentication)
+    );
+    assert_eq!(responder.phase(), Phase::Failed);
+    assert_eq!(authority.inner.journal, Journal::Clean);
     Ok(())
 }
 
