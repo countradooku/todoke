@@ -38,10 +38,10 @@ cargo vet
 
 CI also checks Linux, macOS, Windows, the MSRV, cross-compilation, fuzz smoke runs, and a nightly scheduled mutation run. Keep the lockfile in version control. Update dependency policy and cargo-vet evidence with dependency changes; a blanket exemption is not a review.
 
-Rust 1.99.0 is pinned in `rust-toolchain.toml`; Rust 1.88.0 is the MSRV. Install the versions of additional tools declared by CI. To check the MSRV locally after installing that toolchain:
+Rust 1.99.0 is pinned in `rust-toolchain.toml`; Rust 1.89.0 is the MSRV. Install the versions of additional tools declared by CI. To check the MSRV locally after installing that toolchain:
 
 ```sh
-cargo +1.88.0 check --workspace --all-targets --locked
+cargo +1.89.0 check --workspace --all-targets --locked
 ```
 
 Cross-target checking requires the Rust target component and an appropriate host toolchain. iOS checks run on macOS. A successful check of an empty library is not proof that a future transport or UI supports that platform.

@@ -222,3 +222,13 @@ exceptions for old versions and raising the MSRV where needed.
   `rand_core 0.6.4` is no longer a dependency. Regenerated fixtures differ only
   in their `provenance` fields. Removed skips: `snow@0.9.6`,
   `rand_core@0.6.4`, and `getrandom@0.2.17`; `wasi 0.11.1` also left the lock.
+- `serde_json` 1.0.152 → 1.0.154 (published 2026-10-11; development only).
+- Transitive refresh with `cargo update`: `cc` 1.7.0 → 1.8.0, `ctutils`
+  0.4.2 → 0.4.3, `syn` 3.0.7 → 3.0.9, `unicode-ident` 1.0.26 → 1.0.27 (its
+  exact-version Unicode-3.0 license exception moved with it; same license
+  expression), and `uuid` 1.26.1 → 1.28.0.
+- MSRV 1.88 → 1.89. `uuid` 1.27 and later declare `rust-version = 1.89`.
+  `uuid` is reached only through libcrux's never-compiled `cfg(hax)` edge
+  (`hax-lib-macros-types`), so no real build compiles it, but Cargo's
+  MSRV-aware resolver holds it at 1.26.1 for any lower MSRV. Raising the MSRV
+  keeps every crate in the lock at its latest release.
