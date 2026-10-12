@@ -357,6 +357,23 @@ impl Establishment {
         }
     }
 
+    /// Fails the establishment with [`SessionError::Timeout`] if the §13
+    /// deadline passed. The adapter calls this with a fresh clock reading
+    /// after every step that may have run authority I/O (journal, commit,
+    /// clear) and before sending what that step produced: durable I/O
+    /// counts against the 10-second budget, and an overdue step must not be
+    /// followed by the next ratchet record.
+    pub(crate) fn check_deadline<A: PeerAuthority>(
+        &mut self,
+        now: Duration,
+        authority: &mut A,
+    ) -> Result<(), SessionError> {
+        if now >= self.deadline {
+            return Err(self.failure(SessionError::Timeout, authority));
+        }
+        Ok(())
+    }
+
     /// Responder step 4: `RatchetAck` was written to the pipe; clear the
     /// marker and open the gate (§4.4).
     pub(crate) fn ack_queued<A: PeerAuthority>(

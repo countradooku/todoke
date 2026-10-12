@@ -732,13 +732,15 @@ struct Stalling {
 struct StallState {
     writes: Option<usize>,
     stalled: bool,
+    /// Successful `poll_write` calls so far.
+    written: usize,
 }
 
 impl Stalling {
     fn new(end: End, writes: Option<usize>) -> (Self, Arc<Mutex<StallState>>) {
         let state = Arc::new(Mutex::new(StallState {
             writes,
-            stalled: false,
+            ..StallState::default()
         }));
         (
             Self {
@@ -790,6 +792,7 @@ impl AsyncWrite for Stalling {
                 Some(ref mut left) => *left -= 1,
                 None => {}
             }
+            state.written += 1;
         }
         Pin::new(&mut self.end).poll_write(cx, buf)
     }
@@ -1002,5 +1005,113 @@ fn stalled_session_write_times_out_at_the_idle_deadline() -> TestResult {
         block_on(a.send(FrameType::CAPABILITIES, b"x"))?,
         Err(SessionError::Closed)
     );
+    Ok(())
+}
+
+fn writes_so_far(state: &Mutex<StallState>) -> usize {
+    state.lock().map_or(0, |state| state.written)
+}
+
+/// §13: durable I/O counts against the 10-second establishment budget. An
+/// authority step that takes longer must not be followed by a send: the
+/// attempt fails (closed, through the §4.4 failure path) without the next
+/// ratchet record going out.
+#[test]
+fn slow_authority_steps_count_against_the_establishment_deadline() -> TestResult {
+    use crate::session::authority::testing::Delayed;
+    // (slow side: 0 Alice/initiator, 1 Bob/responder; slow step: 1 journal,
+    // 2 commit). Each step is followed by a send on that side.
+    for (side, step) in [(0, 1), (0, 2), (1, 1), (1, 2)] {
+        let label = format!("side {side} step {step}");
+        let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+        let wall = crate::identity::test_support::time(WALL)?;
+        let timer = ManualTimer::at(START);
+        let (alice_end, bob_end) = duplex(1 << 20);
+        let (alice_io, alice_state) = Stalling::new(alice_end, None);
+        let (bob_io, bob_state) = Stalling::new(bob_end, None);
+        let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+        let (alice_key, bob_key) = (alice.key(), bob.key());
+        let slow_state = if side == 0 {
+            Arc::clone(&alice_state)
+        } else {
+            Arc::clone(&bob_state)
+        };
+        let at_step = Arc::new(Mutex::new(None));
+        let hook = {
+            let (timer, slow_state, at_step) =
+                (timer.clone(), Arc::clone(&slow_state), Arc::clone(&at_step));
+            move || {
+                if let Ok(mut at_step) = at_step.lock() {
+                    *at_step = Some(writes_so_far(&slow_state));
+                }
+                timer.advance(crate::session::ESTABLISH_TIMEOUT + Duration::from_secs(1));
+            }
+        };
+        let mut hook: Option<Box<dyn FnMut()>> = Some(Box::new(hook));
+        let mut slow = |wanted: usize| -> (Option<u8>, Box<dyn FnMut()>) {
+            match (wanted == side).then(|| hook.take()).flatten() {
+                Some(hook) => (Some(step), hook),
+                None => (None, Box::new(|| {})),
+            }
+        };
+        let (initiator, responder) = {
+            let inner = alice_store.session_authority(&bob_key)?;
+            let plan = inner.initiator_plan(LOCATOR)?;
+            let (alice_step, alice_after) = slow(0);
+            let mut initiator_authority = Delayed {
+                inner,
+                step: alice_step,
+                after: alice_after,
+            };
+            let (bob_step, bob_after) = slow(1);
+            let initiator = Session::initiate(
+                alice_io,
+                timer.clone(),
+                GATE,
+                &alice_local,
+                wall,
+                plan,
+                &mut initiator_authority,
+            );
+            let responder = async {
+                let incoming = IncomingSession::accept(bob_io, timer.clone(), GATE).await?;
+                let inner = bob_store.session_authority(&alice_key)?;
+                let plan = inner.responder_plan(incoming.client_hello())?;
+                let mut authority = Delayed {
+                    inner,
+                    step: bob_step,
+                    after: bob_after,
+                };
+                incoming
+                    .respond(&bob_local, wall, plan, &mut authority)
+                    .await
+            };
+            join(initiator, responder)?
+        };
+        let (slow_result, other_result) = if side == 0 {
+            (initiator.map(|_| ()), responder.map(|_| ()))
+        } else {
+            (responder.map(|_| ()), initiator.map(|_| ()))
+        };
+        let recorded = at_step
+            .lock()
+            .map_err(|_| "poisoned")?
+            .ok_or_else(|| format!("{label}: step not reached"))?;
+        assert_eq!(
+            writes_so_far(&slow_state),
+            recorded,
+            "{label}: nothing is sent after an overdue step"
+        );
+        // The step journaled (or committed), so the failure blocks the
+        // pairing on the slow side; the other side never opens.
+        assert_eq!(slow_result, Err(SessionError::RatchetUncertain), "{label}");
+        assert!(other_result.is_err(), "{label}");
+        let slow_store_view = if side == 0 {
+            usable(&alice_store, &bob_key)?
+        } else {
+            usable(&bob_store, &alice_key)?
+        };
+        assert_eq!(slow_store_view, None, "{label}");
+    }
     Ok(())
 }

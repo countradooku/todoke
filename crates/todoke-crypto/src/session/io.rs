@@ -300,7 +300,9 @@ where
     K: KeyStore,
     A: PeerAuthority,
 {
-    for record in establishment.start(local, conn.now())? {
+    let records = establishment.start(local, conn.now())?;
+    establishment.check_deadline(conn.now(), authority)?;
+    for record in records {
         conn.write(&record, establishment.deadline()).await?;
     }
     while establishment.phase() != Phase::Open {
@@ -308,12 +310,17 @@ where
             .read(Framing::Transport, establishment.deadline())
             .await?
             .ok_or(SessionError::Timeout)?;
-        for reply in establishment.receive(&record, local, authority, conn.now())? {
+        let replies = establishment.receive(&record, local, authority, conn.now())?;
+        // Authority calls are synchronous; re-read the clock after them so
+        // slow durable I/O cannot push a ratchet record past the deadline.
+        establishment.check_deadline(conn.now(), authority)?;
+        for reply in replies {
             conn.write(&reply, establishment.deadline()).await?;
         }
         if establishment.phase() == Phase::AckPending {
             // The Ack is written and flushed: the responder's gate opens.
             establishment.ack_queued(authority)?;
+            establishment.check_deadline(conn.now(), authority)?;
         }
     }
     Ok(())

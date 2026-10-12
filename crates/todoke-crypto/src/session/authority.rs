@@ -113,6 +113,13 @@ mod sealed {
 /// durable before returning `Ok` (§4.4: "durably journals", "atomically
 /// commits").
 ///
+/// The methods are synchronous and are called from inside the session's
+/// async task, so they must return quickly. Their durable I/O counts
+/// against the 10-second identity and ratchet deadline (§13: "including
+/// durable I/O"): the session re-reads its clock after each call and, if
+/// the deadline passed, closes without sending the next record (after a
+/// journal, through [`abandon`], which blocks the pairing).
+///
 /// [`confirm_peer`]: Self::confirm_peer
 /// [`journal`]: Self::journal
 /// [`commit`]: Self::commit
@@ -416,6 +423,58 @@ pub(crate) mod testing {
 
         fn abandon(&mut self, _pending: &PendingRatchet) {
             self.journal = Journal::Abandoned;
+        }
+    }
+
+    /// Wraps an authority and runs `after` once step `step` (0 confirm,
+    /// 1 journal, 2 commit, 3 clear) succeeded: slow durable I/O.
+    pub(crate) struct Delayed<A> {
+        pub(crate) inner: A,
+        pub(crate) step: Option<u8>,
+        pub(crate) after: Box<dyn FnMut()>,
+    }
+
+    impl<A> Delayed<A> {
+        fn finish<T>(
+            &mut self,
+            index: u8,
+            result: Result<T, SessionError>,
+        ) -> Result<T, SessionError> {
+            if result.is_ok() && self.step == Some(index) {
+                (self.after)();
+            }
+            result
+        }
+    }
+
+    impl<A: PeerAuthority> sealed::Sealed for Delayed<A> {}
+
+    impl<A: PeerAuthority> PeerAuthority for Delayed<A> {
+        fn confirm_peer(
+            &mut self,
+            presented: &PeerPresentation<'_>,
+        ) -> Result<VerifiedDeviceBinding, SessionError> {
+            let result = self.inner.confirm_peer(presented);
+            self.finish(0, result)
+        }
+
+        fn journal(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            let result = self.inner.journal(pending);
+            self.finish(1, result)
+        }
+
+        fn commit(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            let result = self.inner.commit(pending);
+            self.finish(2, result)
+        }
+
+        fn clear(&mut self, pending: &PendingRatchet) -> Result<(), SessionError> {
+            let result = self.inner.clear(pending);
+            self.finish(3, result)
+        }
+
+        fn abandon(&mut self, pending: &PendingRatchet) {
+            self.inner.abandon(pending);
         }
     }
 }
