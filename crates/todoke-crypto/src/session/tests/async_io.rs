@@ -418,12 +418,15 @@ fn qr_pairing_over_a_byte_pipe() -> TestResult {
         &mut initiator_authority,
     );
     let responder = async {
-        let Accepted::Hello(incoming) =
-            IncomingSession::accept_any(bob_end, timer.clone(), GATE).await?
+        let Accepted::Hello(mut incoming) =
+            IncomingSession::accept_any(bob_end, timer.clone(), GATE, &offers).await?
         else {
             return Err("expected a ClientHello".into());
         };
+        // The stream's place in the §13 budget passes to the reservation.
+        assert_eq!(offers.active_attempts(), 1);
         let reservation = incoming.reserve_offer(&offers, wall)?;
+        assert_eq!(offers.active_attempts(), 1);
         let (plan, mut authority) = reservation.into_qr_responder(&mut bob_store)?;
         let session = incoming
             .respond(&bob_local, wall, plan, &mut authority)
@@ -432,6 +435,7 @@ fn qr_pairing_over_a_byte_pipe() -> TestResult {
     };
     let (a, b) = join(initiator, responder)?;
     let (a, (b, outcome)) = (a?, b?);
+    assert_eq!(offers.active_attempts(), 0);
     assert_eq!(a.mode(), SessionMode::Qr);
     assert_eq!(a.handshake_hash(), b.handshake_hash());
     assert_eq!(b.peer_binding().device_public(), &alice.key());
@@ -479,7 +483,7 @@ fn code_pairing_over_a_byte_pipe() -> TestResult {
         );
         let responder = async {
             let Accepted::CodeOfferRequest(request) =
-                IncomingSession::accept_any(bob_end, timer.clone(), GATE).await?
+                IncomingSession::accept_any(bob_end, timer.clone(), GATE, &offers).await?
             else {
                 return Err::<_, Box<dyn std::error::Error>>("expected a request".into());
             };
@@ -487,7 +491,7 @@ fn code_pairing_over_a_byte_pipe() -> TestResult {
             assert!(format!("{request:?}").starts_with(
                 "IncomingCodeRequest { request: CodeOfferRequest { stranger_token: [8 bytes] }"
             ));
-            let incoming = request.answer(CODE_GATE, &offers, &TOKEN, wall).await?;
+            let mut incoming = request.answer(CODE_GATE, &offers, &TOKEN, wall).await?;
             assert!(format!("{incoming:?}").contains("code_offer_exchanged: true"));
             assert_eq!(incoming.client_hello().mode(), SessionMode::Code);
             let reservation = incoming.reserve_offer(&offers, wall)?;
@@ -554,7 +558,7 @@ fn code_offer_exchange_refusals() -> TestResult {
         &mut alice_store,
     );
     let responder = async {
-        match IncomingSession::accept_any(bob_end, timer.clone(), GATE).await {
+        match IncomingSession::accept_any(bob_end, timer.clone(), GATE, &offers).await {
             Ok(Accepted::CodeOfferRequest(request)) => request
                 .answer(CODE_GATE, &offers, &TOKEN, wall)
                 .await
@@ -625,8 +629,12 @@ fn bare_code_hellos_do_not_consume_the_code_offer() -> TestResult {
         let (alice_end, bob_end) = duplex(4096);
         let mut writer = alice_end;
         block_on(futures_write_all(&mut writer, &bare_code_hello(id)?))??;
-        let Accepted::Hello(incoming) =
-            block_on(IncomingSession::accept_any(bob_end, timer.clone(), GATE))??
+        let Accepted::Hello(mut incoming) = block_on(IncomingSession::accept_any(
+            bob_end,
+            timer.clone(),
+            GATE,
+            &offers,
+        ))??
         else {
             return Err("expected a ClientHello".into());
         };
@@ -640,7 +648,7 @@ fn bare_code_hellos_do_not_consume_the_code_offer() -> TestResult {
     let (alice_end, bob_end) = duplex(4096);
     let mut writer = alice_end;
     block_on(futures_write_all(&mut writer, &bare_code_hello(id)?))??;
-    let incoming = block_on(IncomingSession::accept(bob_end, timer.clone(), GATE))??;
+    let mut incoming = block_on(IncomingSession::accept(bob_end, timer.clone(), GATE))??;
     assert_eq!(
         incoming.reserve_offer(&offers, wall).err(),
         Some(PairingError::NoOfferExchange)
@@ -1509,5 +1517,207 @@ fn refused_plans_send_nothing_and_a_dead_pipe_stays_closed() -> TestResult {
         block_on(a.send(FrameType::CAPABILITIES, b"late"))?,
         Err(SessionError::Closed)
     );
+    Ok(())
+}
+
+/// Polls `future` once with a no-op waker.
+fn poll_once<F: Future + ?Sized>(future: Pin<&mut F>) -> Poll<F::Output> {
+    future.poll(&mut Context::from_waker(Waker::noop()))
+}
+
+/// The prelude record of a `CodeOfferRequest` for [`TOKEN`].
+fn code_offer_request_record() -> AnyResult<Vec<u8>> {
+    let request = todoke_proto::pairing::CodeOfferRequest::new(TOKEN)?;
+    Ok(todoke_proto::session::encode_prelude_record(
+        todoke_proto::session::PreludeKind::CodeOfferRequest,
+        &request.encode(),
+    )?)
+}
+
+/// Whether the peer closed `end` without sending anything.
+fn closed_silently(end: &mut End) -> bool {
+    let mut byte = [0; 1];
+    matches!(
+        Pin::new(end).poll_read(&mut Context::from_waker(Waker::noop()), &mut byte),
+        Poll::Ready(Ok(0))
+    )
+}
+
+/// §13: every accepted pairing stream counts against the four concurrent
+/// unauthenticated attempts from the moment it is accepted, including
+/// streams that send nothing and streams that only asked for the code
+/// offer. Excess streams are closed silently before anything is read.
+#[test]
+fn accepted_streams_count_against_the_concurrent_attempt_budget() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    offers.create_code(wall, timer.now())?;
+    let id = offers.code_pairing_id().ok_or("offer")?;
+    let mut clients = Vec::new();
+    let mut idle = Vec::new();
+    for _ in 0..2 {
+        let (client, server) = duplex(4096);
+        clients.push(client);
+        let mut accept = Box::pin(IncomingSession::accept_any(
+            server,
+            timer.clone(),
+            GATE,
+            &offers,
+        ));
+        assert!(poll_once(accept.as_mut()).is_pending());
+        idle.push(accept);
+    }
+    let mut asking = Vec::new();
+    for _ in 0..2 {
+        let (client, server) = duplex(4096);
+        let mut writer = client;
+        block_on(futures_write_all(
+            &mut writer,
+            &code_offer_request_record()?,
+        ))??;
+        clients.push(writer);
+        let offers = &offers;
+        let timer = timer.clone();
+        let mut exchange = Box::pin(async move {
+            match IncomingSession::accept_any(server, timer, GATE, offers).await? {
+                Accepted::CodeOfferRequest(request) => request
+                    .answer(CODE_GATE, offers, &TOKEN, wall)
+                    .await
+                    .map(drop),
+                Accepted::Hello(_) => Err(SessionError::Usage),
+            }
+        });
+        // Answered, now waiting for a ClientHello that never comes.
+        assert!(poll_once(exchange.as_mut()).is_pending());
+        asking.push(exchange);
+    }
+    assert_eq!(
+        offers.active_attempts(),
+        crate::pairing::MAX_CONCURRENT_ATTEMPTS
+    );
+    // A fifth stream is refused at once and closed without a byte.
+    let (mut client, server) = duplex(4096);
+    block_on(futures_write_all(
+        &mut client,
+        &code_offer_request_record()?,
+    ))??;
+    let mut excess = Box::pin(IncomingSession::accept_any(
+        server,
+        timer.clone(),
+        GATE,
+        &offers,
+    ));
+    let Poll::Ready(refused) = poll_once(excess.as_mut()) else {
+        return Err("the excess stream was not refused".into());
+    };
+    assert_eq!(
+        refused.err().map(|e| e.to_string()),
+        Some(SessionError::Pairing(PairingError::RateLimited).to_string())
+    );
+    assert!(closed_silently(&mut client));
+    // Ending one attempt frees its place.
+    drop(idle.pop());
+    assert_eq!(offers.active_attempts(), 3);
+    let (_client, server) = duplex(4096);
+    let mut admitted = Box::pin(IncomingSession::accept_any(
+        server,
+        timer.clone(),
+        GATE,
+        &offers,
+    ));
+    assert!(poll_once(admitted.as_mut()).is_pending());
+    assert_eq!(
+        offers.active_attempts(),
+        crate::pairing::MAX_CONCURRENT_ATTEMPTS
+    );
+    drop((idle, asking, admitted));
+    assert_eq!(offers.active_attempts(), 0);
+    // Nothing reserved the code offer.
+    assert_eq!(offers.failures(&id), Some(0));
+    Ok(())
+}
+
+/// §13: at most 20 accepted streams start per minute, however quickly
+/// each one ends.
+#[test]
+fn accepted_streams_count_against_the_per_minute_budget() -> TestResult {
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    let accept_closed = || -> AnyResult<Result<(), SessionError>> {
+        // The peer hangs up at once.
+        let (client, server) = duplex(4096);
+        drop(client);
+        Ok(block_on(IncomingSession::accept_any(
+            server,
+            timer.clone(),
+            GATE,
+            &offers,
+        ))?
+        .map(drop))
+    };
+    for _ in 0..crate::pairing::MAX_ATTEMPT_STARTS_PER_MINUTE {
+        assert_eq!(accept_closed()?, Err(SessionError::Closed));
+        timer.advance(Duration::from_secs(1));
+    }
+    assert_eq!(offers.active_attempts(), 0);
+    let (mut client, server) = duplex(4096);
+    let refused = block_on(IncomingSession::accept_any(
+        server,
+        timer.clone(),
+        GATE,
+        &offers,
+    ))?;
+    assert_eq!(
+        refused.err().map(|e| e.to_string()),
+        Some(SessionError::Pairing(PairingError::RateLimited).to_string())
+    );
+    assert!(closed_silently(&mut client));
+    // A minute after the first start, one more may start.
+    timer.advance(Duration::from_secs(60) - Duration::from_secs(20));
+    assert_eq!(accept_closed()?, Err(SessionError::Closed));
+    assert_eq!(
+        accept_closed()?.err().map(|e| e.to_string()),
+        Some(SessionError::Pairing(PairingError::RateLimited).to_string())
+    );
+    Ok(())
+}
+
+/// After the code offer, the entrant's `ClientHello` must arrive within
+/// the 5-second exchange window that began with its request (§3.2), not a
+/// fresh 30-second wait; the stream then leaves the §13 budget.
+#[test]
+fn the_hello_after_a_code_offer_is_bounded_by_the_exchange_window() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let timer = JumpingTimer::default();
+    let offers = PairingOffers::new();
+    offers.create_code(wall, timer.now())?;
+    let id = offers.code_pairing_id().ok_or("offer")?;
+    let (client, server) = duplex(4096);
+    let mut writer = client;
+    block_on(futures_write_all(
+        &mut writer,
+        &code_offer_request_record()?,
+    ))??;
+    let start = timer.now();
+    let Accepted::CodeOfferRequest(request) = block_on(IncomingSession::accept_any(
+        server,
+        timer.clone(),
+        GATE,
+        &offers,
+    ))??
+    else {
+        return Err("expected a request".into());
+    };
+    assert_eq!(offers.active_attempts(), 1);
+    let answered = block_on(request.answer(CODE_GATE, &offers, &TOKEN, wall))?;
+    assert_eq!(answered.err(), Some(SessionError::Timeout));
+    assert_eq!(
+        timer.now(),
+        start + crate::session::CODE_OFFER_EXCHANGE_TIMEOUT
+    );
+    assert_eq!(offers.active_attempts(), 0);
+    assert_eq!(offers.failures(&id), Some(0));
+    drop(writer);
     Ok(())
 }

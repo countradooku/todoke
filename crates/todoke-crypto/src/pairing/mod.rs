@@ -88,6 +88,7 @@ use core::fmt;
 
 pub use authority::PairingAuthority;
 pub use code::{CODE_DIGITS, HumanCode, InvalidCode};
+pub(crate) use offers::AttemptPermit;
 pub use offers::{
     CODE_ATTEMPT_SPACING, MAX_ATTEMPT_STARTS_PER_MINUTE, MAX_CODE_FAILURES,
     MAX_CONCURRENT_ATTEMPTS, MAX_OFFERS, OfferKind, OfferReservation, PairingOffers,

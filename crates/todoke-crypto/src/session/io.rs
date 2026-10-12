@@ -32,7 +32,7 @@ use super::{
 use crate::identity::contacts::PairOutcome;
 use crate::identity::{BlobStorage, ContactStore, KeyStore, Sealer, VerifiedDeviceBinding};
 use crate::pairing::{
-    HumanCode, OfferReservation, PairingError, PairingOffers, UnauditedCodePairing,
+    AttemptPermit, HumanCode, OfferReservation, PairingError, PairingOffers, UnauditedCodePairing,
 };
 use crate::rng;
 
@@ -350,6 +350,9 @@ pub struct IncomingSession<IO, T> {
     /// `CodeOfferRequest || CodeOffer` when this stream began with the
     /// code offer exchange (§3.2).
     code_offer: Option<[u8; CODE_OFFER_TRANSCRIPT_LEN]>,
+    /// The stream's place in the §13 unauthenticated-attempt budget, from
+    /// [`Self::accept_any`], until a reservation takes it over.
+    permit: Option<AttemptPermit>,
 }
 
 /// What a newly accepted stream began with.
@@ -379,6 +382,8 @@ pub struct IncomingCodeRequest<IO, T> {
     request: CodeOfferRequest,
     received_at: Duration,
     gate: UnauditedSuite0001,
+    /// The stream's place in the §13 unauthenticated-attempt budget.
+    permit: AttemptPermit,
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
@@ -391,7 +396,11 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
     /// Answers with the live code offer if the request names `advertised`,
     /// the stranger token this device currently advertises, then reads the
     /// entrant's `ClientHello`, which must be a code-mode Hello for exactly
-    /// that offer. Reserve the offer next, with
+    /// that offer. The answer and the Hello must both arrive within the
+    /// 5-second exchange window that began with the request (§3.2, §13), so
+    /// a stream that stops after the offer holds its place in the
+    /// unauthenticated-attempt budget for at most that long. Reserve the
+    /// offer next, with
     /// [`IncomingSession::reserve_offer`] and
     /// [`OfferReservation::into_code_responder`].
     ///
@@ -401,8 +410,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
     ///
     /// [`SessionError::Pairing`] for a stale or unknown token or no live
     /// code offer (close silently), [`SessionError::Timeout`] if the answer
-    /// cannot be written within 5 seconds of the request (§3.2), and a
-    /// protocol, timeout, or I/O error while reading the Hello.
+    /// cannot be written or the Hello does not arrive within 5 seconds of
+    /// the request (§3.2), and a protocol or I/O error while reading the
+    /// Hello.
     pub async fn answer(
         self,
         _code_gate: UnauditedCodePairing,
@@ -415,20 +425,17 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
             request,
             received_at,
             gate,
+            permit,
         } = self;
         let offer = offers
             .answer_code_request(&request, advertised, now, conn.now())
             .map_err(SessionError::Pairing)?;
         let record = encode_prelude_record(PreludeKind::CodeOffer, &offer.encode())
             .map_err(|_| SessionError::Usage)?;
-        conn.write(
-            &record,
-            received_at.saturating_add(CODE_OFFER_EXCHANGE_TIMEOUT),
-        )
-        .await?;
-        let deadline = conn.now().saturating_add(HANDSHAKE_TIMEOUT);
+        let exchange_deadline = received_at.saturating_add(CODE_OFFER_EXCHANGE_TIMEOUT);
+        conn.write(&record, exchange_deadline).await?;
         let record = conn
-            .read(Framing::Prelude, deadline)
+            .read(Framing::Prelude, exchange_deadline)
             .await?
             .ok_or(SessionError::Timeout)?;
         let hello = handshake::read_client_hello(&record)?;
@@ -441,6 +448,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingCodeRequest<IO, T> {
             hello,
             gate,
             code_offer: Some(code_offer_bytes(request, &offer)),
+            permit: Some(permit),
         })
     }
 
@@ -476,6 +484,10 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     /// the §13 handshake deadline then runs from its arrival. Hello fields
     /// are untrusted hints until the handshake authenticates them.
     ///
+    /// The stream is not counted against the §13 unauthenticated-attempt
+    /// budget here; that is the caller's job for contact sessions. Accept
+    /// pairing streams with [`Self::accept_any`], which counts them.
+    ///
     /// # Errors
     ///
     /// [`SessionError::Timeout`], a malformed or unexpected record, or an
@@ -494,26 +506,40 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             hello,
             gate,
             code_offer: None,
+            permit: None,
         })
     }
 
     /// Reads the first record of a newly accepted stream: a `ClientHello`
     /// (QR or contact) or a `CodeOfferRequest` (human-code pairing, §3.2).
     ///
+    /// Before reading anything, the stream takes a place in the §13
+    /// unauthenticated-attempt budget kept by `offers` (at most 4 at once
+    /// and 20 starts per minute), which `timer` must serve as monotonic
+    /// clock. It keeps that place until the attempt authenticates or ends:
+    /// a pairing stream passes it to its reservation
+    /// ([`Self::reserve_offer`]); any other stream holds it until
+    /// [`Self::respond`] returns or the stream is dropped.
+    ///
     /// Waiting is bounded by [`HANDSHAKE_TIMEOUT`] as a local quota; a code
     /// offer request must arrive within [`CODE_OFFER_EXCHANGE_TIMEOUT`].
     ///
     /// # Errors
     ///
-    /// [`SessionError::Timeout`], a malformed or unexpected record, or an
-    /// I/O error. Nothing is sent in any case.
+    /// [`SessionError::Pairing`] with [`PairingError::RateLimited`] when the
+    /// budget is exhausted: the stream is dropped (closed silently, §12)
+    /// without reading from it. [`SessionError::Timeout`], a malformed or
+    /// unexpected record, or an I/O error. Nothing is sent in any case.
     pub async fn accept_any(
         io: IO,
         timer: T,
         gate: UnauditedSuite0001,
+        offers: &PairingOffers,
     ) -> Result<Accepted<IO, T>, SessionError> {
         let mut conn = Conn::new(io, timer);
         let started = conn.now();
+        // §13: reject excess before any work; dropping `conn` closes it.
+        let permit = offers.admit(started).map_err(SessionError::Pairing)?;
         let record = conn
             .read(Framing::Prelude, started.saturating_add(HANDSHAKE_TIMEOUT))
             .await?
@@ -529,6 +555,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
                     hello,
                     gate,
                     code_offer: None,
+                    permit: Some(permit),
                 }))
             }
             PreludeKind::CodeOfferRequest => {
@@ -541,6 +568,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
                     conn,
                     request,
                     gate,
+                    permit,
                 }))
             }
             _ => Err(SessionError::Protocol(ErrorCode::STATE)),
@@ -562,7 +590,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     /// A code-mode Hello is accepted only on a stream that began with the
     /// code offer exchange ([`IncomingCodeRequest::answer`]); any other is
     /// refused before the offer is looked at, so it costs the offer none
-    /// of its attempts (§3.2).
+    /// of its attempts (§3.2). A stream from [`Self::accept_any`] passes
+    /// its place in the §13 budget on to the reservation; any other starts
+    /// a new attempt there.
     ///
     /// # Errors
     ///
@@ -570,11 +600,17 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     /// that is unknown, expired, busy, too soon, or over the §13 budget.
     /// Close the stream silently (§12).
     pub fn reserve_offer(
-        &self,
+        &mut self,
         offers: &PairingOffers,
         now: UnixTime,
     ) -> Result<OfferReservation, PairingError> {
-        offers.reserve_attempt(&self.hello, self.code_offer.is_some(), now, self.conn.now())
+        offers.reserve_attempt(
+            &self.hello,
+            self.code_offer.is_some(),
+            &mut self.permit,
+            now,
+            self.conn.now(),
+        )
     }
 
     /// Completes the handshake, identity confirmation, and ratchet as
@@ -606,7 +642,11 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             received_at,
             gate,
             code_offer,
+            permit,
         } = self;
+        // A stream that was not reserved for pairing keeps its place in the
+        // §13 budget until this attempt ends.
+        let _permit = permit;
         local.check_valid_at(now)?;
         // A code-pairing plan needs the offer records of this stream, and a
         // stream that exchanged them can only run code pairing (§3.2).

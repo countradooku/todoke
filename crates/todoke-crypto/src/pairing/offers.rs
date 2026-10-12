@@ -11,10 +11,13 @@
 //! | One authenticated attempt per offer at a time; unauthenticated failures do not consume a QR offer | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer), [`OfferReservation`] |
 //! | A code offer: at most 5 failed attempts, at least 2 s between attempts, one `CPace` at a time, only after the stream's offer exchange | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer) |
 //! | Offers expire after 300 s, measured on both the wall and the monotonic clock | every operation |
-//! | At most 4 unauthenticated attempts at once and 20 starts per minute | the shared budget of [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer) |
+//! | At most 4 unauthenticated attempts at once and 20 starts per minute, counted from the moment a stream is accepted | [`IncomingSession::accept_any`](crate::session::IncomingSession::accept_any), then the reservation |
 //!
-//! The §13 budget here covers pairing attempts. Contact sessions share the
-//! same §13 limits; applying them to contact attempts is the caller's job
+//! The §13 budget here covers every stream accepted with
+//! [`IncomingSession::accept_any`](crate::session::IncomingSession::accept_any),
+//! including contact Hellos that arrive that way. Contact sessions accepted
+//! with [`IncomingSession::accept`](crate::session::IncomingSession::accept)
+//! share the same §13 limits; applying them there is the caller's job
 //! until the core has a single admission point.
 
 use core::fmt;
@@ -318,13 +321,32 @@ impl PairingOffers {
         now: UnixTime,
         mono: Duration,
     ) -> Result<OfferReservation, PairingError> {
-        self.reserve_attempt(hello, true, now, mono)
+        self.reserve_attempt(hello, true, &mut None, now, mono)
+    }
+
+    /// Admits a newly accepted stream into the §13 unauthenticated-attempt
+    /// budget, before anything is read from it. The permit holds one of the
+    /// concurrent attempts until it is dropped or passed on to the
+    /// stream's reservation.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::RateLimited`]: close the stream silently (§12).
+    pub(crate) fn admit(&self, mono: Duration) -> Result<AttemptPermit, PairingError> {
+        self.lock()?.budget.try_start(mono)?;
+        Ok(AttemptPermit {
+            table: Arc::clone(&self.table),
+            held: true,
+        })
     }
 
     /// Reserves the offer named by `hello`'s locator for this attempt.
     /// `exchanged` says whether the stream began with the
     /// `CodeOfferRequest`/`CodeOffer` exchange; only such a stream may
-    /// attempt a code offer (§3.2).
+    /// attempt a code offer (§3.2). A stream admitted with [`Self::admit`]
+    /// passes its `permit` on to the reservation, which then counts as the
+    /// same attempt; without one the reservation starts a new attempt in
+    /// the §13 budget.
     ///
     /// The `ClientHello` is untrusted: this only decides whether an attempt
     /// may start. The reservation ends when it is burned (the attempt
@@ -346,6 +368,7 @@ impl PairingOffers {
         &self,
         hello: &Hello,
         exchanged: bool,
+        permit: &mut Option<AttemptPermit>,
         now: UnixTime,
         mono: Duration,
     ) -> Result<OfferReservation, PairingError> {
@@ -376,7 +399,16 @@ impl PairingOffers {
         {
             return Err(PairingError::TooSoon);
         }
-        table.budget.try_start(mono)?;
+        match permit.take() {
+            // The stream's admitted attempt becomes the reservation's.
+            Some(mut admitted) if Arc::ptr_eq(&admitted.table, &self.table) => {
+                admitted.held = false;
+            }
+            other => {
+                *permit = other;
+                table.budget.try_start(mono)?;
+            }
+        }
         table.last_token = table.last_token.wrapping_add(1);
         let token = table.last_token;
         slot.holder = Some(token);
@@ -424,6 +456,32 @@ impl fmt::Debug for PairingOffers {
             .field("offers", &offers)
             .field("active_attempts", &active)
             .finish()
+    }
+}
+
+/// One accepted stream's place in the §13 unauthenticated-attempt budget
+/// ([`PairingOffers::admit`]). Dropping it frees the place; a reservation
+/// made for the stream takes it over.
+pub(crate) struct AttemptPermit {
+    table: Arc<Mutex<Table>>,
+    held: bool,
+}
+
+impl Drop for AttemptPermit {
+    fn drop(&mut self) {
+        if self.held
+            && let Ok(mut table) = self.table.lock()
+        {
+            table.budget.finish();
+        }
+    }
+}
+
+impl fmt::Debug for AttemptPermit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AttemptPermit")
+            .field("held", &self.held)
+            .finish_non_exhaustive()
     }
 }
 

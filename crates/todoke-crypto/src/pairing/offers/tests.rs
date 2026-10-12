@@ -266,28 +266,36 @@ fn code_hellos_without_the_offer_exchange_never_reserve() -> TestResult {
     for attempt in 0..u32::from(MAX_CODE_FAILURES) * 5 {
         let mono = MONO + CODE_ATTEMPT_SPACING * attempt;
         assert_eq!(
-            offers.reserve_attempt(&bare, false, now()?, mono).err(),
+            offers
+                .reserve_attempt(&bare, false, &mut None, now()?, mono)
+                .err(),
             Some(PairingError::NoOfferExchange)
         );
     }
     // Also for an unknown pairing ID: nothing is looked up.
     assert_eq!(
         offers
-            .reserve_attempt(&hello(SessionMode::Code, [0x99; 16])?, false, now()?, MONO)
+            .reserve_attempt(
+                &hello(SessionMode::Code, [0x99; 16])?,
+                false,
+                &mut None,
+                now()?,
+                MONO
+            )
             .err(),
         Some(PairingError::NoOfferExchange)
     );
     assert_eq!(offers.failures(&id), Some(0));
     assert_eq!(offers.active_attempts(), 0);
     // An exchanged stream may still attempt it at once (no spacing used).
-    let reservation = offers.reserve_attempt(&bare, true, now()?, MONO)?;
+    let reservation = offers.reserve_attempt(&bare, true, &mut None, now()?, MONO)?;
     assert_eq!(reservation.kind(), OfferKind::Code);
     // QR attempts never had an exchange to make.
     let device = Device::new()?;
     let qr = *qr_offer(&offers, &device)?.pairing_id();
     assert!(
         offers
-            .reserve_attempt(&hello(SessionMode::Qr, qr)?, false, now()?, MONO)
+            .reserve_attempt(&hello(SessionMode::Qr, qr)?, false, &mut None, now()?, MONO)
             .is_ok()
     );
     Ok(())
@@ -589,7 +597,7 @@ proptest! {
                     if ids.is_empty() { continue; }
                     let id = ids[n % ids.len()];
                     let bare = hello(SessionMode::Code, id).map_err(|e| TestCaseError::fail(e.to_string()))?;
-                    prop_assert_eq!(offers.reserve_attempt(&bare, false, wall, mono).err(), Some(PairingError::NoOfferExchange));
+                    prop_assert_eq!(offers.reserve_attempt(&bare, false, &mut None, wall, mono).err(), Some(PairingError::NoOfferExchange));
                 }
                 Op::CancelAll => {
                     offers.cancel_all();
