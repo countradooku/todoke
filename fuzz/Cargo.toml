@@ -94,3 +94,10 @@ path = "fuzz_targets/crypto_session_transport.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_session_record_stream"
+path = "fuzz_targets/crypto_session_record_stream.rs"
+test = false
+doc = false
+bench = false

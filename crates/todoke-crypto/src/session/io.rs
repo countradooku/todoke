@@ -43,7 +43,7 @@ pub trait Timer {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Framing {
+pub(super) enum Framing {
     Prelude,
     Transport,
 }
@@ -52,7 +52,7 @@ enum Framing {
 /// cancelled read, and the prefix is validated before the body is
 /// buffered (§4.1, §5, §13).
 #[derive(Debug)]
-struct RecordReader {
+pub(super) struct RecordReader {
     prefix: [u8; 2],
     prefix_filled: usize,
     body: Vec<u8>,
@@ -61,7 +61,7 @@ struct RecordReader {
 }
 
 impl RecordReader {
-    const fn new() -> Self {
+    pub(super) const fn new() -> Self {
         Self {
             prefix: [0; 2],
             prefix_filled: 0,
@@ -71,7 +71,7 @@ impl RecordReader {
         }
     }
 
-    fn poll_record<R: AsyncRead + Unpin>(
+    pub(super) fn poll_record<R: AsyncRead + Unpin>(
         &mut self,
         io: &mut R,
         framing: Framing,
@@ -644,3 +644,6 @@ impl<IO, T> fmt::Debug for Session<IO, T> {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests;

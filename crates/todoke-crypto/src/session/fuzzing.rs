@@ -11,13 +11,21 @@
 //! operation such as delivering the honest peer's next record, a corrupted
 //! or replayed one, raw bytes, or a clock jump, so inputs reach every phase
 //! without precomputed ciphertexts.
+//!
+//! The record-stream harness runs the async adapter's incremental record
+//! reader over arbitrary bytes delivered in short reads.
 
 use core::num::NonZeroU64;
+use core::pin::Pin;
+use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::OnceLock;
 
-use todoke_proto::session::{FrameType, Hello, SessionMode, prelude_record_len};
+use futures_io::AsyncRead;
+use todoke_proto::session::{
+    ErrorCode, FrameType, Hello, SessionMode, ciphertext_len, prelude_record_len,
+};
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
@@ -28,6 +36,7 @@ use super::handshake::{
     CODE_OFFER_LEN, CODE_SHARE_LEN, CodeTranscript, HandshakeDriver, InitiatorPlan, ResponderPlan,
     Split, read_client_hello,
 };
+use super::io::{Framing, RecordReader};
 use super::keys::{NoiseStaticKey, PairingPsk};
 use super::transport::{FrameTransport, Limits, MAX_SESSION_DURATION, SessionCore, SessionInfo};
 use super::{LocalIdentity, SessionError, UnauditedSuite0001, WallClock};
@@ -609,4 +618,85 @@ pub fn transport_records(data: &[u8]) {
         // What the fuzzed side would send is not fed back.
         while target.pop_outgoing().is_some() {}
     }
+}
+
+/// A pipe that returns `Pending` before every read and then at most `chunk`
+/// bytes, so record boundaries fall anywhere and progress must survive.
+struct ChunkedPipe<'a> {
+    stream: &'a [u8],
+    chunk: usize,
+    pending: bool,
+}
+
+impl AsyncRead for ChunkedPipe<'_> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _cx: &mut Context<'_>,
+        buf: &mut [u8],
+    ) -> Poll<std::io::Result<usize>> {
+        self.pending = !self.pending;
+        if self.pending {
+            return Poll::Pending;
+        }
+        let count = buf.len().min(self.chunk).min(self.stream.len());
+        let (head, rest) = self.stream.split_at(count);
+        buf[..count].copy_from_slice(head);
+        self.stream = rest;
+        Poll::Ready(Ok(count))
+    }
+}
+
+/// The incremental length-prefixed record reader of the async adapter
+/// (PROTOCOL §4.1, §5, §13) on an arbitrary byte stream.
+///
+/// The first byte selects the framing (bit 0: prelude or transport) and the
+/// largest read (bits 1..7: 1 to 128 bytes); the rest is the stream. The
+/// reader's records must equal a direct split of the same bytes, and it must
+/// stop exactly at the first out-of-range prefix (`MALFORMED`) or at the end
+/// of the stream (`Closed`), never returning a partial record.
+pub fn record_stream(data: &[u8]) {
+    let Some((&control, stream)) = data.split_first() else {
+        return;
+    };
+    let framing = if control & 1 == 0 {
+        Framing::Prelude
+    } else {
+        Framing::Transport
+    };
+    let mut pipe = ChunkedPipe {
+        stream,
+        chunk: usize::from(control >> 1) + 1,
+        pending: false,
+    };
+    let mut reader = RecordReader::new();
+    let mut cx = Context::from_waker(Waker::noop());
+    let mut records = Vec::new();
+    let error = loop {
+        match reader.poll_record(&mut pipe, framing, &mut cx) {
+            Poll::Ready(Ok(record)) => records.push(record),
+            Poll::Ready(Err(error)) => break error,
+            Poll::Pending => {}
+        }
+    };
+    let mut expected = Vec::new();
+    let mut rest = stream;
+    let expected_error = loop {
+        let Some((prefix, after)) = rest.split_first_chunk::<2>() else {
+            break SessionError::Closed;
+        };
+        let length = match framing {
+            Framing::Prelude => prelude_record_len(*prefix),
+            Framing::Transport => ciphertext_len(*prefix),
+        };
+        let Ok(length) = length else {
+            break SessionError::Protocol(ErrorCode::MALFORMED);
+        };
+        let Some(record) = after.get(..length) else {
+            break SessionError::Closed;
+        };
+        expected.push(record.to_vec());
+        rest = &after[length..];
+    };
+    assert_eq!(records, expected);
+    assert_eq!(error, expected_error);
 }
