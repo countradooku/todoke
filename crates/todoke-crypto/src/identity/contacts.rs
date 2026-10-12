@@ -2230,6 +2230,47 @@ mod tests {
         Ok(())
     }
 
+    /// Commit and clear act only on the transaction they name: another
+    /// handshake hash is refused and leaves the journal, the PSK, and the
+    /// generation exactly as they were (§4.4).
+    #[test]
+    fn ratchet_steps_for_another_handshake_hash_change_nothing() -> TestResult {
+        let (enrolled, mut store) = paired()?;
+        let key = device(&enrolled)?;
+        let (hash, other, next) = ([0x48; 32], [0x49; 32], [0x99; 32]);
+        store.journal_ratchet(&key, 2, &hash, &next)?;
+        let journaled = store.storage().blob().map(<[u8]>::to_vec);
+        assert_eq!(
+            store.commit_ratchet(&key, &other),
+            Err(ContactError::RatchetMismatch)
+        );
+        let contact = store.contact(&key).ok_or("contact")?;
+        assert!(contact.ratchet_pending());
+        assert_eq!(
+            (contact.generation(), contact.psk().expose()),
+            (1, &[0x77; 32])
+        );
+        assert_eq!(store.storage().blob().map(<[u8]>::to_vec), journaled);
+        // The named transaction still commits.
+        store.commit_ratchet(&key, &hash)?;
+        let committed = store.storage().blob().map(<[u8]>::to_vec);
+        assert_eq!(
+            store.clear_ratchet(&key, &other),
+            Err(ContactError::RatchetMismatch)
+        );
+        let contact = store.contact(&key).ok_or("contact")?;
+        assert!(contact.ratchet_pending());
+        assert_eq!((contact.generation(), contact.psk().expose()), (2, &next));
+        assert_eq!(
+            store.availability(&key)?.map(|_| ()),
+            Err(Unavailable::RatchetUncertain)
+        );
+        assert_eq!(store.storage().blob().map(<[u8]>::to_vec), committed);
+        store.clear_ratchet(&key, &hash)?;
+        assert!(store.availability(&key)?.is_ok());
+        Ok(())
+    }
+
     /// Re-pairing replaces a journaled contact; journaling refuses overflow.
     #[test]
     fn repairing_clears_a_journal_and_overflow_is_refused() -> TestResult {
@@ -3118,6 +3159,8 @@ mod tests {
         /// Commit for another transaction's handshake hash.
         CommitWrongHash,
         Clear,
+        /// Clear for another transaction's handshake hash.
+        ClearWrongHash,
         Abandon,
     }
 
@@ -3138,6 +3181,7 @@ mod tests {
             3 => Just(Op::Commit),
             1 => Just(Op::CommitWrongHash),
             3 => Just(Op::Clear),
+            1 => Just(Op::ClearWrongHash),
             1 => Just(Op::Abandon),
         ]
     }
@@ -3330,11 +3374,15 @@ mod tests {
                             },
                         }
                     }
-                    Op::Clear => {
-                        let result = store.clear_ratchet(&key, &hash);
+                    Op::Clear | Op::ClearWrongHash => {
+                        let presented = if matches!(op, Op::Clear) { hash } else { [0x49; 32] };
+                        let result = store.clear_ratchet(&key, &presented);
                         match model.as_mut() {
                             None => prop_assert_eq!(result, Err(ContactError::UnknownContact)),
-                            Some(m) if m.journal == Some(ModelJournal::Committed) => {
+                            Some(m)
+                                if m.journal == Some(ModelJournal::Committed)
+                                    && matches!(op, Op::Clear) =>
+                            {
                                 prop_assert_eq!(result, Ok(()));
                                 m.journal = None;
                             }
