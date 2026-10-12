@@ -369,3 +369,10 @@ release removes a riscv-zknh workaround, fixes AArch64 round-constant
 loading under Stacked Borrows, and raises its MSRV to 1.88 (below ours).
 Both lock files and both vet stores moved to the new version; its exemption
 keeps the "Not yet reviewed" note. No exception changed.
+
+Release age: `sha2` 0.11.1 was published on 2026-10-12 and adopted on
+2026-10-13, one day later. This follows the maintainer's policy of always
+taking the latest release with no cooling-off period (see "Latest-version
+upgrade" above); no review of the release beyond its notes was done. It
+reaches runtime builds through `ed25519-dalek`, so a regression or a
+compromised release would affect signing in every build.
