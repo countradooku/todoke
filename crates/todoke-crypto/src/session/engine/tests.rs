@@ -658,7 +658,45 @@ fn debug_output_names_no_secret() -> TestResult {
     assert!(debug.contains("KkPsk2") && debug.contains("position: 0"));
     assert!(!debug.contains("55"));
     assert_eq!(format!("{:?}", Entropy::Os), "Entropy::Os");
+    assert_eq!(
+        format!("{:?}", Entropy::scripted(vec![vec![0x55; 32]])),
+        "Entropy::Scripted"
+    );
+    // The completed transport prints only its role, never a key.
+    let mut peers = fixture_peers(&vector, Pattern::KkPsk2, None, None)?;
+    let first = peers.initiator.write_message()?;
+    peers.responder.read_message(&first)?;
+    let second = peers.responder.write_message()?;
+    peers.initiator.read_message(&second)?;
+    let initiator = peers.initiator.into_transport()?;
+    let responder = peers.responder.into_transport()?;
+    assert_eq!(
+        format!("{initiator:?}"),
+        "NoiseTransport { initiator: true, .. }"
+    );
+    assert_eq!(
+        format!("{responder:?}"),
+        "NoiseTransport { initiator: false, .. }"
+    );
     Ok(())
+}
+
+/// Engine errors render as fixed, distinct messages with no peer detail.
+#[test]
+fn noise_errors_render_fixed_messages() {
+    assert_eq!(
+        [
+            NoiseError::Authentication,
+            NoiseError::Random,
+            NoiseError::State
+        ]
+        .map(|error| error.to_string()),
+        [
+            "handshake authentication failed",
+            "randomness unavailable",
+            "handshake state error"
+        ]
+    );
 }
 
 /// The engine wipes libcrux's ML-KEM key objects in place through
