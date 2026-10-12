@@ -90,7 +90,11 @@ fn reservations_are_exclusive_and_qr_failures_do_not_consume() -> TestResult {
     let mut burned = offers.reserve(&hello(SessionMode::Qr, id)?, now()?, MONO)?;
     burned.authenticated();
     assert_eq!(offers.active_attempts(), 0);
-    burned.burn();
+    assert!(burned.still_offered());
+    assert_eq!(burned.burn(), Ok(()));
+    assert!(!burned.still_offered());
+    // Burning twice is a no-op.
+    assert_eq!(burned.burn(), Ok(()));
     drop(burned);
     assert_eq!(
         offers
@@ -204,16 +208,48 @@ fn a_new_code_replaces_the_old_one() -> TestResult {
     let offers = PairingOffers::new();
     offers.create_code(now()?, MONO)?;
     let first = offers.code_pairing_id().ok_or("first")?;
+    // While an attempt holds the code, a new code is refused instead of
+    // silently replacing it, and the attempt keeps its offer.
+    let held = offers.reserve(&hello(SessionMode::Code, first)?, now()?, MONO)?;
+    assert_eq!(
+        offers.create_code(now()?, MONO).err(),
+        Some(PairingError::OfferBusy)
+    );
+    assert_eq!(offers.code_pairing_id(), Some(first));
+    assert!(held.still_offered());
+    drop(held);
+    assert_eq!(offers.failures(&first), Some(1));
+    // Free again: the new code replaces it.
     offers.create_code(now()?, MONO)?;
     let second = offers.code_pairing_id().ok_or("second")?;
     assert_ne!(first, second);
     assert_eq!(offers.live(OfferKind::Code, now()?, MONO), 1);
     assert_eq!(
         offers
-            .reserve(&hello(SessionMode::Code, first)?, now()?, MONO)
+            .reserve(
+                &hello(SessionMode::Code, first)?,
+                now()?,
+                MONO + CODE_ATTEMPT_SPACING
+            )
             .err(),
         Some(PairingError::UnknownOffer)
     );
+    // Withdrawing the code stops an attempt on it; a new code may then be
+    // shown, and the old attempt can neither burn it nor count against it.
+    let mut stale = offers.reserve(
+        &hello(SessionMode::Code, second)?,
+        now()?,
+        MONO + CODE_ATTEMPT_SPACING,
+    )?;
+    offers.cancel_all();
+    offers.create_code(now()?, MONO + CODE_ATTEMPT_SPACING)?;
+    let third = offers.code_pairing_id().ok_or("third")?;
+    assert_ne!(third, second);
+    assert!(!stale.still_offered());
+    assert_eq!(stale.burn(), Err(PairingError::UnknownOffer));
+    drop(stale);
+    assert_eq!(offers.failures(&third), Some(0));
+    assert_eq!(offers.active_attempts(), 0);
     Ok(())
 }
 
@@ -317,9 +353,22 @@ fn cancel_all_withdraws_offers() -> TestResult {
     let device = Device::new()?;
     let offers = PairingOffers::new();
     let id = *qr_offer(&offers, &device)?.pairing_id();
-    let reservation = offers.reserve(&hello(SessionMode::Qr, id)?, now()?, MONO)?;
+    let other = *qr_offer(&offers, &device)?.pairing_id();
+    let mut reservation = offers.reserve(&hello(SessionMode::Qr, id)?, now()?, MONO)?;
+    let mut confirmed = offers.reserve(&hello(SessionMode::Qr, other)?, now()?, MONO)?;
+    confirmed.authenticated();
+    assert!(reservation.still_offered() && confirmed.still_offered());
     offers.cancel_all();
+    // Attempts in flight lose their offers: neither can burn it, whether
+    // or not the peer was authenticated already.
+    assert!(!reservation.still_offered());
+    assert!(!confirmed.still_offered());
+    assert_eq!(reservation.burn(), Err(PairingError::UnknownOffer));
+    assert_eq!(confirmed.burn(), Err(PairingError::UnknownOffer));
+    // The unauthenticated attempt holds its §13 slot until it ends.
+    assert_eq!(offers.active_attempts(), 1);
     drop(reservation);
+    drop(confirmed);
     assert_eq!(offers.active_attempts(), 0);
     assert_eq!(
         offers
@@ -361,6 +410,8 @@ enum Op {
     Authenticate(usize),
     Burn(usize),
     Release(usize),
+    /// Withdraw every offer.
+    CancelAll,
     /// Let monotonic and wall time pass.
     Advance(u16),
     /// The process restarts: every offer and reservation is gone.
@@ -375,6 +426,7 @@ fn op() -> impl Strategy<Value = Op> {
         2 => (0..8_usize).prop_map(Op::Authenticate),
         2 => (0..8_usize).prop_map(Op::Burn),
         3 => (0..8_usize).prop_map(Op::Release),
+        1 => Just(Op::CancelAll),
         2 => (0..4000_u16).prop_map(Op::Advance),
         1 => Just(Op::Restart),
     ]
@@ -386,6 +438,7 @@ struct ModelOffer {
     code: bool,
     created_ms: u64,
     reserved: bool,
+    /// Burned, replaced, or withdrawn: the slot is gone.
     burned: bool,
     failures: u8,
     last_attempt_ms: Option<u64>,
@@ -399,7 +452,9 @@ proptest! {
     /// offer survives any number of failed attempts, a code offer allows at
     /// most five failed attempts spaced at least 2 s apart, burned and
     /// expired offers never reserve again, a restart forgets every offer,
-    /// and the §13 budget counts exactly the unauthenticated reservations.
+    /// a held code is never replaced, a withdrawn offer can no longer be
+    /// burned by the attempt that held it, and the §13 budget counts
+    /// exactly the unauthenticated reservations.
     #[test]
     fn registry_matches_the_model(ops in proptest::collection::vec(op(), 1..60)) {
         let device = Device::new().map_err(|e| TestCaseError::fail(e.to_string()))?;
@@ -419,7 +474,8 @@ proptest! {
             match op {
                 Op::CreateQr | Op::CreateCode => {
                     let code = matches!(op, Op::CreateCode);
-                    if code {
+                    let busy = code && model.values().any(|m| m.code && m.reserved && !m.burned && !m.restarted);
+                    if code && !busy {
                         for entry in model.values_mut() {
                             if entry.code { entry.burned = true; }
                         }
@@ -430,7 +486,9 @@ proptest! {
                     } else {
                         offers.create_qr(&local, wall, mono).map(|payload| Some(*payload.pairing_id()))
                     };
-                    if count >= MAX_OFFERS {
+                    if busy {
+                        prop_assert_eq!(result.err(), Some(PairingError::OfferBusy));
+                    } else if count >= MAX_OFFERS {
                         prop_assert_eq!(result.err(), Some(PairingError::TooManyOffers));
                     } else {
                         let id = result.map_err(|e| TestCaseError::fail(e.to_string()))?.ok_or_else(|| TestCaseError::fail("id"))?;
@@ -473,12 +531,23 @@ proptest! {
                         let entry = model.get_mut(&id).ok_or_else(|| TestCaseError::fail("model"))?;
                         entry.reserved = false;
                         if matches!(op, Op::Burn(_)) {
-                            reservation.burn();
+                            // Only an offer that is still there can burn.
+                            prop_assert_eq!(reservation.burn().is_ok(), !entry.burned);
+                            prop_assert!(!reservation.still_offered());
                             entry.burned = true;
-                        } else if entry.code {
+                        } else if entry.code && !entry.burned {
                             entry.failures += 1;
                         }
                         drop(reservation);
+                    }
+                }
+                Op::CancelAll => {
+                    offers.cancel_all();
+                    for entry in model.values_mut() {
+                        entry.burned = true;
+                    }
+                    for (reservation, _) in held.values() {
+                        prop_assert!(!reservation.still_offered());
                     }
                 }
                 Op::Advance(ms) => elapsed_ms += u64::from(ms),

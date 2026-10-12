@@ -290,6 +290,69 @@ fn an_offer_that_expires_during_the_attempt_fails_before_any_journal() -> TestRe
     Ok(())
 }
 
+/// The displayer's sealed blob (`None` before the first write).
+fn blob(store: &Store) -> Option<Vec<u8>> {
+    store.storage().blob().map(<[u8]>::to_vec)
+}
+
+/// Runs until the displayer has confirmed the scanner's identity but has
+/// not journaled yet.
+fn until_displayer_confirmed(harness: &mut Harness<'_, Auth<'_>, Auth<'_>>) {
+    while !matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady)
+    {
+        if !(harness.deliver(true) || harness.deliver(false)) {
+            break;
+        }
+    }
+}
+
+/// The displayer withdraws its offers (closes the pairing screen) while an
+/// attempt is in flight, before or after it confirmed the scanner's
+/// identity: the attempt stops before the displayer journals anything, no
+/// contact is created, and the displayer's store is unchanged.
+#[test]
+fn a_withdrawn_offer_stops_an_attempt_in_flight() -> TestResult {
+    for confirmed in [false, true] {
+        let mut p = Pairing::new()?;
+        let offers = p.offers.clone();
+        let id = *p.payload.pairing_id();
+        let before = blob(&p.displayer_store);
+        let mut was_confirmed = false;
+        let result = qr_run(&mut p, false, |harness| {
+            if confirmed {
+                until_displayer_confirmed(harness);
+                was_confirmed = matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady);
+            }
+            offers.cancel_all();
+            harness.drain();
+        })?;
+        let label = format!("confirmed {confirmed}");
+        assert_eq!(was_confirmed, confirmed, "{label}");
+        assert!(result.displayer_open.is_none(), "{label}");
+        assert!(result.scanner_open.is_none(), "{label}");
+        assert_eq!(
+            result.displayer_error,
+            Some(SessionError::Pairing(PairingError::UnknownOffer)),
+            "{label}"
+        );
+        assert_eq!(result.displayer_outcome, None, "{label}");
+        assert_eq!(result.scanner_outcome, None, "{label}");
+        assert!(
+            p.displayer_store.contact(&p.scanner.key()).is_none(),
+            "{label}"
+        );
+        assert!(
+            p.scanner_store.contact(&p.displayer.key()).is_none(),
+            "{label}"
+        );
+        assert!(!p.displayer_store.pairing_pending(), "{label}");
+        assert!(!p.displayer_store.pairing_burned(&id), "{label}");
+        assert_eq!(blob(&p.displayer_store), before, "{label}");
+        assert_eq!(p.offers.active_attempts(), 0, "{label}");
+    }
+    Ok(())
+}
+
 /// Mallory answers the scanner in place of the displayer, with her own
 /// device keys, either guessing the PSK or knowing it (she saw the QR).
 #[test]

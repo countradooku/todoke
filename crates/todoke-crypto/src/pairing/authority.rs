@@ -239,7 +239,14 @@ impl<S: Sealer, B: BlobStorage> PairingAuthority<'_, S, B> {
 
     /// §1/§3: the offer must still be valid. The displayer compares its own
     /// clock with no skew; a scanner or code entrant allows the §1 skew.
+    /// The displayer's offer must also still be offered: withdrawing or
+    /// replacing it stops an attempt in flight.
     fn check_offer(&self, now: UnixTime) -> Result<(), SessionError> {
+        if let Side::Responder { reservation } = &self.side
+            && !reservation.still_offered()
+        {
+            return Err(SessionError::Pairing(PairingError::UnknownOffer));
+        }
         let valid = match self.side {
             Side::Responder { .. } => now < self.expires_at,
             Side::Initiator { .. } => check_offer_expiry(self.expires_at, now).is_ok(),
@@ -309,9 +316,11 @@ impl<S: Sealer, B: BlobStorage> PeerAuthority for PairingAuthority<'_, S, B> {
             .check_can_pair(&self.pairing_id)
             .map_err(SessionError::Pairing)?;
         // The offer is spent from here on, even if the write fails (§3.2:
-        // an uncertain pending commitment burns the offer as well).
+        // an uncertain pending commitment burns the offer as well). An offer
+        // withdrawn since the peer was confirmed refuses the burn, and
+        // nothing is journaled.
         if let Side::Responder { reservation } = &mut self.side {
-            reservation.burn();
+            reservation.burn().map_err(SessionError::Pairing)?;
         }
         let journal = PairingJournal {
             pairing_id: self.pairing_id,
@@ -368,8 +377,9 @@ impl<S: Sealer, B: BlobStorage> PeerAuthority for PairingAuthority<'_, S, B> {
     }
 
     fn abandon(&mut self, pending: &PendingRatchet) {
+        // Already burned at the journal; a withdrawn offer is gone anyway.
         if let Side::Responder { reservation } = &mut self.side {
-            reservation.burn();
+            let _ = reservation.burn();
         }
         // The block stays in memory even if persisting it fails.
         let _ = self

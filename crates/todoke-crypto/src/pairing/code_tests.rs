@@ -258,6 +258,79 @@ fn a_man_in_the_middle_with_a_guessed_code_fails_on_both_sides() -> TestResult {
     Ok(())
 }
 
+/// The displayer withdraws its code and shows a new one while an attempt
+/// with the old code is in flight, before or after it confirmed the
+/// entrant's identity: the attempt stops before the displayer journals
+/// anything, no contact is created, the displayer's store is unchanged,
+/// and the new code is untouched. While the attempt holds the old code, a
+/// new code is refused rather than silently replacing it.
+#[test]
+fn a_withdrawn_or_replaced_code_stops_an_attempt_in_flight() -> TestResult {
+    for confirmed in [false, true] {
+        let mut p = CodePairing::new()?;
+        let right = HumanCode::parse(p.shown.as_str())?;
+        let offers = p.offers.clone();
+        let id = *p.offer.pairing_id();
+        let before = p.displayer_store.storage().blob().map(<[u8]>::to_vec);
+        let now = wall()?;
+        let mut replace_while_held = None;
+        let mut replacement = None;
+        let mut was_confirmed = false;
+        let result = code_run(&mut p, &right, false, |harness| {
+            replace_while_held = Some(offers.create_code(now, MONO).map(|_| ()));
+            if confirmed {
+                while !matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady)
+                {
+                    if !(harness.deliver(true) || harness.deliver(false)) {
+                        break;
+                    }
+                }
+                was_confirmed = matches!(&harness.responder.stage, Stage::Establish(e) if e.phase() == Phase::AwaitReady);
+            }
+            offers.cancel_all();
+            replacement = Some(offers.create_code(now, MONO).map(|_| ()));
+            harness.drain();
+        })?;
+        let label = format!("confirmed {confirmed}");
+        assert_eq!(was_confirmed, confirmed, "{label}");
+        assert_eq!(
+            replace_while_held,
+            Some(Err(PairingError::OfferBusy)),
+            "{label}"
+        );
+        assert_eq!(replacement, Some(Ok(())), "{label}");
+        assert!(result.displayer_open.is_none(), "{label}");
+        assert!(result.scanner_open.is_none(), "{label}");
+        assert_eq!(
+            result.displayer_error,
+            Some(SessionError::Pairing(PairingError::UnknownOffer)),
+            "{label}"
+        );
+        assert_eq!(result.displayer_outcome, None, "{label}");
+        assert!(
+            p.displayer_store.contact(&p.entrant.key()).is_none(),
+            "{label}"
+        );
+        assert!(
+            p.entrant_store.contact(&p.displayer.key()).is_none(),
+            "{label}"
+        );
+        assert!(!p.displayer_store.pairing_pending(), "{label}");
+        assert!(!p.displayer_store.pairing_burned(&id), "{label}");
+        assert_eq!(
+            p.displayer_store.storage().blob().map(<[u8]>::to_vec),
+            before,
+            "{label}"
+        );
+        // The new code is the only code offer, with no failure recorded.
+        let fresh = p.offers.code_pairing_id().ok_or("new code")?;
+        assert_ne!(fresh, id, "{label}");
+        assert_eq!(p.offers.failures(&fresh), Some(0), "{label}");
+        assert_eq!(p.offers.active_attempts(), 0, "{label}");
+    }
+    Ok(())
+}
+
 fn honest_record_count() -> AnyResult<usize> {
     let mut p = CodePairing::new()?;
     let right = HumanCode::parse(p.shown.as_str())?;

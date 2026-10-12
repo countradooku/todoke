@@ -70,7 +70,8 @@ struct Slot {
     expires_at: UnixTime,
     /// Monotonic expiry.
     deadline: Duration,
-    reserved: bool,
+    /// The token of the reservation holding this offer, if any.
+    holder: Option<u64>,
     failures: u8,
     last_attempt: Option<Duration>,
 }
@@ -116,13 +117,15 @@ impl Budget {
 struct Table {
     budget: Budget,
     offers: BTreeMap<[u8; 16], Slot>,
+    /// The last reservation token handed out.
+    last_token: u64,
 }
 
 impl Table {
     fn prune(&mut self, now: UnixTime, mono: Duration) {
         // A reserved offer stays until its reservation ends.
         self.offers
-            .retain(|_, slot| slot.reserved || slot.live(now, mono));
+            .retain(|_, slot| slot.holder.is_some() || slot.live(now, mono));
     }
 }
 
@@ -180,7 +183,7 @@ impl PairingOffers {
                 secret,
                 expires_at,
                 deadline: mono.saturating_add(OFFER_LIFETIME),
-                reserved: false,
+                holder: None,
                 failures: 0,
                 last_attempt: None,
             },
@@ -223,14 +226,24 @@ impl PairingOffers {
 
     /// Creates a human-code offer, valid for 300 seconds, and returns the
     /// code to show. It replaces any earlier code offer: a new code is the
-    /// local action §3.2 requires after an offer is exhausted.
+    /// local action §3.2 requires after an offer is exhausted. While an
+    /// attempt holds the current code it is refused instead; withdraw the
+    /// code first with [`Self::cancel_all`], which stops that attempt.
     ///
     /// # Errors
     ///
-    /// [`PairingError::TooManyOffers`] or [`PairingError::Random`].
+    /// [`PairingError::OfferBusy`] while an attempt holds the current code,
+    /// [`PairingError::TooManyOffers`], or [`PairingError::Random`].
     pub fn create_code(&self, now: UnixTime, mono: Duration) -> Result<HumanCode, PairingError> {
         let code = HumanCode::generate().map_err(|_| PairingError::Random)?;
         let mut table = self.lock()?;
+        if table
+            .offers
+            .values()
+            .any(|slot| matches!(slot.secret, OfferSecret::Code(_)) && slot.holder.is_some())
+        {
+            return Err(PairingError::OfferBusy);
+        }
         table
             .offers
             .retain(|_, slot| !matches!(slot.secret, OfferSecret::Code(_)));
@@ -239,7 +252,8 @@ impl PairingOffers {
     }
 
     /// Withdraws every offer (the user closed the pairing screen). Attempts
-    /// in progress fail at their next authority step.
+    /// in progress fail at their next authority step (the peer's identity
+    /// confirmation or the journal), before anything is journaled.
     pub fn cancel_all(&self) {
         if let Ok(mut table) = self.lock() {
             table.offers.clear();
@@ -325,7 +339,7 @@ impl PairingOffers {
         if slot.secret.mode() != hello.mode() {
             return Err(PairingError::Mode);
         }
-        if slot.reserved {
+        if slot.holder.is_some() {
             return Err(PairingError::OfferBusy);
         }
         if !slot.live(now, mono) {
@@ -340,11 +354,14 @@ impl PairingOffers {
             return Err(PairingError::TooSoon);
         }
         table.budget.try_start(mono)?;
-        slot.reserved = true;
+        table.last_token = table.last_token.wrapping_add(1);
+        let token = table.last_token;
+        slot.holder = Some(token);
         slot.last_attempt = Some(mono);
         Ok(OfferReservation {
             table: Arc::clone(&self.table),
             pairing_id,
+            token,
             expires_at: slot.expires_at,
             secret: slot.secret.clone(),
             state: ReservationState::Unauthenticated,
@@ -399,9 +416,14 @@ enum ReservationState {
 
 /// One attempt's hold on an offer. Dropping it without burning frees the
 /// offer (QR) or records a failed attempt (code).
+///
+/// If the offer is withdrawn while the attempt runs, the attempt fails at
+/// its next authority step and the offer cannot be burned.
 pub struct OfferReservation {
     table: Arc<Mutex<Table>>,
     pairing_id: [u8; 16],
+    /// Identifies this reservation in the slot it holds.
+    token: u64,
     expires_at: UnixTime,
     secret: OfferSecret,
     state: ReservationState,
@@ -433,6 +455,21 @@ impl OfferReservation {
         &self.secret
     }
 
+    /// Whether this reservation still holds its slot in `table`.
+    fn holds(&self, table: &Table) -> bool {
+        table
+            .offers
+            .get(&self.pairing_id)
+            .is_some_and(|slot| slot.holder == Some(self.token))
+    }
+
+    /// Whether the offer is still offered and held by this attempt: not
+    /// withdrawn, replaced, or burned.
+    pub(crate) fn still_offered(&self) -> bool {
+        self.state != ReservationState::Burned
+            && self.table.lock().is_ok_and(|table| self.holds(&table))
+    }
+
     /// The peer authenticated (§4.3): the attempt leaves the §13
     /// unauthenticated budget.
     pub(crate) fn authenticated(&mut self) {
@@ -445,17 +482,27 @@ impl OfferReservation {
     }
 
     /// Burns the offer: it can never be reserved again (§3.1, §3.2).
-    pub(crate) fn burn(&mut self) {
+    /// Burning twice is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::UnknownOffer`] if the offer was withdrawn or is no
+    /// longer held by this reservation, and [`PairingError::Unavailable`]
+    /// if the table is unusable. Nothing changes then.
+    pub(crate) fn burn(&mut self) -> Result<(), PairingError> {
         if self.state == ReservationState::Burned {
-            return;
+            return Ok(());
         }
-        if let Ok(mut table) = self.table.lock() {
-            if self.state == ReservationState::Unauthenticated {
-                table.budget.finish();
-            }
-            table.offers.remove(&self.pairing_id);
+        let mut table = self.table.lock().map_err(|_| PairingError::Unavailable)?;
+        if !self.holds(&table) {
+            return Err(PairingError::UnknownOffer);
         }
+        if self.state == ReservationState::Unauthenticated {
+            table.budget.finish();
+        }
+        table.offers.remove(&self.pairing_id);
         self.state = ReservationState::Burned;
+        Ok(())
     }
 }
 
@@ -474,14 +521,15 @@ impl Drop for OfferReservation {
             table.budget.finish();
         }
         let exhausted = match table.offers.get_mut(&self.pairing_id) {
-            Some(slot) => {
-                slot.reserved = false;
+            // A withdrawn offer is gone; nothing to release or count.
+            Some(slot) if slot.holder == Some(self.token) => {
+                slot.holder = None;
                 if let OfferSecret::Code(_) = slot.secret {
                     slot.failures = slot.failures.saturating_add(1);
                 }
                 slot.failures >= MAX_CODE_FAILURES
             }
-            None => false,
+            _ => false,
         };
         if exhausted {
             table.offers.remove(&self.pairing_id);
