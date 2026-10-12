@@ -327,12 +327,16 @@ impl<S: Sealer, B: BlobStorage> PeerAuthority for PairingAuthority<'_, S, B> {
                 Err(SessionError::Pairing(PairingError::PairingInProgress))
             }
             Err(error) => {
-                // The write is uncertain: undo the in-memory journal so it
-                // does not block later pairings, fail closed for the device,
-                // and keep the burn.
-                let _ = self
-                    .store
-                    .abandon_pairing(&self.pairing_id, &Self::device_of(pending));
+                // A failed write leaves the journal in memory and its
+                // durability uncertain: undo it there so it does not block
+                // later pairings, fail closed for the device, and keep the
+                // burn. Refusals before any change (the ledger quota)
+                // leave the store as it was.
+                if self.store.pairing_pending_with(&self.pairing_id) {
+                    let _ = self
+                        .store
+                        .abandon_pairing(&self.pairing_id, &Self::device_of(pending));
+                }
                 Err(SessionError::Storage(error))
             }
         }

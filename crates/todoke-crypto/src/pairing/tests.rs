@@ -556,6 +556,43 @@ pub(super) fn side_journaled(stage: &Stage, role: Role) -> bool {
     }
 }
 
+/// A full burned ledger refuses the journal before changing anything: an
+/// existing contact for the same device stays usable, and the QR is not
+/// burned (nothing was journaled).
+#[test]
+fn a_full_ledger_refuses_the_journal_without_side_effects() -> TestResult {
+    let mut p = Pairing::new()?;
+    // Bob is already a contact of Alice, and Alice's ledger is full.
+    let mut old = qr_run(&mut p, false, drain)?;
+    assert!(old.scanner_open.take().is_some());
+    let before = view(&p.scanner_store, &p.displayer.key())?.ok_or("contact")?;
+    let filler = Device::new()?;
+    for index in 0..crate::identity::contacts::MAX_BURNED_PAIRINGS - 1 {
+        let mut id = [0xb0; 16];
+        id[15] = u8::try_from(index)?;
+        p.scanner_store.journal_pairing(
+            &crate::identity::contacts::PairingJournal {
+                pairing_id: id,
+                expires_at: wall()?,
+                origin: TrustOrigin::QrPairing,
+                peer: &filler.binding,
+                handshake_hash: &[1; 32],
+                psk_next: &[2; 32],
+            },
+            wall()?,
+        )?;
+        p.scanner_store.abandon_pairing(&id, &filler.key())?;
+    }
+    // A fresh QR from Bob.
+    let shown = p.offers.create_qr(&p.displayer.local()?, wall()?, MONO)?;
+    p.payload = QrPayload::from_text(&shown.to_text(), wall()?)?;
+    let result = qr_run(&mut p, false, drain)?;
+    assert!(result.scanner_open.is_none() && result.displayer_open.is_none());
+    assert_eq!(view(&p.scanner_store, &p.displayer.key())?, Some(before));
+    assert!(!p.scanner_store.pairing_burned(p.payload.pairing_id()));
+    Ok(())
+}
+
 #[test]
 fn errors_and_debug_output() -> TestResult {
     let mut p = Pairing::new()?;

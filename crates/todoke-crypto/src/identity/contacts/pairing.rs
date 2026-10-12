@@ -255,6 +255,14 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
         }
     }
 
+    /// Whether the pairing journaled in this process is `pairing_id`'s.
+    pub(crate) fn pairing_pending_with(&self, pairing_id: &[u8; 16]) -> bool {
+        self.pairing
+            .pending
+            .as_ref()
+            .is_some_and(|pending| pending.pairing_id == *pairing_id)
+    }
+
     /// Whether `device` has a new pairing journaled in this process.
     pub(super) fn pairing_pending_for(&self, device: &Ed25519PublicKey) -> bool {
         self.pairing
