@@ -57,7 +57,12 @@ jobs:
           cargo install cargo-deny --version 0.20.2 --locked
           cargo install cargo-vet --version 0.10.2 --locked
       - name: Check licenses, advisories, bans, and sources
-        run: cargo deny --locked check
+        # A stale skip entry fails rather than lingering after upstream converges.
+        run: cargo deny --locked check -D unmatched-skip
+      - name: Check deny exceptions stay in dev-dependencies
+        run: bash scripts/ci/deny-exceptions-dev-only.sh
+      - name: Test the deny exception guard
+        run: bash scripts/ci/deny-exceptions-dev-only.test.sh
       - name: Check dependency audits
         run: cargo vet --locked
       - name: Check fuzz dependency policy and audits
@@ -67,11 +72,11 @@ jobs:
           cargo vet --manifest-path fuzz/Cargo.toml --locked
 
   msrv:
-    name: Minimum supported Rust (1.85.0)
+    name: Minimum supported Rust (1.94.0)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      RUSTUP_TOOLCHAIN: 1.85.0
+      RUSTUP_TOOLCHAIN: 1.94.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -105,6 +110,17 @@ jobs:
         run: |
           rustup show
           rustup target add "$CHECK_TARGET"
+      # blake3's build script compiles C for the target. Use the runner's default
+      # NDK (ANDROID_NDK_HOME, see actions/runner-images Ubuntu 24.04) at API 24,
+      # the planned Android minSdk.
+      - name: Point the C toolchain at the Android NDK
+        if: ${{ matrix.target == 'aarch64-linux-android' }}
+        run: |
+          bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          test -x "$bin/aarch64-linux-android24-clang"
+          test -x "$bin/llvm-ar"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
       # This is a compile check. Device linking and execution need platform SDKs.
       - name: Check every workspace target
         env:

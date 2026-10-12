@@ -4,7 +4,12 @@
 
 This document records architectural requirements for a free, open-source, cross-platform, end-to-end secure file transfer app. The goal is any-to-any transfers between phones and PCs, with adoption ahead of revenue and the ambition to outperform existing solutions across usability, reliability, performance, and security.
 
-The initial repository is an empty but compiling Rust workspace. It has no transfer implementation, cryptographic dependency, platform integration, or usable application. Requirements here are not claims about implemented behavior. [The protocol baseline](../spec/PROTOCOL.md) lists decisions that must be resolved before relevant implementation begins.
+The runtime crates have no transfer implementation, platform integration, or usable application. Implemented so far:
+
+- **Identity:** `DeviceBinding` and `Revoke` wire codecs in `todoke-proto`, and in `todoke-crypto` device and person identities, binding and revocation issuance and verification, a key-store interface with an encrypted software backend, and a contact store.
+- **Sessions (suite 0x0001, not production-enabled):** prelude, Hello, `NoiseHandshake`, transport frame, `Identity`, ratchet, `KeyUpdate`, Ping/Pong, and Error codecs in `todoke-proto`; in `todoke-crypto::session` the hybrid `IKpsk2`/`KKpsk2`/`XXpsk3` handshakes (Snow's reviewed HFS+PSK state machine over libcrux primitives, see [ADR 0001](adr/0001-noise-crate.md)), mutual identity confirmation, the PSK ratchet transaction with a durable journal in the contact store, encrypted framing with byte- and time-based rekey, keepalive, and an async adapter over `futures-io` byte pipes. Every entry point requires an explicit "unaudited suite" acknowledgement, which can only be constructed in unit tests or with the non-default `unaudited-suite-0001` feature (CI fails if a shipped graph enables it): PROTOCOL §16 keeps production sessions disabled until O6 and O10 close. QR/code pairing flows (including CPace and contact creation), Capabilities, and transfers are not implemented.
+
+The repository also contains offline Rust tools and reference cryptographic development dependencies for deterministic protocol fixtures. Requirements here are not claims about implemented runtime behavior. [The normative v1 draft](../spec/PROTOCOL.md) specifies wire records and the hybrid HFS+PSK construction from independently reviewed Snow source. Production backend secret handling, application integration, and interoperability remain release gates.
 
 Read both documents before changing behavior. If specification and implementation disagree, stop and report the disagreement.
 
@@ -16,7 +21,7 @@ Mobile and web bindings are to use BoltFFI. Its exact supported targets, packagi
 
 ## Crate responsibilities and trust boundaries
 
-The table assigns future responsibilities. Every crate currently contains documentation only; it does not provide the APIs described here.
+The table assigns responsibilities. Apart from the identity and session code in `todoke-proto` and `todoke-crypto`, every crate currently contains documentation only and does not provide the APIs described here.
 
 | Crate | Responsibility | Trust boundary |
 | --- | --- | --- |
@@ -41,15 +46,15 @@ This is an ownership map, not a dependency graph. Concrete APIs, dependency edge
 
 ## Security requirements
 
-Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The exact hybrid construction, pattern selection, and ratchet protocol are not yet specified. Do not implement them by interpreting the algorithm names as a complete protocol.
+Every session must authenticate with Noise using IKpsk2, KKpsk2, or XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session. The protocol draft assigns the exact HFS+PSK token schedules, message layouts, transcript requirements, and a conservative ratchet transaction. HFS uses a fresh ephemeral ML-KEM key, not the draft's retained static ML-KEM credential. The construction follows independently reviewed Snow source; the new ML-KEM backend and todoke integration are not covered by that audit. `todoke-crypto::session` implements it and reproduces the committed handshake transcripts byte for byte. Suite 0x0001 remains disabled for production pending the secret-lifecycle (O6: Snow and libcrux leave some secret temporaries unwiped, listed in ADR 0001) and interoperability (O10) gates.
 
-Per-file content must use AES-256-GCM STREAM encryption, with XChaCha20-Poly1305 as the fallback, and BLAKE3/bao verified chunks. The precise STREAM layout, nonce allocation, negotiation, integrity coverage, and chunk framing remain open. Authenticate and validate according to the eventual specification before treating data as trusted.
+Per-file content must use AES-256-GCM STREAM encryption, with XChaCha20-Poly1305 as the fallback, and BLAKE3/bao verified chunks. The protocol draft specifies STREAM BE32 substreams, nonce allocation, authenticated suite selection, encrypted Bao slices, and chunk framing. Authenticate and validate according to that specification before treating data as trusted; standalone nonce vectors are not complete content-encryption conformance evidence.
 
-Consent is enforced in the core: no file byte is accepted before a signed AcceH. AcceH's full meaning, schema, signing algorithm, authority, and replay handling must be specified before implementing this gate. No pre-consent preview or alternate transport may evade it.
+Consent is enforced in the core: no file byte is accepted before a signed AcceH. The protocol now defines AcceH as the session-bound, Ed25519-signed Accept record and specifies its authority, canonical bytes, selection, expiry, and replay rules. No pre-consent preview or alternate transport may evade it.
 
 Use libcrux wherever it covers the requirements, otherwise appropriate RustCrypto/dalek crates. Never implement cryptographic primitives. Zeroize all secrets, never log them, and never pass them across FFI. Do not collect telemetry. These requirements also apply to diagnostics, errors, examples, tests, and future platform integrations.
 
-All crates outside `todoke-ffi` and `todoke-sys-*` forbid unsafe code. The exception crates initially deny it and contain none. Any future exception must be narrow, reviewed, and documented. Untrusted inputs must produce recoverable errors rather than panics. Resource budgets and failure handling need explicit designs before network-facing features are added.
+All crates outside `todoke-ffi` and `todoke-sys-*` forbid unsafe code. The exception crates initially deny it and contain none. Any future exception must be narrow, reviewed, and documented. Untrusted inputs must produce recoverable errors rather than panics. The protocol assigns wire budgets and failure rules; platform resource management and crash behavior still need implementation evidence before network-facing features are added.
 
 An encrypted authenticated session does not make peer-supplied paths, content, or resource requests safe. The protocol and file boundaries must account for malicious authenticated peers as well as hostile transports. This baseline makes no anonymity or traffic-analysis-resistance claim.
 
@@ -61,4 +66,6 @@ The scaffold's build and policy checks establish repository hygiene only. Cross-
 
 ## Decisions required before implementation
 
-The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, secret storage, and dependency/API boundaries. The initial scaffold intentionally makes none of those choices.
+The authoritative list is in [spec/PROTOCOL.md](../spec/PROTOCOL.md#open-decisions). Architecture additionally needs explicit choices for preview isolation, platform permission handling, daemon IPC authorization, platform secret storage, and dependency/API boundaries.
+
+The device's X25519 Noise static key has a zeroizing type but no key-store custody yet; callers hold it until a key-store role for it exists. Secret storage has a core interface but no platform backend. `todoke-crypto` keeps signing keys behind a `KeyStore` trait. Its encrypted backend persists one sealed blob through two hooks: a `Sealer` (authenticated encryption under a key the backend protects) and a `BlobStorage` (atomic whole-blob replacement). The software backend seals with ChaCha20-Poly1305 under a caller-supplied key. Secure Enclave, StrongBox/TEE, TPM/DPAPI, and Secret Service adapters still need to be designed against official platform documentation (O9), along with how the software storage key is obtained on Linux without a TPM. Rollback resistance of stored state remains a gate (O3). The protocol draft resolves wire choices where stated and explicitly gates unresolved construction, platform, and secret-lifecycle questions.

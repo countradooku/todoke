@@ -10,3 +10,35 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[[example]]
+name = "generate_vectors"
+test = true
+
+[[example]]
+name = "generate_handshake_vectors"
+test = true
+
+# Reference implementations for the offline, public-fixture generator, plus
+# property tests for the runtime codecs.
+[dev-dependencies]
+proptest.workspace = true
+base45 = "=3.2.0"
+blake3 = { workspace = true, features = ["traits-preview"] }
+ed25519-dalek.workspace = true
+hex.workspace = true
+hmac.workspace = true
+libcrux-curve25519.workspace = true
+libcrux-chacha20poly1305.workspace = true
+libcrux-ed25519.workspace = true
+libcrux-hkdf.workspace = true
+libcrux-ml-kem.workspace = true
+libcrux-secrets.workspace = true
+libcrux-sha2.workspace = true
+serde_json.workspace = true
+# Offline public-fixture engine only; never enable raw key export in runtime crates.
+# Cargo also unifies this feature into todoke-crypto's Snow when one build
+# compiles todoke-proto's examples or tests (such as `cargo test --workspace`);
+# runtime code never calls the raw split, and normal builds do not enable it.
+snow = { workspace = true, features = ["risky-raw-split"] }
+zeroize.workspace = true

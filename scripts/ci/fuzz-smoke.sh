@@ -35,9 +35,16 @@ while IFS= read -r target; do
         continue
     fi
     echo "Fuzzing $target for 60 seconds"
+    # The generated corpus (ignored by git) comes first so libFuzzer writes new
+    # inputs there; committed seeds in fuzz/seeds are read only.
+    corpora=("fuzz/corpus/$target")
+    mkdir -p "fuzz/corpus/$target"
+    if [[ -d "fuzz/seeds/$target" ]]; then
+        corpora+=("fuzz/seeds/$target")
+    fi
     # Cargo-fuzz does not expose --locked; reject changes to its committed lock
     # after running, and make the dependency policy/audit CI job check it too.
-    rustup run "$fuzz_toolchain" cargo fuzz run --fuzz-dir fuzz "$target" -- \
+    rustup run "$fuzz_toolchain" cargo fuzz run --fuzz-dir fuzz "$target" "${corpora[@]}" -- \
         -max_total_time=60 -timeout=10
 done <<< "$targets"
 

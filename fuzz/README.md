@@ -1,8 +1,48 @@
 # Parser fuzzing
 
-The scaffold contains no parsers and therefore no fuzz targets. CI reports this
-explicitly. A successful scaffold build is not evidence that a protocol parser
-has been fuzzed.
+`fuzz/` is an isolated cargo-fuzz workspace. Each target runs a real decoder on
+arbitrary bytes. Where a decoder accepts the input, the target asserts that
+re-encoding reproduces it exactly, so accepted encodings are canonical.
+
+| Target | Decoder |
+| --- | --- |
+| `proto_device_binding` | `todoke_proto::identity::DeviceBinding::decode` (PROTOCOL §2) |
+| `proto_revoke` | `todoke_proto::identity::Revoke::decode` (PROTOCOL §2) |
+| `crypto_binding_verification` | Ed25519 public-key validation, then binding key (Ed25519, X25519 small-order, ML-KEM) and strict signature checks under that key as root |
+| `crypto_keystore_plaintext` | Software key store blob plaintext (local format) |
+| `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations (local format) |
+| `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
+| `proto_session_prelude` | Prelude length prefix and record split, `ClientHello`/`ServerHello` (echo check on a split input), and `NoiseHandshake` records for every mode (PROTOCOL §4.1, §4.2.5) |
+| `crypto_session_handshake` | Session handshake driver (responder and initiator, all three modes) fed fuzzer-supplied prelude records, set up deterministically from the public §4.2 fixture inputs so mutated fixture records reach the Noise layer (PROTOCOL §4.1, §4.2) |
+| `crypto_session_establishment` | `Establishment::receive`: identity confirmation and the PSK ratchet transaction against an honest peer, with fuzzer-chosen wire operations (deliver, corrupt, replay, drop, swap, raw bytes, clock jumps, deadline checks) after a deterministic contact handshake between fixed public test identities (PROTOCOL §4.3, §4.4, §13) |
+| `crypto_session_transport` | `SessionCore::receive` and its timers on an established session: peer frames of any type, `KeyUpdate`, Ping/Pong, `Error`, corrupted and raw records, clock jumps, and local sends, optionally under a small byte budget (PROTOCOL §5, §12, §13) |
+| `crypto_session_record_stream` | The async adapter's incremental length-prefixed record reader (prelude and transport framing) on arbitrary bytes delivered in short reads with `Pending` in between; checked against a direct split of the same bytes (PROTOCOL §4.1, §5, §13) |
+| `proto_session_frames` | Transport length prefix, decrypted frame header, and `Identity`, ratchet, `Error`, `KeyUpdate`, and `Ping` bodies (PROTOCOL §4.3, §4.4, §5, §12, §13) |
+
+The `crypto_*` targets call `todoke_crypto::identity::fuzzing` or
+`todoke_crypto::session::fuzzing`, which exist only under `--cfg fuzzing` (set
+by cargo-fuzz). Each of their functions wraps the same decoder or state machine
+that production code uses. Under `--cfg fuzzing` the session engine may use
+scripted (fixture) randomness, as in unit tests; release builds cannot. The
+session harnesses need the suite 0x0001 acknowledgement, so `fuzz/Cargo.toml`
+enables `todoke-crypto`'s `unaudited-suite-0001` feature; shipped graphs never
+do (`scripts/ci/deny-exceptions-dev-only.sh` checks this).
+
+Committed seeds live in `fuzz/seeds/<target>/`: small valid and malformed
+inputs built from public RFC 8032 test keys and fixed bytes. `fuzz/corpus/` is
+generated and ignored by git. `scripts/ci/fuzz-smoke.sh` passes both
+directories, with the generated corpus first, so libFuzzer writes new inputs
+there and only reads the seeds.
+
+The harness graph uses the root `deny.toml`. It contains todoke-crypto's
+runtime libcrux dependencies, so the root advisory ignore still matches. Since
+2026-10-12 every duplicate skip also matches the harness graph; a future skip
+that only the root graph needs would be reported as an unmatched warning, which
+that CI step does not deny. `libfuzzer-sys` has an NCSA license exception because it bundles
+LLVM libFuzzer, and it is never shipped. `fuzz/supply-chain` was initialized with
+`cargo vet init`. Like the root store, it imports trusted organisations' audits
+and exempts every other package at its exact version with a "Not yet reviewed"
+note (see supply-chain/README.md, "cargo-vet adoption").
 
 Every parser must gain a `cargo-fuzz` target in the same pull request that adds
 the parser, including protocol framing, discovery, manifests, archive metadata,
@@ -13,20 +53,22 @@ failures. Add small valid and malformed seed inputs without personal data or
 secrets. Each state machine also needs independent `proptest` state-machine
 tests in its owning crate; fuzzing does not replace them.
 
-When adding the first parser:
+When adding a parser:
 
 1. Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before changing behavior. Stop
    and report any mismatch between implementation and specification.
-2. Initialize the cargo-fuzz project in this directory, replacing its generated
-   sample target with a target for the actual parser. Keep `fuzz/Cargo.toml` as
-   an isolated workspace (its own `[workspace]`), excluded from the root
-   workspace. Set `package.metadata.cargo-fuzz = true` and declare every target
-   as a `[[bin]]` with `test = false`, `doc = false`, and `bench = false`.
-3. Pin and review the harness dependencies, commit `fuzz/Cargo.lock`, and use
-   versioned path dependencies for the todoke crates under test. Initialize
-   `fuzz/supply-chain` with `cargo vet --manifest-path fuzz/Cargo.toml init`, then
-   review its generated exemptions. Replace them with real audits or justified,
-   narrowly scoped, reviewed exemptions; never record an audit not performed.
+2. Add a target under `fuzz_targets/` and declare it in `fuzz/Cargo.toml` as a
+   `[[bin]]` with `test = false`, `doc = false`, and `bench = false`. Keep
+   `fuzz/Cargo.toml` an isolated workspace (its own `[workspace]`), excluded
+   from the root workspace. Add seeds under `fuzz/seeds/<target>/`.
+3. Pin and review any new harness dependency, commit `fuzz/Cargo.lock`, and use
+   versioned path dependencies for the todoke crates under test. Seed the lock
+   from the root `Cargo.lock` so both graphs use the same versions. Record real
+   audits or justified, narrowly scoped, reviewed exemptions in
+   `fuzz/supply-chain`; never record an audit not performed. New versions need
+   an audit, an import, or a new exemption with a reason. (`cargo vet` store
+   commands such as `init`, `import` and `regenerate` reject `--manifest-path`;
+   run them from inside `fuzz/`.)
 4. Run both dependency checks from the repository root:
 
    ```sh
@@ -39,8 +81,13 @@ When adding the first parser:
    60 seconds with AddressSanitizer enabled. For a local smoke run:
 
    ```sh
-   cargo +nightly-2026-08-20 fuzz run PARSER_TARGET -- -max_total_time=60
+   cargo +nightly-2026-08-20 fuzz run --fuzz-dir fuzz PARSER_TARGET fuzz/corpus/PARSER_TARGET fuzz/seeds/PARSER_TARGET -- -max_total_time=60
+   bash scripts/ci/fuzz-smoke.sh
    ```
+
+   If `cargo` on `PATH` is not the rustup proxy (for example a Homebrew
+   install), the `+nightly` selector and `-Z` sanitizer flags fail; put the
+   nightly toolchain's `bin` directory first on `PATH`.
 
 Keep longer fuzz campaigns separate from the smoke check. Minimize failures,
 add a regression test, and preserve sanitized reproductions. Do not add dummy

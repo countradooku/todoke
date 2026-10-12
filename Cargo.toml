@@ -6,15 +6,41 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.94"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/countradooku/todoke"
 publish = false
+
+# Pins shared by more than one workspace crate (cargo-deny workspace-duplicate).
+# Fixture use is not production approval: zeroization and audit evidence are open (O6).
+[workspace.dependencies]
+blake3 = { version = "=1.8.7", features = ["zeroize"] }
+ed25519-dalek = "=3.0.0"
+getrandom = "=0.4.3"
+hex = "=0.4.3"
+# RustCrypto HMAC: fixture generator and independent layout tests only.
+hmac = { version = "=0.13.0", features = ["zeroize"] }
+libcrux-chacha20poly1305 = "=0.0.10"
+libcrux-curve25519 = "=0.0.9"
+libcrux-ed25519 = "=0.0.10"
+libcrux-hkdf = "=0.0.9"
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+libcrux-secrets = "=0.0.7"
+libcrux-sha2 = "=0.0.9"
+# Property tests only.
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
+serde_json = "=1.0.154"
+# Runtime Noise engine (todoke-crypto) and the offline fixture generator
+# (todoke-proto). Only `hfs` here; see docs/adr/0001-noise-crate.md.
+snow = { version = "=0.10.0", default-features = false, features = ["hfs"] }
+zeroize = "=1.9.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
 unsafe_op_in_unsafe_fn = "deny"
 missing_docs = "deny"
+# cargo-fuzz builds every crate with `--cfg fuzzing`; harness entry points use it.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(fuzzing)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

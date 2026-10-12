@@ -6,7 +6,7 @@ todoke prioritizes broad adoption, usability, interoperability, and security. Ke
 
 Read [docs/DESIGN.md](docs/DESIGN.md) and [spec/PROTOCOL.md](spec/PROTOCOL.md). If the code and specification disagree, stop the behavior change and report the discrepancy. Do not silently resolve the disagreement in code. Resolve any relevant open protocol decision in the specification before implementing it.
 
-The current workspace contains only documented crate boundaries. It intentionally does not contain placeholder protocol implementations, invented wire messages, or tests that assert no useful behavior.
+The runtime workspace contains documented crate boundaries. Offline vector examples provide fixed public encodings and complete Noise-layer reference exchanges, using existing library state machines and primitives. They are not production parsers, protocol state machines, or complete todoke session implementations.
 
 ## Required boundaries
 
@@ -31,16 +31,17 @@ Run the required checks before submitting:
 cargo fmt
 cargo clippy --all-targets -- -D warnings -W clippy::pedantic
 cargo test
-cargo deny check
+cargo deny check -D unmatched-skip
+bash scripts/ci/deny-exceptions-dev-only.sh
 cargo vet
 ```
 
 CI also checks Linux, macOS, Windows, the MSRV, cross-compilation, fuzz smoke runs, and a nightly scheduled mutation run. Keep the lockfile in version control. Update dependency policy and cargo-vet evidence with dependency changes; a blanket exemption is not a review.
 
-Rust 1.99.0 is pinned in `rust-toolchain.toml`; Rust 1.85.0 is the MSRV. Install the versions of additional tools declared by CI. To check the MSRV locally after installing that toolchain:
+Rust 1.99.0 is pinned in `rust-toolchain.toml`; Rust 1.94.0 is the MSRV. Install the versions of additional tools declared by CI. To check the MSRV locally after installing that toolchain:
 
 ```sh
-cargo +1.85.0 check --workspace --all-targets --locked
+cargo +1.94.0 check --workspace --all-targets --locked
 ```
 
 Cross-target checking requires the Rust target component and an appropriate host toolchain. iOS checks run on macOS. A successful check of an empty library is not proof that a future transport or UI supports that platform.

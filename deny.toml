@@ -9,13 +9,42 @@ db-urls = ["https://github.com/RustSec/advisory-db"]
 yanked = "deny"
 unmaintained = "all"
 unsound = "all"
-ignore = []
+# Exceptions below are scoped to exact IDs/versions. They are never compiled,
+# except where a reason says "build-time only": runtime libcrux crates reach them
+# only through cfg(hax) / cfg(valgrind_ct_test) edges that appear in the
+# all-target graph but are never compiled for a real target. (Exceptions for
+# development tools alone are also permitted, but none is currently needed.)
+# cargo-deny cannot scope by dependency kind or cfg; scripts/ci/deny-exceptions-dev-only.sh
+# enforces both properties per real target. Remove each when upstream no longer
+# needs it; unused-ignored-advisory makes a stale ignore fail.
+ignore = [
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 2.0.1 is unmaintained with no fixed release. Path: libcrux-intrinsics 0.0.9 -> core-models 0.0.7 -> hax-lib 0.3.7 -> hax-lib-macros 0.3.7, a proc macro for libcrux's hax verification annotations. Never compiled: libcrux-intrinsics declares core-models only under cfg(hax), which no todoke build sets; the guard script checks every real target." },
+]
 unused-ignored-advisory = "deny"
 
 [licenses]
 allow = ["Apache-2.0", "MIT"]
 confidence-threshold = 0.93
-exceptions = []
+# Exact-version, per-crate exceptions. All are OSI-approved permissive licenses;
+# BSD-3-Clause and ISC require retaining notices in binary distributions.
+exceptions = [
+    # PROTOCOL §1 requires strict dalek Ed25519 verification and a canonical
+    # point-encoding check; todoke-crypto uses these at runtime.
+    { crate = "ed25519-dalek@3.0.0", allow = ["BSD-3-Clause"] },
+    { crate = "curve25519-dalek@5.0.0", allow = ["BSD-3-Clause"] },
+    # Constant-time primitives used by curve25519-dalek.
+    { crate = "subtle@2.6.1", allow = ["BSD-3-Clause"] },
+    # Linked into wasm32-unknown-unknown artifacts through getrandom's wasm_js
+    # backend (wasm-bindgen -> wasm-bindgen-shared); on other targets it is only
+    # compiled at build time (proc-macro2 -> syn for curve25519-dalek-derive and
+    # serde_derive). Unicode-3.0 also requires retaining its notice.
+    { crate = "unicode-ident@1.0.27", allow = ["Unicode-3.0"] },
+    # Never compiled: libcrux-secrets -> crabgrind -> bindgen under cfg(valgrind_ct_test).
+    { crate = "bindgen@0.72.1", allow = ["BSD-3-Clause"] },
+    { crate = "libloading@0.8.9", allow = ["ISC"] },
+    # Fuzz harness only (fuzz/ workspace): bundles LLVM libFuzzer. Never shipped.
+    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
+]
 
 [bans]
 multiple-versions = "deny"
@@ -23,7 +52,16 @@ multiple-versions-include-dev = true
 wildcards = "deny"
 allow-wildcard-paths = false
 deny = []
-skip = []
+# One older version per duplicate pair, reached only from never-compiled
+# cfg(hax) / cfg(valgrind_ct_test) edges or, for syn, from build-time proc
+# macros. See the advisories note above.
+skip = [
+    { crate = "hax-lib@0.3.7", reason = "Never compiled. libcrux-intrinsics 0.0.9 declares hax-lib 0.4.2 and core-models 0.0.7 (-> hax-lib 0.3.7) only under cfg(hax); upstream must converge." },
+    { crate = "hax-lib-macros@0.3.7", reason = "Never compiled. Proc macro of hax-lib 0.3.7 in the same cfg(hax) split." },
+    { crate = "hax-lib-macros-types@0.3.7", reason = "Never compiled. Types crate of hax-lib-macros 0.3.7 in the same cfg(hax) split." },
+    { crate = "syn@2.0.119", reason = "Build-time only. Compiled for curve25519-dalek-derive, the proc macro of curve25519-dalek's x86_64 SIMD backend (runtime dependency of todoke-crypto). Also reachable through never-compiled bindgen/hax-lib-macros edges. libcrux-macros and serde_derive use syn 3." },
+    { crate = "shlex@1.3.0", reason = "Never compiled. Build dependency of bindgen 0.72.1 via crabgrind, declared by libcrux-secrets only under cfg(valgrind_ct_test); cc 1.7 uses shlex 2." },
+]
 skip-tree = []
 
 [bans.workspace-dependencies]

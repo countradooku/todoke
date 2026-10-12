@@ -2,7 +2,7 @@
 
 todoke aims to be the best free, open-source, cross-platform file transfer app: phones and PCs, any to any, with end-to-end security. Adoption takes priority over revenue.
 
-**Status: repository scaffold.** The workspace compiles, but no transfer protocol, cryptography, transport, app, daemon, relay, or command-line interface is implemented. The requirements below describe the intended system, not security guarantees of a working product.
+**Status: runtime scaffold with a normative protocol draft and deterministic reference vectors.** The workspace compiles, but no transfer protocol, cryptography, transport, app, daemon, relay, or command-line interface is implemented. The requirements below describe the intended system, not security guarantees of a working product.
 
 ## Security model — five lines
 
@@ -16,7 +16,7 @@ The unresolved protocol details are recorded in [spec/PROTOCOL.md](spec/PROTOCOL
 
 ## Build and check
 
-Install [Rust through rustup](https://www.rust-lang.org/tools/install). The repository pins Rust 1.99.0 and declares Rust 1.85.0 as its minimum supported version (MSRV). All crates use edition 2024.
+Install [Rust through rustup](https://www.rust-lang.org/tools/install). The repository pins Rust 1.99.0 and declares Rust 1.94.0 as its minimum supported version (MSRV). All crates use edition 2024.
 
 ```sh
 cargo build --workspace --locked
@@ -34,7 +34,7 @@ cargo deny check
 cargo vet
 ```
 
-The scaffold has no external Rust dependencies and no executable applications. Passing these checks verifies the scaffold, not the intended security properties. Native and cross-target checks are configured in [GitHub Actions](.github/workflows/); results require running the workflows on a hosted repository.
+The runtime crates have no implemented application behavior. The offline protocol-vector example uses pinned reference development dependencies; see [its instructions](spec/test-vectors/README.md) and [dependency review status](supply-chain/README.md). Passing these checks verifies the scaffold, not the intended security properties. Native and cross-target checks are configured in [GitHub Actions](.github/workflows/); results require running the workflows on a hosted repository.
 
 ## Layout
 

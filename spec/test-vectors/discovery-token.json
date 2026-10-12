@@ -1,0 +1,91 @@
+{
+  "algorithm": "HMAC-BLAKE3 (unkeyed BLAKE3, output 32 bytes, block 64 bytes)",
+  "cases": [
+    {
+      "epoch": 0,
+      "epoch_be_hex": "0000000000000000",
+      "hmac_blake3_hex": "36ed9ce433f7105d00fc89c0b7faef6ac4f174655d17d3a0d67a157a477b182e",
+      "token_hex": "36ed9ce433f7105d",
+      "unix_seconds": 0
+    },
+    {
+      "epoch": 0,
+      "epoch_be_hex": "0000000000000000",
+      "hmac_blake3_hex": "36ed9ce433f7105d00fc89c0b7faef6ac4f174655d17d3a0d67a157a477b182e",
+      "token_hex": "36ed9ce433f7105d",
+      "unix_seconds": 899
+    },
+    {
+      "epoch": 1,
+      "epoch_be_hex": "0000000000000001",
+      "hmac_blake3_hex": "47c36f9892fc94b3aef0056aae090116491b9f79cd11d7d9645e41971dcfeafe",
+      "token_hex": "47c36f9892fc94b3",
+      "unix_seconds": 900
+    },
+    {
+      "epoch": 1,
+      "epoch_be_hex": "0000000000000001",
+      "hmac_blake3_hex": "47c36f9892fc94b3aef0056aae090116491b9f79cd11d7d9645e41971dcfeafe",
+      "token_hex": "47c36f9892fc94b3",
+      "unix_seconds": 1799
+    },
+    {
+      "epoch": 2,
+      "epoch_be_hex": "0000000000000002",
+      "hmac_blake3_hex": "1f83e73dd160a9adb5e3c3416bdf288d1130fc0ffce3367202085460c4a06aae",
+      "token_hex": "1f83e73dd160a9ad",
+      "unix_seconds": 1800
+    },
+    {
+      "epoch": 1955555,
+      "epoch_be_hex": "00000000001dd6e3",
+      "hmac_blake3_hex": "340e847e1dcd692aaf56f39ccdd74ac5fc616bb78264655561311a2d6ba9b6f1",
+      "token_hex": "340e847e1dcd692a",
+      "unix_seconds": 1760000000
+    }
+  ],
+  "derived_chain": {
+    "discovery_key_info_hex": "746f646f6b652f76312f646973636f766572792d6b657900",
+    "epochs": [
+      {
+        "contact_locator_hex": "05172bf5d403da73ee1152ee71a8db61",
+        "discovery_record_hex": "010000000000001dd6e21f90171b127741e600",
+        "epoch": 1955554,
+        "mdns_txt": "v1=010000000000001dd6e21f90171b127741e600",
+        "position": "previous",
+        "rendezvous_salt_hex": "00000000001dd6e2",
+        "rendezvous_token_hex": "05172bf5d403da73ee1152ee71a8db610c0084a082c1cb4b980e57900d99ce1c",
+        "token_hex": "1f90171b127741e6"
+      },
+      {
+        "contact_locator_hex": "e38f42a7e4d8484559124da81ad93dfc",
+        "discovery_record_hex": "010000000000001dd6e33abe806d9b821cfc00",
+        "epoch": 1955555,
+        "mdns_txt": "v1=010000000000001dd6e33abe806d9b821cfc00",
+        "position": "current",
+        "rendezvous_salt_hex": "00000000001dd6e3",
+        "rendezvous_token_hex": "e38f42a7e4d8484559124da81ad93dfccd47fadc43d8842838305bc54eac7fa0",
+        "token_hex": "3abe806d9b821cfc"
+      },
+      {
+        "contact_locator_hex": "d8a1458e5d38f24cba7982065e011717",
+        "discovery_record_hex": "010000000000001dd6e4568afbb8282b7cd600",
+        "epoch": 1955556,
+        "mdns_txt": "v1=010000000000001dd6e4568afbb8282b7cd600",
+        "position": "next",
+        "rendezvous_salt_hex": "00000000001dd6e4",
+        "rendezvous_token_hex": "d8a1458e5d38f24cba7982065e011717f94e1fe72373c32e2e943ef9d36d13b7",
+        "token_hex": "568afbb8282b7cd6"
+      }
+    ],
+    "next_psk_hex": "31f07f1919fd8b87390d9f829c67c17647243a49de8387ffa812358f425d1fba",
+    "pair_key_hex": "e1405911ccbe767aa851b5ca3220bace5bac88af4e8cd1f82df2cc47a16befc0",
+    "pair_secret_hex": "f69765e42a202d54ae4904698aa4eb468d690f0f008c57a7ac544a51956784a8",
+    "pair_secret_info_hex": "746f646f6b652f76312f706169722d73656372657400",
+    "reference_unix_seconds": 1760000000,
+    "rendezvous_info_hex": "746f646f6b652f76312f72656e64657a766f757300",
+    "source": "psk-ratchet.json next_psk_hex"
+  },
+  "fixture_notice": "PUBLIC TEST FIXTURE: all seeds, PSKs, and derived values are fixed and must never be used in production",
+  "pair_key_hex": "6666666666666666666666666666666666666666666666666666666666666666"
+}
