@@ -330,6 +330,10 @@ fn contact_session_over_a_byte_pipe() -> TestResult {
     assert_eq!(a.mode(), SessionMode::Contact);
     assert_eq!(a.handshake_hash(), b.handshake_hash());
     assert_eq!(a.session_id(), b.session_id());
+    // session_id = B3("todoke/v1/session\0" || h) (§4.2.6).
+    let mut session_input = b"todoke/v1/session\x00".to_vec();
+    session_input.extend_from_slice(a.handshake_hash());
+    assert_eq!(a.session_id(), blake3::hash(&session_input).as_bytes());
     assert_eq!(a.peer_static(), bob.noise.public_key());
     assert_eq!(b.peer_static(), alice.noise.public_key());
     assert_eq!(a.peer_binding().device_public(), &bob.key());
@@ -709,12 +713,29 @@ fn session_errors_render_without_detail() {
         SessionError::Random,
         SessionError::Usage,
         SessionError::RekeyTooSoon,
+        SessionError::Identity(crate::identity::IdentityError::AuthenticationFailed),
+        SessionError::KeyStore(crate::identity::KeyStoreError::UnknownKey),
+        SessionError::Storage(crate::identity::ContactError::UnknownContact),
     ];
     let messages: Vec<String> = all.iter().map(ToString::to_string).collect();
     for (index, message) in messages.iter().enumerate() {
         assert_ne!(message, "");
         assert!(!messages[..index].contains(message), "{message}");
     }
+    // Engine failures map without detail (§4.2.6).
+    assert_eq!(
+        [
+            crate::session::engine::NoiseError::Authentication,
+            crate::session::engine::NoiseError::Random,
+            crate::session::engine::NoiseError::State
+        ]
+        .map(SessionError::from),
+        [
+            SessionError::Authentication,
+            SessionError::Random,
+            SessionError::Protocol(ErrorCode::STATE)
+        ]
+    );
     assert_eq!(GATE, UnauditedSuite0001::acknowledge_not_production_ready());
     assert_eq!(Role::Initiator.peer(), Role::Responder);
     assert_eq!(Role::Responder.to_u8(), 1);

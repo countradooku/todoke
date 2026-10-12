@@ -241,6 +241,18 @@ fn write_loop_resumes_short_writes_and_reports_failures() {
     }
 }
 
+/// §4.1: the Hello nonces the adapter sends are fresh, nonzero, and never
+/// repeat between attempts.
+#[test]
+fn hello_nonces_are_fresh_and_nonzero() -> Result<(), SessionError> {
+    let nonces = [random_nonce()?, random_nonce()?, random_nonce()?];
+    for (index, nonce) in nonces.iter().enumerate() {
+        assert_ne!(nonce, &[0; 16]);
+        assert!(!nonces[index + 1..].contains(nonce));
+    }
+    Ok(())
+}
+
 fn arb_step() -> impl Strategy<Value = Step> {
     prop_oneof![
         6 => (1..80usize).prop_map(Step::Bytes),

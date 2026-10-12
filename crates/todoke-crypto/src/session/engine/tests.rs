@@ -363,6 +363,48 @@ fn truncated_extended_and_out_of_turn_messages_are_rejected() -> TestResult {
     peers.responder.read_message(&first)?;
     assert_eq!(peers.responder.read_message(&first), Err(NoiseError::State));
     assert!(peers.responder.into_transport().is_err());
+    // A poisoned attempt never yields a transport.
+    let mut peers = fixture_peers(&vector, Pattern::IkPsk2, None, None)?;
+    assert_eq!(
+        peers.responder.read_message(&honest[1..]),
+        Err(NoiseError::Authentication)
+    );
+    assert_eq!(
+        peers.responder.into_transport().map(|_| ()),
+        Err(NoiseError::State)
+    );
+    Ok(())
+}
+
+/// §5: a transport ciphertext is at most 65535 bytes; a larger plaintext is
+/// refused before encryption and uses no nonce. A ciphertext shorter than
+/// its tag never authenticates.
+#[test]
+fn transport_messages_respect_the_ciphertext_bounds() -> TestResult {
+    let vector = load("handshake-kkpsk2.json")?;
+    let mut peers = fixture_peers(&vector, Pattern::KkPsk2, None, None)?;
+    let first = peers.initiator.write_message()?;
+    peers.responder.read_message(&first)?;
+    let second = peers.responder.write_message()?;
+    peers.initiator.read_message(&second)?;
+    let mut initiator = peers.initiator.into_transport()?;
+    let mut responder = peers.responder.into_transport()?;
+    let largest = vec![0; MAX_CIPHERTEXT_LEN - TAG_LEN];
+    assert_eq!(
+        initiator.encrypt(&[largest.as_slice(), &[0]].concat()),
+        Err(NoiseError::State)
+    );
+    assert_eq!(initiator.sending_nonce(), 0);
+    let ciphertext = initiator.encrypt(&largest)?;
+    assert_eq!(ciphertext.len(), MAX_CIPHERTEXT_LEN);
+    assert_eq!(
+        responder.decrypt(&ciphertext)?.as_slice(),
+        largest.as_slice()
+    );
+    assert_eq!(
+        responder.decrypt(&[0; TAG_LEN - 1]).map(|_| ()),
+        Err(NoiseError::Authentication)
+    );
     Ok(())
 }
 

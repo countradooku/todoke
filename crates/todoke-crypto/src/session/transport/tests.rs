@@ -514,6 +514,8 @@ fn idle_timeout_and_hard_deadlines() -> TestResult {
     let (mut a, mut b) = cores(MAX_SESSION_DURATION + Duration::from_secs(1))?;
     assert_eq!(a.next_deadline(), T0 + PING_AFTER);
     assert_eq!(a.hard_deadline, T0 + MAX_SESSION_DURATION);
+    // §13: at most 24 hours.
+    assert_eq!(MAX_SESSION_DURATION, Duration::from_secs(86_400));
     a.last_received = T0 + MAX_SESSION_DURATION;
     assert_eq!(
         a.poll(T0 + MAX_SESSION_DURATION),
@@ -658,5 +660,86 @@ fn received_pings_are_rate_limited() -> TestResult {
     assert_eq!(frame_type, FrameType::ERROR);
     assert_eq!(ErrorRecord::decode(&error)?.code(), ErrorCode::LIMIT);
     assert!(b.is_closed());
+    Ok(())
+}
+
+/// §5: a closed transport seals nothing and sends no `KeyUpdate`; a sending
+/// epoch at `u64::MAX` cannot wrap, so the update fails with LIMIT and the
+/// transport closes; a receiver at `u64::MAX` rejects any further update.
+#[test]
+fn closed_or_exhausted_transports_send_nothing() -> TestResult {
+    let (mut a, _) = pair(Limits::SPEC, true)?;
+    a.close();
+    assert_eq!(
+        a.seal(FrameType::CAPABILITIES, b"x", T0),
+        Err(SessionError::Closed)
+    );
+    assert_eq!(a.key_update(T0), Err(SessionError::Closed));
+    let (mut a, _) = pair(Limits::SPEC, true)?;
+    a.send.epoch = u64::MAX;
+    assert_eq!(
+        a.key_update(T0).map(|_| ()),
+        protocol_error(ErrorCode::LIMIT)
+    );
+    assert!(a.is_closed());
+    assert_eq!(
+        a.seal(FrameType::CAPABILITIES, b"x", T0),
+        Err(SessionError::Closed)
+    );
+    let (mut c, mut d) = pair(Limits::SPEC, true)?;
+    d.recv.epoch = u64::MAX;
+    let update = c.key_update(T0)?;
+    assert_eq!(
+        d.open(body(&update)?, T0).map(|_| ()),
+        protocol_error(ErrorCode::STATE)
+    );
+    assert!(d.is_closed());
+    Ok(())
+}
+
+/// §13: a Pong must echo the outstanding Ping's nonce; any other nonce is
+/// STATE. Ping nonces are nonzero: an all-zero draw is replaced.
+#[test]
+fn pongs_must_echo_the_outstanding_nonzero_ping() -> TestResult {
+    let (a, b) = pair(Limits::SPEC, false)?;
+    let mut a = SessionCore::new(
+        a,
+        info()?,
+        Entropy::scripted(vec![vec![0; 8], vec![9; 8]]),
+        T0,
+        MAX_SESSION_DURATION,
+    );
+    let mut b = SessionCore::new(b, info()?, Entropy::Os, T0, MAX_SESSION_DURATION);
+    let ping_at = T0 + PING_AFTER;
+    a.poll(ping_at)?;
+    let records = drain(&mut a);
+    assert_eq!(records.len(), 1);
+    let (frame_type, nonce) = frame(b.transport.open(body(&records[0])?, ping_at)?)?;
+    assert_eq!((frame_type, nonce), (FrameType::PING, vec![9; 8]));
+    let wrong = b
+        .transport
+        .seal(FrameType::PONG, &[8; 8], ping_at)?
+        .pop()
+        .ok_or("no record")?;
+    assert_eq!(
+        a.receive(body(&wrong)?, ping_at).map(|_| ()),
+        protocol_error(ErrorCode::STATE)
+    );
+    assert!(a.is_closed());
+    Ok(())
+}
+
+/// A missing Pong before an earlier binding expiry is a TIMEOUT, not
+/// EXPIRED: EXPIRED is reported only once the expiry itself is reached.
+#[test]
+fn pong_timeout_before_binding_expiry_reports_timeout() -> TestResult {
+    let (mut a, mut b) = cores(Duration::from_secs(50))?;
+    let ping_at = T0 + PING_AFTER;
+    a.poll(ping_at)?;
+    relay(&mut a, &mut b, ping_at)?;
+    drain(&mut b); // the Pong is lost
+    assert_eq!(a.poll(ping_at + PONG_TIMEOUT), Err(SessionError::Timeout));
+    assert!(ping_at + PONG_TIMEOUT < a.hard_deadline());
+    assert_eq!(queued_error(&mut a, &mut b)?.code(), ErrorCode::TIMEOUT);
     Ok(())
 }
