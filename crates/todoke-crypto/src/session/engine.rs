@@ -570,7 +570,7 @@ impl NoiseHandshake {
 
     /// Whether this side sends the next message.
     pub(crate) fn is_our_turn(&self) -> bool {
-        (self.position % 2 == 0) == self.initiator
+        self.position.is_multiple_of(2) == self.initiator
     }
 
     pub(crate) fn is_finished(&self) -> bool {

@@ -240,15 +240,15 @@ fn join<A: Future, B: Future>(a: A, b: B) -> AnyResult<(A::Output, B::Output)> {
     let (mut a, mut b) = (pin!(a), pin!(b));
     let (mut a_out, mut b_out) = (None, None);
     for _ in 0..200_000 {
-        if a_out.is_none() {
-            if let Poll::Ready(value) = a.as_mut().poll(&mut cx) {
-                a_out = Some(value);
-            }
+        if a_out.is_none()
+            && let Poll::Ready(value) = a.as_mut().poll(&mut cx)
+        {
+            a_out = Some(value);
         }
-        if b_out.is_none() {
-            if let Poll::Ready(value) = b.as_mut().poll(&mut cx) {
-                b_out = Some(value);
-            }
+        if b_out.is_none()
+            && let Poll::Ready(value) = b.as_mut().poll(&mut cx)
+        {
+            b_out = Some(value);
         }
         if let (Some(_), Some(_)) = (&a_out, &b_out) {
             return Ok((a_out.ok_or("a")?, b_out.ok_or("b")?));

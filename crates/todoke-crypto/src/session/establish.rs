@@ -388,10 +388,8 @@ impl Establishment {
         if !self.journaled {
             return error;
         }
-        if first {
-            if let Some(pending) = self.pending.as_ref() {
-                authority.abandon(pending);
-            }
+        if first && let Some(pending) = self.pending.as_ref() {
+            authority.abandon(pending);
         }
         SessionError::RatchetUncertain
     }

@@ -16,7 +16,7 @@ The unresolved protocol details are recorded in [spec/PROTOCOL.md](spec/PROTOCOL
 
 ## Build and check
 
-Install [Rust through rustup](https://www.rust-lang.org/tools/install). The repository pins Rust 1.99.0 and declares Rust 1.85.0 as its minimum supported version (MSRV). All crates use edition 2024.
+Install [Rust through rustup](https://www.rust-lang.org/tools/install). The repository pins Rust 1.99.0 and declares Rust 1.88.0 as its minimum supported version (MSRV). All crates use edition 2024.
 
 ```sh
 cargo build --workspace --locked

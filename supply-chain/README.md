@@ -202,3 +202,19 @@ development dependency, which uses `slice::as_chunks` (stable since 1.88), and
 `--all-targets` on `wasm32-unknown-unknown` fails in the development-only
 `getrandom 0.2`/`0.3` copies. Both reproduce on the base commit. The library
 targets and every `todoke-crypto` target pass on 1.85 and wasm32.
+
+## Latest-version upgrade (2026-10-12)
+
+The maintainer asked to keep every crate at its latest stable release, with no
+release-age cooling-off period, preferring upgrades over duplicate-version
+exceptions for old versions and raising the MSRV where needed.
+
+- `proptest` 1.11.0 → 1.12.0 (published 2026-10-10). It moves to `rand 0.10`,
+  the version libcrux already uses, which removed the dev-only `rand@0.9.5`,
+  `rand_core@0.9.5`, `getrandom@0.3.4`, and `r-efi@5.3.0` skips (and
+  `rand_chacha`, `ppv-lite86`, `zerocopy`, `wasip2`, and `wit-bindgen` left the
+  lock). proptest 1.12 declares `rust-version = 1.88`.
+- MSRV 1.85 → 1.88. `base45 3.2.0` (already the latest release) uses
+  `slice::as_chunks`, stable since 1.88, without declaring a `rust-version`, so
+  the 1.85 MSRV job already failed; proptest 1.12 now also requires 1.88. The
+  CI `msrv` job, `CONTRIBUTING.md`, and `README.md` were updated.

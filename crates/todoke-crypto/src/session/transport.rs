@@ -390,16 +390,12 @@ impl SessionCore {
             SessionError::Timeout => Some(ErrorCode::TIMEOUT),
             _ => None,
         };
-        if let Some(code) = code {
-            if !self.transport.is_closed() {
-                if let Ok(record) = ErrorRecord::new(ErrorScope::Session, code) {
-                    if let Ok(records) =
-                        self.transport.seal(FrameType::ERROR, &record.encode(), now)
-                    {
-                        self.outgoing.extend(records);
-                    }
-                }
-            }
+        if let Some(code) = code
+            && !self.transport.is_closed()
+            && let Ok(record) = ErrorRecord::new(ErrorScope::Session, code)
+            && let Ok(records) = self.transport.seal(FrameType::ERROR, &record.encode(), now)
+        {
+            self.outgoing.extend(records);
         }
         self.transport.close();
         error

@@ -64,10 +64,6 @@ skip = [
     { crate = "snow@0.9.6", reason = "Dev-only. todoke-proto's offline handshake fixture generator pins snow 0.9.6, the engine named in spec/test-vectors and decision O1. Runtime todoke-crypto uses snow 0.10.0 (docs/adr/0001-noise-crate.md), which reproduces those fixtures byte for byte. Pending maintainer sign-off (added 2026-10-11)." },
     { crate = "rand_core@0.6.4", reason = "Dev-only. Required by the pinned snow 0.9.6 handshake fixture engine and its RNG adapter; libcrux uses rand_core 0.10." },
     { crate = "getrandom@0.2.17", reason = "Dev-only. Pulled by rand_core 0.6.4 for snow 0.9.6; libcrux's uuid/rand use getrandom 0.4." },
-    { crate = "rand@0.9.5", reason = "Dev-only. proptest 1.11.0 uses rand 0.9; proptest 1.12 moves to rand 0.10 but requires Rust 1.88, above the 1.85 MSRV." },
-    { crate = "rand_core@0.9.5", reason = "Dev-only. Core of rand 0.9.5 for proptest 1.11.0." },
-    { crate = "getrandom@0.3.4", reason = "Dev-only. OS RNG of rand 0.9.5 for proptest 1.11.0; runtime crates use getrandom 0.4." },
-    { crate = "r-efi@5.3.0", reason = "Dev-only. UEFI binding of getrandom 0.3.4 for proptest 1.11.0." },
 ]
 skip-tree = []
 

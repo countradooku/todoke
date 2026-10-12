@@ -3282,10 +3282,10 @@ mod tests {
                     Op::Reopen => {
                         store = reopen(&store).map_err(fail)?;
                         // An interrupted journal blocks the pairing (§4.4).
-                        if let Some(m) = model.as_mut() {
-                            if m.journal.take().is_some() {
-                                m.state = VerificationState::RatchetUncertain;
-                            }
+                        if let Some(m) = model.as_mut()
+                            && m.journal.take().is_some()
+                        {
+                            m.state = VerificationState::RatchetUncertain;
                         }
                     }
                     Op::Journal | Op::JournalWrongGeneration => {
