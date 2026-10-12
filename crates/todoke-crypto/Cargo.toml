@@ -88,4 +88,4 @@ pakery-crypto.workspace = true
 proptest.workspace = true
 rand_core.workspace = true
 serde_json.workspace = true
-sha2 = { version = "=0.11.0", default-features = false }
+sha2 = { version = "=0.11.1", default-features = false }

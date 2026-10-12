@@ -359,5 +359,13 @@ exemption was raised from `safe-to-run` to `safe-to-deploy` because
 0.5.4` and `ctutils 0.4.3`, which the feature brings into that graph. No audit was recorded; replacing these exemptions with real reviews
 is part of gate O2.
 
-Not upgraded here: `sha2 0.11.1` was released on 2026-10-12, after the
-current `0.11.0` pin; this change keeps `0.11.0` to stay focused (follow-up).
+## sha2 0.11.1 (2026-10-13)
+
+`sha2` 0.11.0 → 0.11.1 (published 2026-10-12, one day old), the only crate
+in the lock behind its latest release (`cargo update --dry-run --verbose`).
+It is a development dependency of `todoke-crypto`, a runtime dependency of
+`ed25519-dalek`, and of `pakery-crypto` under `unaudited-code-pairing`. The
+release removes a riscv-zknh workaround, fixes AArch64 round-constant
+loading under Stacked Borrows, and raises its MSRV to 1.88 (below ours).
+Both lock files and both vet stores moved to the new version; its exemption
+keeps the "Not yet reviewed" note. No exception changed.
