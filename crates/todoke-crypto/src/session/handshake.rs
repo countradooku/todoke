@@ -17,7 +17,7 @@ use zeroize::Zeroizing;
 
 use super::engine::{Entropy, HandshakeInputs, NoiseHandshake, NoiseTransport, Pattern};
 use super::keys::{NoiseStaticKey, PairingPsk};
-use super::{ErrorCode, HANDSHAKE_TIMEOUT, Role, SessionError};
+use super::{ErrorCode, HANDSHAKE_TIMEOUT, Role, SessionError, UnauditedSuite0001};
 
 const PROLOGUE_DOMAIN: &[u8] = b"todoke/v1/noise-prologue\0";
 /// §13: at most 16 Noise records and 64 KiB of prelude per attempt.
@@ -249,8 +249,10 @@ pub(crate) struct HandshakeDriver {
 impl HandshakeDriver {
     /// Starts an initiator and returns the `ClientHello` record to send.
     /// `started` is the monotonic time it is sent: the 30-second handshake
-    /// deadline runs from there (§13).
+    /// deadline runs from there (§13). `_gate` is the §16 acknowledgement:
+    /// no Noise state for suite 0x0001 is built without one.
     pub(crate) fn initiator(
+        _gate: UnauditedSuite0001,
         plan: InitiatorPlan,
         local_static: &NoiseStaticKey,
         client_nonce: [u8; 16],
@@ -281,6 +283,7 @@ impl HandshakeDriver {
     /// Starts a responder for a received `ClientHello` and returns the
     /// `ServerHello` record. `started` is when `ClientHello` arrived.
     pub(crate) fn responder(
+        _gate: UnauditedSuite0001,
         client: Hello,
         plan: ResponderPlan,
         local_static: &NoiseStaticKey,

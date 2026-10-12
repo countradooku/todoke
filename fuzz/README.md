@@ -20,7 +20,10 @@ The `crypto_*` targets call `todoke_crypto::identity::fuzzing` or
 `todoke_crypto::session::fuzzing`, which exist only under `--cfg fuzzing` (set
 by cargo-fuzz). Each of their functions wraps the same decoder or state machine
 that production code uses. Under `--cfg fuzzing` the session engine may use
-scripted (fixture) randomness, as in unit tests; release builds cannot.
+scripted (fixture) randomness, as in unit tests; release builds cannot. The
+session harnesses need the suite 0x0001 acknowledgement, so `fuzz/Cargo.toml`
+enables `todoke-crypto`'s `unaudited-suite-0001` feature; shipped graphs never
+do (`scripts/ci/deny-exceptions-dev-only.sh` checks this).
 
 Committed seeds live in `fuzz/seeds/<target>/`: small valid and malformed
 inputs built from public RFC 8032 test keys and fixed bytes. `fuzz/corpus/` is

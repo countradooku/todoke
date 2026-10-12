@@ -12,19 +12,28 @@
 #   compiled for any target at all, dev-dependencies included; those marked
 #   "Build-time only" may not be linked into a target binary.
 # - Every target checked by the CI cross job must be in the target list below.
+# - No target's non-dev graph may enable a feature in forbidden_features:
+#   todoke-crypto's `unaudited-suite-0001` (the PROTOCOL §16 production gate)
+#   or Snow's `risky-raw-split` (traffic-key export, used only by the offline
+#   fixture generator). Under resolver 2/3, dev-dependency features are only
+#   unified into builds of targets that need them (Cargo book, "Feature
+#   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
+#   feature resolution.
 #
 # The graph is resolved per real target triple rather than with --target all:
 # libcrux declares some crates only under cfg(hax) or cfg(valgrind_ct_test), which
 # no todoke build sets, so they appear in the all-target graph but never compile.
 # Fails closed if any graph or configuration cannot be resolved.
 #
-# DENY_CONFIG and CI_WORKFLOW override the inputs (for the guard's own tests).
+# DENY_CONFIG, CI_WORKFLOW, and CARGO_MANIFEST override the inputs (for the
+# guard's own tests).
 set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 
 deny_config="${DENY_CONFIG:-deny.toml}"
 ci_workflow="${CI_WORKFLOW:-.github/workflows/ci.yml}"
+manifest="${CARGO_MANIFEST:-Cargo.toml}"
 
 # Supported and CI-checked targets. Add new release targets here.
 targets=(
@@ -46,6 +55,9 @@ targets=(
 # Exempted packages permitted as build-time-only dependencies. Each needs a
 # matching "Build-time only" reason in deny.toml.
 build_time_only=("syn@2.0.119")
+
+# Features no shipped graph may enable, as package:feature.
+forbidden_features=("todoke-crypto:unaudited-suite-0001" "snow:risky-raw-split")
 
 # Skipped duplicate versions, read from deny.toml as name@version.
 # A read loop rather than mapfile keeps this runnable on macOS's bash 3.2.
@@ -143,11 +155,13 @@ contains() {
 
 for target in "${targets[@]}"; do
     # Everything compiled for a non-dev build: normal, build, and proc-macro edges.
-    compiled="$(cargo tree --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}')"
+    compiled="$(cargo tree --manifest-path "$manifest" --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}')"
     # Everything compiled at all, including tests, examples, and benches.
-    compiled_any="$(cargo tree --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}')"
+    compiled_any="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}')"
+    # Enabled features of every non-dev package, as "name vX (source)|f1,f2".
+    features="$(cargo tree --manifest-path "$manifest" --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}|{f}')"
     # Only what is linked into target artifacts.
-    linked="$(cargo tree --workspace --locked -e normal,no-proc-macro --target "$target" --prefix none --format '{p}')"
+    linked="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,no-proc-macro --target "$target" --prefix none --format '{p}')"
     for package in "${exempt[@]}"; do
         if is_build_time_only "$package"; then
             if contains "$linked" "$package"; then
@@ -158,6 +172,30 @@ for target in "${targets[@]}"; do
             echo "deny.toml exception ${package} is compiled outside dev-dependencies for ${target}." >&2
             status=1
         fi
+    done
+    for forbidden in "${forbidden_features[@]}"; do
+        # Exit 0: the feature is enabled; 1: the package is present without
+        # it; 2: the package is absent, which would make the check vacuous.
+        outcome=0
+        awk -F'|' -v name="${forbidden%%:*}" -v feature="${forbidden#*:}" '
+            { split($1, words, " "); count = split($2, enabled, ",") }
+            words[1] == name {
+                seen = 1
+                for (i = 1; i <= count; i++) if (enabled[i] == feature) found = 1
+            }
+            END { exit found ? 0 : (seen ? 1 : 2) }
+        ' <<< "$features" || outcome=$?
+        case "$outcome" in
+            0)
+                echo "${forbidden%%:*} feature ${forbidden#*:} is enabled outside dev-dependencies for ${target}." >&2
+                status=1
+                ;;
+            1) ;;
+            *)
+                echo "${forbidden%%:*} is not in the non-dev graph for ${target}; refusing to pass vacuously." >&2
+                status=1
+                ;;
+        esac
     done
     for package in ${license_never[@]+"${license_never[@]}"}; do
         if contains "$compiled_any" "$package"; then
@@ -174,6 +212,6 @@ for target in "${targets[@]}"; do
 done
 
 if [[ $status -eq 0 ]]; then
-    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); CI cross targets (${cross_targets[*]}) are covered."
+    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); no shipped graph enables ${forbidden_features[*]}; CI cross targets (${cross_targets[*]}) are covered."
 fi
 exit "$status"

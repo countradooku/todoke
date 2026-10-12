@@ -256,3 +256,13 @@ gone. The fuzz lock was re-seeded from the root lock and still adds only
 fuzz-workspace deny check, both vector generators' `--check`, and a 30-second
 run of every fuzz target passed. `cargo vet --locked` reports 117 unvetted
 packages at the root and 110 in `fuzz/`; no audits or exemptions were recorded.
+
+## Feature guard (2026-10-12)
+
+`scripts/ci/deny-exceptions-dev-only.sh` also fails if, on any supported
+target, the non-dev graph (`cargo tree -e no-dev --format '{p}|{f}'`) enables
+`todoke-crypto`'s `unaudited-suite-0001` feature (the PROTOCOL §16 gate, see
+[ADR 0001](../docs/adr/0001-noise-crate.md)) or Snow's `risky-raw-split`
+feature (enabled only by the fixture generator's development dependency), or
+if either package is missing from that graph. The fuzz workspace enables
+`unaudited-suite-0001`; it is never shipped. No dependency changed.

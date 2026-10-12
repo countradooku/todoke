@@ -18,7 +18,7 @@ use crate::session::engine::Entropy;
 use crate::session::establish::{Establishment, Phase};
 use crate::session::handshake::{self, HandshakeDriver, InitiatorPlan, ResponderPlan};
 use crate::session::transport::{Limits, SessionCore};
-use crate::session::{LocalIdentity, NoiseStaticKey, Role, SessionError};
+use crate::session::{LocalIdentity, NoiseStaticKey, Role, SessionError, UnauditedSuite0001};
 
 pub(crate) type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 pub(crate) type TestResult = AnyResult<()>;
@@ -30,6 +30,8 @@ pub(crate) type Store = ContactStore<SoftwareSealer, MemoryStorage>;
 pub(crate) const WALL: u64 = T0 + 60;
 /// Monotonic start of every harness run.
 pub(crate) const START: Duration = Duration::from_secs(10_000);
+/// The §16 acknowledgement, available to unit tests through `cfg(test)`.
+pub(crate) const GATE: UnauditedSuite0001 = UnauditedSuite0001::acknowledge_not_production_ready();
 /// The PSK both stores hold before a session.
 pub(crate) const OLD_PSK: [u8; 32] = [0x77; 32];
 
@@ -246,6 +248,7 @@ impl<'l, A: PeerAuthority> Side<'l, A> {
                 let hello = handshake::read_client_hello(body)?;
                 let plan = plan.ok_or(SessionError::Usage)?;
                 let (driver, record) = HandshakeDriver::responder(
+                    GATE,
                     hello,
                     *plan,
                     self.local.noise_static(),
@@ -350,6 +353,7 @@ impl<'l, A: PeerAuthority, B: PeerAuthority> Harness<'l, A, B> {
         plan: InitiatorPlan,
     ) -> AnyResult<Self> {
         let (driver, client_hello) = HandshakeDriver::initiator(
+            GATE,
             plan,
             initiator.local.noise_static(),
             [0xc1; 16],

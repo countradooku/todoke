@@ -11,6 +11,14 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Exposes `session::UnauditedSuite0001::acknowledge_not_production_ready()`
+# outside this crate's own unit tests. PROTOCOL §16 keeps suite 0x0001
+# disabled for production (gates O6 and O10), so only test and fuzzing builds
+# may enable this. scripts/ci/deny-exceptions-dev-only.sh fails if any shipped
+# (non-dev) graph enables it. Not a default feature.
+unaudited-suite-0001 = []
+
 # Versions are the reviewed vector-tool pins (workspace dependencies). Fixture use
 # is not production approval: zeroization and cargo-vet evidence remain open (O6).
 [dependencies]

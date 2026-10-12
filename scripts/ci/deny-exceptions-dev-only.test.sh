@@ -83,6 +83,50 @@ grep -v 'Never compiled: libcrux-secrets' "$deny" > "$scratch/unclassified.toml"
 expect fail "no classified license exceptions" "$scratch/unclassified.toml" "$workflow" \
     'refusing to pass vacuously'
 
+# Forbidden features in the shipped (non-dev) graph. These mutate a copy of the
+# workspace manifests, since features come from Cargo.toml, not deny.toml.
+workspace_copy() {
+    local copy="$1"
+    mkdir -p "$copy"
+    git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock crates \
+        | tar -cf - -T - | tar -xf - -C "$copy"
+}
+
+expect_manifest() {
+    local name="$1" manifest="$2" pattern="$3" output
+    if output="$(CARGO_MANIFEST="$manifest" bash "$guard" 2>&1)"; then
+        result=pass
+    else
+        result=fail
+    fi
+    if [[ "$result" != fail ]] || ! grep -qF -- "$pattern" <<< "$output"; then
+        echo "not ok - ${name}: expected fail with \"${pattern}\", got ${result}:" >&2
+        sed 's/^/    /' <<< "$output" >&2
+        failures=$((failures + 1))
+    else
+        echo "ok - ${name}"
+    fi
+}
+
+# A shipped crate enabling the unaudited suite gate.
+workspace_copy "$scratch/gate"
+cat >> "$scratch/gate/crates/todoke-core/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["unaudited-suite-0001"] }
+TOML
+# Record the new path edge in the copied lock; no registry package changes.
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/gate/Cargo.toml" > /dev/null
+expect_manifest "unaudited suite feature in a shipped graph" "$scratch/gate/Cargo.toml" \
+    'todoke-crypto feature unaudited-suite-0001 is enabled outside dev-dependencies'
+
+# The runtime Noise engine with Snow's raw traffic-key export.
+workspace_copy "$scratch/raw-split"
+mutate crates/todoke-crypto/Cargo.toml "$scratch/raw-split/crates/todoke-crypto/Cargo.toml" \
+    'snow.workspace = true' 'snow = { workspace = true, features = ["risky-raw-split"] }'
+expect_manifest "Snow raw split in a shipped graph" "$scratch/raw-split/Cargo.toml" \
+    'snow feature risky-raw-split is enabled outside dev-dependencies'
+
 if [[ $failures -ne 0 ]]; then
     echo "${failures} guard test(s) failed." >&2
     exit 1

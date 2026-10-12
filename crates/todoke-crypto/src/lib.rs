@@ -14,9 +14,10 @@
 //! confirmation, the PSK ratchet with its durable journal and crash policy,
 //! encrypted framing, rekey, and keepalive. Sessions are **not production
 //! enabled**: every entry point takes an
-//! [`UnauditedSuite0001`](session::UnauditedSuite0001) acknowledgement because
-//! PROTOCOL §16 keeps the suite disabled until gates O6 and O10 close
-//! (`docs/adr/0001-noise-crate.md`). Pairing flows, Capabilities, transfers, and
+//! [`UnauditedSuite0001`](session::UnauditedSuite0001) acknowledgement, which
+//! only unit tests and the non-default `unaudited-suite-0001` feature can
+//! construct, because PROTOCOL §16 keeps the suite disabled until gates O6 and
+//! O10 close (`docs/adr/0001-noise-crate.md`). Pairing flows, Capabilities, transfers, and
 //! content encryption are not implemented yet.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 

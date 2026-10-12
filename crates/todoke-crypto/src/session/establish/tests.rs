@@ -21,6 +21,7 @@ fn record_body(record: &[u8]) -> &[u8] {
 /// both establishment phases, before either sent anything.
 fn established_pair(alice: &Device, bob: &Device) -> AnyResult<(Establishment, Establishment)> {
     let (mut initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
         InitiatorPlan::contact(
             GENERATION,
             LOCATOR,
@@ -34,6 +35,7 @@ fn established_pair(alice: &Device, bob: &Device) -> AnyResult<(Establishment, E
     )?;
     let hello = read_client_hello(record_body(&client_hello))?;
     let (mut responder, server_hello) = HandshakeDriver::responder(
+        GATE,
         hello,
         ResponderPlan::contact(
             GENERATION,

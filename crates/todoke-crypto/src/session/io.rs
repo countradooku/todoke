@@ -302,6 +302,7 @@ pub struct IncomingSession<IO, T> {
     conn: Conn<IO, T>,
     hello: Hello,
     received_at: Duration,
+    gate: UnauditedSuite0001,
 }
 
 impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
@@ -316,7 +317,6 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
     /// [`SessionError::Timeout`], a malformed or unexpected record, or an
     /// I/O error. Nothing is sent in any case.
     pub async fn accept(io: IO, timer: T, gate: UnauditedSuite0001) -> Result<Self, SessionError> {
-        let _ = gate;
         let mut conn = Conn::new(io, timer);
         let deadline = conn.now().saturating_add(HANDSHAKE_TIMEOUT);
         let record = conn
@@ -328,6 +328,7 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             received_at: conn.now(),
             conn,
             hello,
+            gate,
         })
     }
 
@@ -355,8 +356,10 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> IncomingSession<IO, T> {
             mut conn,
             hello,
             received_at,
+            gate,
         } = self;
         let (driver, server_hello) = HandshakeDriver::responder(
+            gate,
             hello,
             plan,
             local.noise_static(),
@@ -411,9 +414,9 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
         plan: InitiatorPlan,
         authority: &mut A,
     ) -> Result<Self, SessionError> {
-        let _ = gate;
         let mut conn = Conn::new(io, timer);
         let (driver, client_hello) = HandshakeDriver::initiator(
+            gate,
             plan,
             local.noise_static(),
             random_nonce()?,

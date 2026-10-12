@@ -10,6 +10,7 @@ use core::time::Duration;
 use todoke_proto::session::{Hello, SessionMode, prelude_record_len};
 use zeroize::Zeroizing;
 
+use super::UnauditedSuite0001;
 use super::engine::Entropy;
 use super::handshake::{
     CODE_OFFER_LEN, CODE_SHARE_LEN, CodeTranscript, HandshakeDriver, InitiatorPlan, ResponderPlan,
@@ -18,6 +19,8 @@ use super::handshake::{
 use super::keys::{NoiseStaticKey, PairingPsk};
 
 const START: Duration = Duration::from_secs(1);
+/// Fuzz builds enable the `unaudited-suite-0001` feature (`fuzz/Cargo.toml`).
+const GATE: UnauditedSuite0001 = UnauditedSuite0001::acknowledge_not_production_ready();
 const INIT_STATIC: [u8; 32] = [0x11; 32];
 const RESP_STATIC: [u8; 32] = [0x33; 32];
 const PSK: [u8; 32] = [0x55; 32];
@@ -98,8 +101,16 @@ pub fn handshake_records(data: &[u8]) {
             }
         };
         let entropy = Entropy::scripted(vec![vec![0x62; 32], vec![0x64; 32]]);
-        HandshakeDriver::responder(hello, plan, &responder_static, [0xa6; 16], entropy, START)
-            .map(|(driver, _)| driver)
+        HandshakeDriver::responder(
+            GATE,
+            hello,
+            plan,
+            &responder_static,
+            [0xa6; 16],
+            entropy,
+            START,
+        )
+        .map(|(driver, _)| driver)
     } else {
         let plan = match mode {
             SessionMode::Qr => InitiatorPlan::qr([0xa1; 16], *responder_static.public_key(), psk()),
@@ -112,7 +123,7 @@ pub fn handshake_records(data: &[u8]) {
             ),
         };
         let entropy = Entropy::scripted(vec![vec![0x61; 32], vec![0x63; 64]]);
-        HandshakeDriver::initiator(plan, &initiator_static, [0xa5; 16], entropy, START)
+        HandshakeDriver::initiator(GATE, plan, &initiator_static, [0xa5; 16], entropy, START)
             .map(|(driver, _)| driver)
     };
     let Ok(mut driver) = driver else {

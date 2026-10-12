@@ -6,6 +6,7 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 const T: Duration = Duration::from_secs(1000);
+const GATE: UnauditedSuite0001 = UnauditedSuite0001::acknowledge_not_production_ready();
 
 fn static_key(vector: &Vector, pointer: &str) -> AnyResult<NoiseStaticKey> {
     Ok(NoiseStaticKey::from_secret(Zeroizing::new(
@@ -69,6 +70,7 @@ fn fixture_pair(file: &str) -> AnyResult<Pair> {
         SessionMode::Code => return Err("the XX fixture has a synthetic prologue".into()),
     };
     let (initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
         initiator_plan,
         &init_static,
         *client.client_nonce(),
@@ -81,6 +83,7 @@ fn fixture_pair(file: &str) -> AnyResult<Pair> {
     let received = read_client_hello(body(&client_hello)?)?;
     assert_eq!(received, client);
     let (responder, server_hello) = HandshakeDriver::responder(
+        GATE,
         received,
         responder_plan,
         &resp_static,
@@ -177,6 +180,7 @@ fn code_pair(
     let resp_static = NoiseStaticKey::generate()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x44; 32]));
     let (initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
         InitiatorPlan::code([0x21; 16], psk(), transcript()),
         &init_static,
         [0x22; 16],
@@ -185,6 +189,7 @@ fn code_pair(
     )?;
     let hello = read_client_hello(body(&client_hello)?)?;
     let (responder, server_hello) = HandshakeDriver::responder(
+        GATE,
         hello,
         ResponderPlan::code(psk(), responder_transcript),
         &resp_static,
@@ -238,7 +243,7 @@ fn plan_and_hello_must_agree() -> TestResult {
     let contact = Hello::client(SessionMode::Contact, 5, [1; 16], [2; 16])?;
     let code = Hello::client(SessionMode::Code, 0, [1; 16], [2; 16])?;
     let mismatch = |hello: Hello, plan: ResponderPlan| {
-        HandshakeDriver::responder(hello, plan, &key, [3; 16], Entropy::Os, T).map(|_| ())
+        HandshakeDriver::responder(GATE, hello, plan, &key, [3; 16], Entropy::Os, T).map(|_| ())
     };
     assert_eq!(
         mismatch(qr, ResponderPlan::code(psk(), transcript())),
@@ -257,6 +262,7 @@ fn plan_and_hello_must_agree() -> TestResult {
     // A zero locator cannot start a session.
     assert_eq!(
         HandshakeDriver::initiator(
+            GATE,
             InitiatorPlan::qr([0; 16], [9; 32], psk()),
             &key,
             [2; 16],

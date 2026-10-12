@@ -112,7 +112,8 @@ The todoke-specific KDFs (§4.4 ratchet HKDF, confirmation HMAC) use
   also enables it for `todoke-crypto` in builds that compile that example
   (such as `cargo test --workspace`). The feature only adds the
   `dangerously_get_raw_split` method; normal builds of `todoke-crypto` do not
-  have it.
+  have it, and the dependency guard fails CI if any shipped graph enables it
+  (see "Production gate").
 - **Classical Noise.** The only runtime constructor always builds the HFS
   pattern with the ML-KEM name. A classical builder exists under `cfg(test)`
   only, for the published classical vectors.
@@ -160,13 +161,37 @@ module.
 
 ### Production gate
 
-Every session entry point takes an `UnauditedSuite0001` value, built only by
-`UnauditedSuite0001::acknowledge_not_production_ready()`. A cargo feature was
-considered and rejected: `cargo test --workspace` must run every session test
-without extra flags, dev-dependency feature unification would switch such a
-feature on in test builds anyway, and an explicit value makes each enabling
-call site visible in review. No production code in this repository constructs
-it. Enabling suite 0x0001 for real users requires closing O6 and O10 and a
+Every session entry point takes an `UnauditedSuite0001` value and passes it
+to the handshake driver, the only code that builds suite 0x0001 Noise state.
+The only constructor, `UnauditedSuite0001::acknowledge_not_production_ready()`,
+exists only under `#[cfg(any(test, feature = "unaudited-suite-0001"))]`: in
+`todoke-crypto`'s own unit tests and when the non-default
+`unaudited-suite-0001` feature is enabled. The fuzz workspace enables the
+feature explicitly. A compile-fail doctest checks that the constructor is
+absent from a default build.
+
+This revises the original decision (2026-10-11), which rejected a feature
+because `cargo test --workspace` must run every session test without extra
+flags, because dev-dependency feature unification would switch such a feature
+on in test builds anyway, and because an explicit value makes each enabling
+call site visible. The review of `feat/noise-session` found the result too
+weak: a public `const fn` let any downstream crate enable the suite in a
+release build with one call, and nothing in Cargo or CI noticed. The original
+objections are met as follows:
+
+- Unit tests reach the constructor through `cfg(test)`, so `cargo test
+  --workspace` still runs every session test without flags.
+- Dev-dependency unification only affects builds of targets that need the dev
+  dependency (resolver 2/3). `scripts/ci/deny-exceptions-dev-only.sh` checks
+  `cargo tree -e no-dev --format '{p}|{f}'` on every supported target and fails
+  if a shipped graph enables `todoke-crypto/unaudited-suite-0001`. It applies
+  the same check to Snow's `risky-raw-split`, which the fixture generator's
+  development dependency enables (see "Raw split" above). Its test script
+  covers both with mutated copies of the workspace manifests.
+- The value is still required at every entry point, so enabling call sites
+  stay visible in review.
+
+Enabling suite 0x0001 for real users requires closing O6 and O10 and a
 maintainer decision, not a code change alone.
 
 ## O6: secret residues

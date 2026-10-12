@@ -3,8 +3,9 @@
 //! **Not production-enabled.** PROTOCOL §16 keeps suite 0x0001 disabled for
 //! production until the secret-lifecycle (O6) and independent
 //! interoperability (O10) gates close. Every entry point takes an
-//! [`UnauditedSuite0001`] acknowledgement so that enabling it is a visible,
-//! reviewable decision; see `docs/adr/0001-noise-crate.md`.
+//! [`UnauditedSuite0001`] acknowledgement, constructible only in unit tests
+//! and with the non-default `unaudited-suite-0001` feature, so that enabling
+//! it is a visible, reviewable decision; see `docs/adr/0001-noise-crate.md`.
 //!
 //! # Layers
 //!
@@ -92,12 +93,23 @@ pub const HANDSHAKE_TIMEOUT: core::time::Duration = core::time::Duration::from_s
 pub const ESTABLISH_TIMEOUT: core::time::Duration = core::time::Duration::from_secs(10);
 
 /// Acknowledgement that suite 0x0001 is not production-ready (§16: gates O6
-/// and O10 are open). Required by every session entry point.
+/// and O10 are open). Required by every session entry point and passed down
+/// to the handshake driver, the only code that builds Noise state.
 ///
-/// Holding one is a statement by the caller that it is running tests,
-/// fixtures, or an explicitly unaudited experiment, not a release build. No
-/// production code path in this repository constructs it; doing so is the
-/// decision the ADR describes and needs maintainer review.
+/// It can be obtained only through
+/// `UnauditedSuite0001::acknowledge_not_production_ready()`, which exists
+/// only in this crate's unit tests and when the non-default
+/// `unaudited-suite-0001` feature is enabled (tests and fuzzing). CI
+/// (`scripts/ci/deny-exceptions-dev-only.sh`) fails if any shipped graph
+/// enables that feature. Enabling the suite for real users is the decision
+/// the ADR describes and needs maintainer review.
+///
+/// Without the feature, this does not compile:
+///
+#[cfg_attr(not(feature = "unaudited-suite-0001"), doc = "```compile_fail")]
+#[cfg_attr(feature = "unaudited-suite-0001", doc = "```")]
+/// let _gate = todoke_crypto::session::UnauditedSuite0001::acknowledge_not_production_ready();
+/// ```
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnauditedSuite0001(());
 
@@ -105,6 +117,10 @@ impl UnauditedSuite0001 {
     /// Acknowledges that the hybrid suite, its ML-KEM backend, and this
     /// integration are unaudited and that PROTOCOL §16 keeps them disabled
     /// for production.
+    ///
+    /// Exists only with the `unaudited-suite-0001` feature or in this
+    /// crate's unit tests.
+    #[cfg(any(test, feature = "unaudited-suite-0001"))]
     #[must_use]
     pub const fn acknowledge_not_production_ready() -> Self {
         Self(())
