@@ -76,11 +76,11 @@
   "provenance": {
     "audit_scope": "Trail of Bits Snow review, 2024; NOT an audit of ML-KEM adapter or todoke",
     "audit_source_commit": "009411d2035a77ece57b0a6873169de7693a0aa0",
-    "engine": "snow 0.9.6; no default crypto resolver; hfs + risky-raw-split",
-    "engine_release_commit": "a4be73faa042c5967f39662aa66919f774831a9a",
+    "engine": "snow 0.10.0; no default crypto resolver; hfs + risky-raw-split",
+    "engine_release_commit": "4bb43f50370bdb3e8b1b57814ac662864db2704f",
     "internal_kem_enum_alias": "Kyber1024 resolver slot ONLY; actual primitive and transcript protocol name are MLKEM768",
     "primitives": "libcrux-curve25519 0.0.9; libcrux-ml-kem 0.0.11; libcrux-chacha20poly1305 0.0.10; libcrux-sha2 0.0.9",
-    "successful_handshake_equivalence": "HFS transform, token processing and symmetric state preserved from audited source; 0.9.6 adds validation/failure handling"
+    "successful_handshake_equivalence": "HFS transform, token processing and symmetric state preserved from audited source; 0.10.0 adds validation/failure handling and error propagation"
   },
   "session_id_hex": "9e381412ada06a9227b19c42779e0911d6431e01531587c8fe8b79d9678b9973",
   "split": {

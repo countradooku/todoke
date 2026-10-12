@@ -16,7 +16,8 @@ reviewed, report dated 2024-03-29), instantiated with X25519, FIPS 203
 ML-KEM-768, ChaChaPoly, and SHA-256, with the exact token schedules of §4.2.4
 (KK is `e, es, e1, ss`). The committed fixtures
 `spec/test-vectors/handshake-{ikpsk2,kkpsk2,xxpsk3}.json` were produced by
-Snow 0.9.6 through an offline adapter. Any runtime choice must reproduce those
+Snow 0.9.6 through an offline adapter (since regenerated with 0.10.0; see
+"Generator upgrade" below). Any runtime choice must reproduce those
 transcripts exactly. Classical Noise must not be selectable at runtime.
 
 Requirements for the runtime engine:
@@ -103,9 +104,15 @@ The todoke-specific KDFs (§4.4 ratchet HKDF, confirmation HMAC) use
   randomness is never sent.
 - **Encapsulation randomness.** `Kem::encapsulate` takes no RNG; the adapter
   draws the 32-byte `m` from the OS CSPRNG itself.
-- **Raw split.** `risky-raw-split` is not enabled for `todoke-crypto`. The
-  transport keys stay inside Snow's `TransportState` (fixture tests verify
-  them through the published transport KATs instead).
+- **Raw split.** `todoke-crypto` does not enable `risky-raw-split` and never
+  calls the raw split. The transport keys stay inside Snow's `TransportState`
+  (fixture tests verify them through the published transport KATs instead).
+  The fixture generator uses the same Snow release with that feature as a
+  development dependency of `todoke-proto`, so Cargo's feature unification
+  also enables it for `todoke-crypto` in builds that compile that example
+  (such as `cargo test --workspace`). The feature only adds the
+  `dangerously_get_raw_split` method; normal builds of `todoke-crypto` do not
+  have it.
 - **Classical Noise.** The only runtime constructor always builds the HFS
   pattern with the ML-KEM name. A classical builder exists under `cfg(test)`
   only, for the published classical vectors.
@@ -115,8 +122,10 @@ The todoke-specific KDFs (§4.4 ratchet HKDF, confirmation HMAC) use
 1. The runtime engine reproduces all three committed transcripts byte for
    byte: every message, every intermediate and final handshake hash, the
    session ID, and both initial transport KATs (which pin both Split keys).
-   They were generated with a different Snow release (0.9.6) and a separate
-   adapter, so this also checks that 0.10.0 did not change the construction.
+   They were first generated with a different Snow release (0.9.6) and a
+   separate adapter, so this also checks that 0.10.0 did not change the
+   construction. The generator now uses 0.10.0 as well; its regeneration left
+   every protocol byte unchanged.
 2. The handshake driver reproduces the IK and KK fixture prelude records
    (Hellos, prologue construction, framing) byte for byte.
 3. The same resolver passes the Cacophony classical vectors for `IKpsk2`,
@@ -188,18 +197,30 @@ todoke state machine. Either way the result needs review before O6 closes.
   were already in the lock file except `snow` 0.10.0 and `futures-io`.
   `libcrux-secrets` 0.0.7 and `subtle` 2.6.1 were already transitive runtime
   dependencies and are now direct pins. No new license exception.
-- One new dev-only duplicate skip: `snow@0.9.6` (the fixture generator),
-  pending maintainer sign-off. Migrating the generator to 0.10.0 would remove
-  it and the `rand_core 0.6.4`/`getrandom 0.2.17` skips, but would change the
-  fixtures' provenance fields, so it is left as a separate decision.
 - The Kyber-slot workaround must be revisited on every Snow upgrade.
+
+## Generator upgrade (2026-10-12)
+
+The maintainer asked to keep every crate at its latest release. The fixture
+generator in `todoke-proto` moved from Snow 0.9.6 to 0.10.0, the release the
+runtime already used, and `snow` became a workspace dependency. Regeneration
+changed only the fixtures' `provenance` fields (engine name, release commit,
+and the equivalence note); every message, hash, Split key, and transport KAT is
+identical to the 0.9.6 output. The generator's RNG adapter no longer needs
+`rand_core 0.6`: it implements Snow's own `Random` trait and fails any
+randomness request. This removed the `snow@0.9.6`, `rand_core@0.6.4`, and
+`getrandom@0.2.17` dev-only duplicate skips. 0.10.0 is still the latest Snow
+release (checked 2026-10-12) and still has no ML-KEM-768 `KemChoice`
+([PR #210](https://github.com/mcginty/snow/pull/210) remains open), so both
+adapters keep the `Kyber1024`-slot workaround.
 
 ## Open questions
 
-1. Accept the `snow@0.9.6` dev-only skip, or migrate the fixture generator?
-   Recommended: accept now, migrate in a separate change that regenerates the
-   fixture provenance.
+1. ~~Accept the `snow@0.9.6` dev-only skip, or migrate the fixture
+   generator?~~ Resolved 2026-10-12: migrated (see "Generator upgrade").
 2. O6: which route for Snow's residues (upstream, fork, own state machine)?
    Recommended: upstream first.
 3. O10: which independent implementation reproduces the hybrid transcripts?
-   Unchanged by this ADR.
+   Unchanged by this ADR. With the generator on the runtime's Snow release,
+   future regenerations no longer cross-check two Snow releases, which makes
+   an independent implementation more valuable.

@@ -69,9 +69,10 @@ fn fixture_peers(
 }
 
 /// The primary conformance test: the runtime engine (Snow 0.10.0 + libcrux
-/// resolver) reproduces the committed Snow 0.9.6 reference transcripts byte
-/// for byte, including every intermediate hash, the session ID, and the
-/// transport KATs that exercise both Split keys.
+/// resolver) reproduces the committed reference transcripts (first generated
+/// with Snow 0.9.6, regenerated unchanged with 0.10.0 through the generator's
+/// separate adapter) byte for byte, including every intermediate hash, the
+/// session ID, and the transport KATs that exercise both Split keys.
 #[test]
 fn reproduces_committed_handshake_transcripts() -> TestResult {
     for (file, pattern) in PROFILES {

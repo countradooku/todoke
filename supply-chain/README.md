@@ -177,13 +177,11 @@ dependencies and are now direct pins. Pins shared with `todoke-proto`
 `[workspace.dependencies]`. No new license, source, or advisory exception was
 needed.
 
-`todoke-proto`'s offline handshake fixture generator still pins `snow 0.9.6`,
-so the graph holds two Snow versions. `deny.toml` gains one exact-version
-dev-only skip, `snow@0.9.6`, **pending maintainer sign-off**. The guard script
-enforces that it never reaches shipped code. The alternative is to migrate the
-generator to 0.10.0, which would also drop the `rand_core 0.6.4` and
-`getrandom 0.2.17` skips but would change the provenance fields of the
-committed handshake fixtures; that is left as a separate decision.
+At the time, `todoke-proto`'s offline handshake fixture generator still pinned
+`snow 0.9.6`, so `deny.toml` gained a dev-only `snow@0.9.6` skip pending
+maintainer sign-off. On 2026-10-12 the generator moved to 0.10.0 instead (see
+"Latest-version upgrade" below), which removed that skip together with the
+`rand_core 0.6.4` and `getrandom 0.2.17` skips.
 
 Test data added with provenance recorded inside each file:
 `crates/todoke-crypto/testdata/acvp-mlkem768.json` (NIST ACVP-Server ML-KEM
@@ -218,3 +216,9 @@ exceptions for old versions and raising the MSRV where needed.
   `slice::as_chunks`, stable since 1.88, without declaring a `rust-version`, so
   the 1.85 MSRV job already failed; proptest 1.12 now also requires 1.88. The
   CI `msrv` job, `CONTRIBUTING.md`, and `README.md` were updated.
+- `snow` 0.9.6 → 0.10.0 in `todoke-proto`'s handshake fixture generator, the
+  release `todoke-crypto` already used; `snow` is now a workspace dependency.
+  The generator's RNG adapter implements Snow's own `Random` trait, so
+  `rand_core 0.6.4` is no longer a dependency. Regenerated fixtures differ only
+  in their `provenance` fields. Removed skips: `snow@0.9.6`,
+  `rand_core@0.6.4`, and `getrandom@0.2.17`; `wasi 0.11.1` also left the lock.

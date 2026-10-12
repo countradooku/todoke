@@ -17,7 +17,6 @@ use std::{
 
 use libcrux_ml_kem::mlkem768::{self, MlKem768Ciphertext, MlKem768PrivateKey, MlKem768PublicKey};
 use libcrux_sha2::Digest;
-use rand_core::RngCore;
 use serde_json::{Value, json};
 use snow::{
     Builder, HandshakeState,
@@ -32,7 +31,7 @@ type Result<T> = std::result::Result<T, Box<dyn Error>>;
 const NOTICE: &str =
     "PUBLIC TEST FIXTURE: fixed seeds, PSKs and derived keys; never use in production";
 const AUDIT_COMMIT: &str = "009411d2035a77ece57b0a6873169de7693a0aa0";
-const ENGINE_COMMIT: &str = "a4be73faa042c5967f39662aa66919f774831a9a";
+const ENGINE_COMMIT: &str = "4bb43f50370bdb3e8b1b57814ac662864db2704f";
 const PSK: [u8; 32] = [0x55; 32];
 const INIT_STATIC: [u8; 32] = [0x11; 32];
 const RESP_STATIC: [u8; 32] = [0x33; 32];
@@ -79,32 +78,15 @@ const PROFILES: [Profile; 3] = [
 ];
 
 // Snow requires an RNG object even when all fixture randomness is supplied.
-// This delegates to a reference OS RNG and records any accidental use; generation
-// fails if the counter is nonzero, so output never depends on OS randomness.
+// This one records any accidental use and fails it without producing bytes;
+// generation also fails if the counter is nonzero, so output never depends on
+// randomness.
 struct ObservedRandom(Arc<AtomicUsize>);
 
-impl rand_core::CryptoRng for ObservedRandom {}
-impl Random for ObservedRandom {}
-
-impl RngCore for ObservedRandom {
-    fn next_u32(&mut self) -> u32 {
+impl Random for ObservedRandom {
+    fn try_fill_bytes(&mut self, _dest: &mut [u8]) -> std::result::Result<(), snow::Error> {
         self.0.fetch_add(1, Ordering::Relaxed);
-        rand_core::OsRng.next_u32()
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        rand_core::OsRng.next_u64()
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        rand_core::OsRng.fill_bytes(dest);
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), rand_core::Error> {
-        self.0.fetch_add(1, Ordering::Relaxed);
-        rand_core::OsRng.try_fill_bytes(dest)
+        Err(snow::Error::Rng)
     }
 }
 
@@ -138,9 +120,10 @@ impl Dh for FixtureDh {
             libcrux_curve25519::secret_to_public(&mut self.public, &self.private);
         }
     }
-    fn generate(&mut self, rng: &mut dyn Random) {
-        rng.fill_bytes(self.private.as_mut_slice());
+    fn generate(&mut self, rng: &mut dyn Random) -> std::result::Result<(), snow::Error> {
+        rng.try_fill_bytes(self.private.as_mut_slice())?;
         libcrux_curve25519::secret_to_public(&mut self.public, &self.private);
+        Ok(())
     }
     fn pubkey(&self) -> &[u8] {
         &self.public
@@ -206,33 +189,37 @@ impl Kem for FixtureKem {
         public: &[u8],
         shared_out: &mut [u8],
         ciphertext_out: &mut [u8],
-    ) -> std::result::Result<(usize, usize), ()> {
-        let public = MlKem768PublicKey::try_from(public).map_err(|_| ())?;
+    ) -> std::result::Result<(usize, usize), snow::Error> {
+        let public = MlKem768PublicKey::try_from(public).map_err(|_| snow::Error::Kem)?;
         if !mlkem768::validate_public_key(&public) {
-            return Err(());
+            return Err(snow::Error::Kem);
         }
-        // Snow 0.9.6 has no RNG argument for encapsulation. This is an explicit
+        // Snow 0.10.0 has no RNG argument for encapsulation. This is an explicit
         // FIPS 203 public fixture input, never a live encapsulation adapter.
         let seed = Zeroizing::new(KEM_ENCAP_SEED);
         let (ciphertext, shared) = mlkem768::encapsulate(&public, *seed);
         let shared = Zeroizing::new(shared);
         shared_out
             .get_mut(..32)
-            .ok_or(())?
+            .ok_or(snow::Error::Kem)?
             .copy_from_slice(shared.as_slice());
         ciphertext_out
             .get_mut(..1088)
-            .ok_or(())?
+            .ok_or(snow::Error::Kem)?
             .copy_from_slice(ciphertext.as_slice());
         Ok((32, 1088))
     }
-    fn decapsulate(&self, ciphertext: &[u8], out: &mut [u8]) -> std::result::Result<usize, ()> {
-        let ciphertext = MlKem768Ciphertext::try_from(ciphertext).map_err(|_| ())?;
+    fn decapsulate(
+        &self,
+        ciphertext: &[u8],
+        out: &mut [u8],
+    ) -> std::result::Result<usize, snow::Error> {
+        let ciphertext = MlKem768Ciphertext::try_from(ciphertext).map_err(|_| snow::Error::Kem)?;
         let private = MlKem768PrivateKey::from(*self.private);
         let shared = Zeroizing::new(mlkem768::decapsulate(&private, &ciphertext));
         let _private = Zeroizing::new(<[u8; 2400]>::from(private));
         out.get_mut(..32)
-            .ok_or(())?
+            .ok_or(snow::Error::Kem)?
             .copy_from_slice(shared.as_slice());
         Ok(32)
     }
@@ -250,10 +237,8 @@ impl Cipher for FixtureCipher {
     fn name(&self) -> &'static str {
         "ChaChaPoly"
     }
-    fn set(&mut self, key: &[u8]) {
-        if let Ok(key) = <&[u8; 32]>::try_from(key) {
-            self.0.copy_from_slice(key);
-        }
+    fn set(&mut self, key: &[u8; 32]) {
+        self.0.copy_from_slice(key);
     }
     fn encrypt(&self, nonce: u64, aad: &[u8], plaintext: &[u8], out: &mut [u8]) -> usize {
         libcrux_chacha20poly1305::encrypt(&self.0, plaintext, out, aad, &noise_nonce(nonce))
@@ -355,12 +340,12 @@ fn build_peer(
     libcrux_curve25519::secret_to_public(&mut remote_public, &remote_private);
     let mut builder =
         Builder::with_resolver(parameters, Box::new(FixtureResolver(Arc::clone(calls))))
-            .local_private_key(private.as_slice())
+            .local_private_key(private.as_slice())?
             .fixed_ephemeral_key_for_testing_only(ephemeral.as_slice())
-            .psk(profile.psk_position, psk)
-            .prologue(prologue);
+            .psk(profile.psk_position, psk)?
+            .prologue(prologue)?;
     if profile.mode == 3 || (profile.mode == 1 && initiator) {
-        builder = builder.remote_public_key(remote_public_override.unwrap_or(&remote_public));
+        builder = builder.remote_public_key(remote_public_override.unwrap_or(&remote_public))?;
     }
     Ok(if initiator {
         builder.build_initiator()?
@@ -456,7 +441,7 @@ fn exchange(profile: Profile, prologue: &[u8], responder_psk: &[u8; 32]) -> Resu
         }
     }
     if calls.load(Ordering::Relaxed) != 0 {
-        return Err("fixture used OS randomness".into());
+        return Err("fixture requested randomness".into());
     }
     Ok(Exchange {
         initiator,
@@ -538,17 +523,17 @@ fn vector(profile: Profile) -> Result<Value> {
     let mut ciphertext = [0; 1088];
     let mut shared = Zeroizing::new([0; 32]);
     kem.encapsulate(kem.pubkey(), shared.as_mut_slice(), &mut ciphertext)
-        .map_err(|()| "reference KEM encapsulation failed")?;
+        .map_err(|_| "reference KEM encapsulation failed")?;
     Ok(json!({
         "fixture_notice": NOTICE,
         "protocol_name": protocol_name(profile),
         "profile": profile.pattern,
         "provenance": {
-            "engine": "snow 0.9.6; no default crypto resolver; hfs + risky-raw-split",
+            "engine": "snow 0.10.0; no default crypto resolver; hfs + risky-raw-split",
             "engine_release_commit": ENGINE_COMMIT,
             "audit_source_commit": AUDIT_COMMIT,
             "audit_scope": "Trail of Bits Snow review, 2024; NOT an audit of ML-KEM adapter or todoke",
-            "successful_handshake_equivalence": "HFS transform, token processing and symmetric state preserved from audited source; 0.9.6 adds validation/failure handling",
+            "successful_handshake_equivalence": "HFS transform, token processing and symmetric state preserved from audited source; 0.10.0 adds validation/failure handling and error propagation",
             "primitives": "libcrux-curve25519 0.0.9; libcrux-ml-kem 0.0.11; libcrux-chacha20poly1305 0.0.10; libcrux-sha2 0.0.9",
             "internal_kem_enum_alias": "Kyber1024 resolver slot ONLY; actual primitive and transcript protocol name are MLKEM768"
         },
@@ -637,7 +622,10 @@ mod tests {
             hex::decode("893e28b9dc6ca8d611ab664754b8ceb7bac5117349a4439a6b0569da977c464a")?,
             hex::decode("bbdb4cdbd309f1a1f2e1456967fe288cadd6f712d65dc7b7793d5e63da6b375b")?,
         ];
-        let psk = hex::decode("54686973206973206d7920417573747269616e20706572737065637469766521")?;
+        let psk: [u8; 32] =
+            hex::decode("54686973206973206d7920417573747269616e20706572737065637469766521")?
+                .as_slice()
+                .try_into()?;
         let payloads: [&[u8]; 3] = [b"Ludwig von Mises", b"Murray Rothbard", b"F. A. Hayek"];
         let expected_hashes = [
             "8310f86394dc0dabb40beb8210031556db4403ab1202db7034c526232147a700",
@@ -662,12 +650,12 @@ mod tests {
                     name.parse()?,
                     Box::new(FixtureResolver(Arc::clone(&calls))),
                 )
-                .local_private_key(&static_keys[side])
+                .local_private_key(&static_keys[side])?
                 .fixed_ephemeral_key_for_testing_only(&ephemeral_keys[side])
-                .psk(profile.psk_position, &psk)
-                .prologue(b"John Galt");
+                .psk(profile.psk_position, &psk)?
+                .prologue(b"John Galt")?;
                 if profile.mode == 3 || (profile.mode == 1 && side == 0) {
-                    builder = builder.remote_public_key(&remote);
+                    builder = builder.remote_public_key(&remote)?;
                 }
                 peers.push(if side == 0 {
                     builder.build_initiator()?

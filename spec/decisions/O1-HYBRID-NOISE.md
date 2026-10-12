@@ -77,7 +77,8 @@ lifecycle review. Public-fixture tooling is not a waiver for production secrets.
 
 ## Reference vectors and provenance
 
-The companion generator uses pinned Snow 0.9.6 for the state machine and libcrux
+The companion generator uses pinned Snow 0.10.0 (originally 0.9.6; the upgrade
+left every protocol byte unchanged) for the state machine and libcrux
 for X25519 and ML-KEM. Successful-handshake processing is compared with the audited
 revision: the HFS modifier and token operations are unchanged; later bounds/nonce
 fixes are not a new construction. The generator's reference adapter is offline,

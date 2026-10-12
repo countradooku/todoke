@@ -80,10 +80,14 @@ file/error information, never key bytes.
 
 ## Handshake reference engine
 
-The handshake example uses [Snow 0.9.6](https://docs.rs/snow/0.9.6/) with
-`default-features = false`, `hfs`, and `risky-raw-split`, solely as a development
-dependency. The last feature exposes public-fixture Split outputs; production
-code MUST NOT expose traffic keys. All primitives are provided by libcrux through
+The handshake example uses [Snow 0.10.0](https://docs.rs/snow/0.10.0/) with
+`default-features = false`, `hfs`, and `risky-raw-split`. It is the same release
+as the runtime engine in `todoke-crypto`, which enables only `hfs`; the example
+adds `risky-raw-split` as a development dependency. That feature exposes
+public-fixture Split outputs; production code MUST NOT expose traffic keys.
+Cargo unifies features, so a single build that also compiles this example (for
+example `cargo test --workspace`) enables the feature for `todoke-crypto` too;
+runtime code never calls it, and normal builds do not enable it. All primitives are provided by libcrux through
 its public resolver interface, including
 [ChaCha20-Poly1305 0.0.10](https://docs.rs/libcrux-chacha20poly1305/0.0.10/) and
 [SHA-256 0.0.9](https://docs.rs/libcrux-sha2/0.0.9/). The example implements no
@@ -91,12 +95,15 @@ cryptographic primitive or replacement Noise state machine.
 
 The [O1 decision](../decisions/O1-HYBRID-NOISE.md) pins the construction to the
 Trail of Bits–reviewed Snow revision `009411d2035a77ece57b0a6873169de7693a0aa0`.
-The release used by the tool is `a4be73faa042c5967f39662aa66919f774831a9a` (0.9.6).
+The release used by the tool is `4bb43f50370bdb3e8b1b57814ac662864db2704f` (0.10.0).
 Its successful handshake operations, HFS insertion rule, and symmetric state match
-the reviewed source; later changes include validation and failed-decrypt nonce
-handling. That audit did not cover this ML-KEM adapter or todoke integration.
+the reviewed source; later changes include validation, failed-decrypt nonce
+handling, and error propagation. That audit did not cover this ML-KEM adapter or
+todoke integration. The fixtures were first generated with Snow 0.9.6
+(`a4be73faa042c5967f39662aa66919f774831a9a`); regenerating them with 0.10.0
+changed only the `provenance` fields, not one protocol byte.
 
-Snow 0.9.6 predates an MLKEM768 enum variant. The fixture's public `NoiseParams`
+Snow 0.10.0, the latest release, still has no MLKEM768 enum variant. The fixture's public `NoiseParams`
 constructor sets the **actual MLKEM768 protocol name**, which Snow hashes verbatim,
 and uses `KemChoice::Kyber1024` only to route to our libcrux ML-KEM-768 resolver.
 There is no Kyber algorithm call, Kyber protocol-name alias, or runtime negotiation.

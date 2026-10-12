@@ -33,7 +33,7 @@ libcrux-sha2.workspace = true
 # The reviewed HFS+PSK Noise state machine (O1, docs/adr/0001-noise-crate.md).
 # No default resolver or crypto: every primitive comes from libcrux. Never
 # enable `risky-raw-split` here; traffic keys must not leave the state machine.
-snow = { version = "=0.10.0", default-features = false, features = ["hfs"] }
+snow.workspace = true
 subtle = { version = "=2.6.1", default-features = false }
 zeroize.workspace = true
 
