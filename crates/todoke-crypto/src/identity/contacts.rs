@@ -452,6 +452,10 @@ pub enum Unavailable {
     RootDisabled,
     /// A retained revocation covers the pinned binding serial.
     Revoked,
+    /// The pair generation is `u64::MAX` and cannot be ratcheted again;
+    /// re-pair explicitly (§4.4: overflow requires a new pairing). Derived
+    /// from the stored generation, so it persists across restarts.
+    GenerationExhausted,
 }
 
 /// Contact store failure.
@@ -649,6 +653,9 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
             VerificationState::Verified => {}
             VerificationState::KeyChanged => return Err(Unavailable::KeyChanged),
             VerificationState::RatchetUncertain => return Err(Unavailable::RatchetUncertain),
+        }
+        if contact.generation == u64::MAX {
+            return Err(Unavailable::GenerationExhausted);
         }
         let root = &contact.pinned.person_root;
         if self.revocations.is_root_disabled(root) {
@@ -2249,9 +2256,11 @@ mod tests {
             store.journal_ratchet(&key, 0, &[1; 32], &[2; 32]),
             Err(ContactError::RatchetMismatch)
         );
+        // A contact at u64::MAX is blocked until re-paired (§4.4 overflow).
+        assert_eq!(store.contact(&key).map(Contact::generation), Some(u64::MAX));
         assert_eq!(
             store.availability(&key)?.map(Contact::generation),
-            Ok(u64::MAX)
+            Err(Unavailable::GenerationExhausted)
         );
         let unknown = Enrolled::new()?;
         assert_eq!(

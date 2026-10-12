@@ -580,3 +580,53 @@ fn session_lifetime_is_computed_from_the_session_start_time() -> TestResult {
     }
     Ok(())
 }
+
+/// §4.4: generation overflow requires a new pairing. A contact whose
+/// generation reached `u64::MAX` is blocked before any handshake, durably
+/// (the block survives a restart), until it is explicitly re-paired.
+#[test]
+fn exhausted_generation_blocks_the_contact_until_re_pairing() -> TestResult {
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let mut c = Contacts {
+        alice_store: store_pairing(&bob, u64::MAX - 1)?,
+        bob_store: store_pairing(&alice, u64::MAX - 1)?,
+        alice,
+        bob,
+    };
+    // The last possible ratchet commits u64::MAX on both sides.
+    let (alice_open, bob_open) = contact_run(&mut c, false, drain_all)?;
+    assert!(alice_open.is_some() && bob_open.is_some());
+    let (alice_key, bob_key) = (c.alice.key(), c.bob.key());
+    for (store, peer) in [
+        (&mut c.alice_store, &bob_key),
+        (&mut c.bob_store, &alice_key),
+    ] {
+        assert_eq!(store.contact(peer).ok_or("contact")?.generation(), u64::MAX);
+        // No further session can start, as initiator or responder.
+        assert_eq!(
+            store.session_authority(peer).map(|_| ()).err(),
+            Some(SessionError::GenerationExhausted)
+        );
+        assert_eq!(
+            store.availability(peer)?.map(|_| ()).err(),
+            Some(Unavailable::GenerationExhausted)
+        );
+        // Durable: a restart loads the same block.
+        let restarted = reopen(store)?;
+        assert_eq!(
+            restarted.availability(peer)?.map(|_| ()).err(),
+            Some(Unavailable::GenerationExhausted)
+        );
+    }
+    // Explicit re-pairing starts a new generation and unblocks it.
+    c.alice_store.pair(
+        &c.bob.binding,
+        crate::identity::TrustOrigin::QrPairing,
+        crate::identity::contacts::PairPsk::new([0x42; 32]),
+        0,
+        crate::identity::test_support::time(WALL)?,
+    )?;
+    assert_eq!(usable(&c.alice_store, &bob_key)?, Some((0, [0x42; 32])));
+    Ok(())
+}

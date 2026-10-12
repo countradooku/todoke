@@ -176,7 +176,9 @@ pub enum SessionError {
     /// The Hello generation differs from the stored one (divergent
     /// generations, §4.1, §4.4). Reported locally only; nothing is retried.
     GenerationMismatch,
-    /// The pair generation cannot be incremented; a new pairing is required.
+    /// The pair generation cannot be incremented; a new pairing is required
+    /// (§4.4). A contact at `u64::MAX` is refused before any handshake, and
+    /// stays refused across restarts, until it is re-paired.
     GenerationExhausted,
     /// The ratchet failed after journaling. The pairing is blocked until
     /// explicit re-pairing (§4.4).

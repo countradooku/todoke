@@ -16,7 +16,7 @@ use zeroize::Zeroizing;
 
 use super::handshake::{InitiatorPlan, ResponderPlan};
 use super::{Role, SessionError};
-use crate::identity::contacts::ContactHandshake;
+use crate::identity::contacts::{ContactHandshake, Unavailable};
 use crate::identity::{
     BlobStorage, ContactError, ContactStore, Ed25519PublicKey, IdentityError, Sealer,
     VerifiedDeviceBinding,
@@ -171,21 +171,32 @@ pub struct ContactAuthority<'s, S: Sealer, B: BlobStorage> {
     device: Ed25519PublicKey,
 }
 
+/// A blocked contact. Generation exhaustion has its own error: only a new
+/// pairing helps (§4.4).
+fn unavailable(reason: Unavailable) -> SessionError {
+    match reason {
+        Unavailable::GenerationExhausted => SessionError::GenerationExhausted,
+        other => SessionError::Unavailable(other),
+    }
+}
+
 impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// The session authority for `device`, which must be available
     /// ([`Self::availability`]).
     ///
     /// # Errors
     ///
-    /// [`SessionError::Unavailable`] or [`SessionError::Storage`] for an
-    /// unknown contact.
+    /// [`SessionError::GenerationExhausted`] if the pair generation reached
+    /// `u64::MAX` (re-pair; the block is durable because it follows from the
+    /// stored generation), [`SessionError::Unavailable`], or
+    /// [`SessionError::Storage`] for an unknown contact.
     pub fn session_authority(
         &mut self,
         device: &Ed25519PublicKey,
     ) -> Result<ContactAuthority<'_, S, B>, SessionError> {
         self.availability(device)
             .map_err(SessionError::Storage)?
-            .map_err(SessionError::Unavailable)?;
+            .map_err(unavailable)?;
         Ok(ContactAuthority {
             store: self,
             device: *device,
@@ -206,7 +217,8 @@ impl<S: Sealer, B: BlobStorage> ContactAuthority<'_, S, B> {
     ///
     /// # Errors
     ///
-    /// [`SessionError::Unavailable`] or [`SessionError::Storage`].
+    /// [`SessionError::GenerationExhausted`], [`SessionError::Unavailable`],
+    /// or [`SessionError::Storage`].
     pub fn initiator_plan(&self, locator: [u8; 16]) -> Result<InitiatorPlan, SessionError> {
         let inputs = self.inputs()?;
         Ok(InitiatorPlan::contact(
@@ -224,7 +236,8 @@ impl<S: Sealer, B: BlobStorage> ContactAuthority<'_, S, B> {
     ///
     /// [`SessionError::Usage`] for another mode,
     /// [`SessionError::GenerationMismatch`] when the Hello's generation
-    /// differs from the stored one (reported locally only, §4.4), or
+    /// differs from the stored one (reported locally only, §4.4),
+    /// [`SessionError::GenerationExhausted`], or
     /// [`SessionError::Unavailable`].
     pub fn responder_plan(&self, hello: &Hello) -> Result<ResponderPlan, SessionError> {
         if hello.mode() != SessionMode::Contact {
@@ -245,7 +258,7 @@ impl<S: Sealer, B: BlobStorage> ContactAuthority<'_, S, B> {
         self.store
             .availability(&self.device)
             .map_err(SessionError::Storage)?
-            .map_err(SessionError::Unavailable)?;
+            .map_err(unavailable)?;
         self.store
             .handshake_inputs(&self.device)
             .map_err(SessionError::Storage)
