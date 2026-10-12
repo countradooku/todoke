@@ -232,3 +232,27 @@ exceptions for old versions and raising the MSRV where needed.
   (`hax-lib-macros-types`), so no real build compiles it, but Cargo's
   MSRV-aware resolver holds it at 1.26.1 for any lower MSRV. Raising the MSRV
   keeps every crate in the lock at its latest release.
+
+Every other direct dependency was already at its latest release. Several
+releases are less than 14 days old (no cooling-off period was applied):
+`proptest 1.12.0` (2026-10-10), `serde_json 1.0.154` (2026-10-11), `uuid
+1.28.0` (2026-10-10), `cc 1.8.0` (2026-10-11), `ctutils 0.4.3` (2026-10-05),
+`syn 3.0.9` and `unicode-ident 1.0.27` (2026-10-12), and the already-pinned
+`libcrux-*` releases (2026-10-07) and `zeroize 1.9.1` (2026-10-06).
+`ctutils 0.4.3` is a constant-time helper under the runtime `digest` crate; its
+diff from 0.4.2 only replaces casts with `cast_signed`/`cast_unsigned`, makes
+`to_bool`/`to_u8` `const`, and routes the deprecated `*_vartime` helpers
+through the `black_box` versions.
+
+No new advisory ignore, duplicate skip, or license exception was added. The
+remaining skips are the never-compiled `cfg(hax)` / `cfg(valgrind_ct_test)`
+duplicates and the build-time `syn 2.0.119`. Both pre-existing CI failures
+noted above are resolved: the MSRV job now passes on 1.89.0, and
+`cargo check --workspace --all-targets --locked --target wasm32-unknown-unknown`
+passes on 1.99.0, because the development-only `getrandom 0.2`/`0.3` copies are
+gone. The fuzz lock was re-seeded from the root lock and still adds only
+`libfuzzer-sys`, `arbitrary`, and `jobserver`. On 2026-10-12, `cargo deny
+--locked check -D unmatched-skip`, the guard script and its tests, the
+fuzz-workspace deny check, both vector generators' `--check`, and a 30-second
+run of every fuzz target passed. `cargo vet --locked` reports 117 unvetted
+packages at the root and 110 in `fuzz/`; no audits or exemptions were recorded.

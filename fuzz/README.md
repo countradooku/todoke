@@ -29,9 +29,10 @@ directories, with the generated corpus first, so libFuzzer writes new inputs
 there and only reads the seeds.
 
 The harness graph uses the root `deny.toml`. It contains todoke-crypto's
-runtime libcrux dependencies, so the root advisory ignore still matches. The
-dev-only duplicate skips are reported as unmatched warnings, which that CI step
-does not deny. `libfuzzer-sys` has an NCSA license exception because it bundles
+runtime libcrux dependencies, so the root advisory ignore still matches. Since
+2026-10-12 every duplicate skip also matches the harness graph; a future skip
+that only the root graph needs would be reported as an unmatched warning, which
+that CI step does not deny. `libfuzzer-sys` has an NCSA license exception because it bundles
 LLVM libFuzzer, and it is never shipped. `fuzz/supply-chain` was initialized with
 `cargo vet init`, and every generated exemption was removed, matching the root
 store: `cargo vet` fails until real audits exist.
