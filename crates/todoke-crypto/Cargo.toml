@@ -51,6 +51,8 @@ zeroize.workspace = true
 getrandom = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
+# Independent RFC 9285 implementation for the QR Base45 cross-check.
+base45.workspace = true
 hex.workspace = true
 # Independent HMAC-SHA-256 (RustCrypto) for the §4.3/§4.4 byte-layout tests,
 # so they do not recompute with the libcrux code under test.

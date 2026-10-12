@@ -14,6 +14,8 @@ publish = false
 # Pins shared by more than one workspace crate (cargo-deny workspace-duplicate).
 # Fixture use is not production approval: zeroization and audit evidence are open (O6).
 [workspace.dependencies]
+# RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
+base45 = "=3.2.0"
 blake3 = { version = "=1.8.7", features = ["zeroize"] }
 ed25519-dalek = "=3.0.0"
 getrandom = "=0.4.3"

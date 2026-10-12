@@ -108,3 +108,10 @@ path = "fuzz_targets/proto_code_pairing.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_qr_payload"
+path = "fuzz_targets/crypto_qr_payload.rs"
+test = false
+doc = false
+bench = false

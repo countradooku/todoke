@@ -12,6 +12,7 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_keystore_plaintext` | Software key store blob plaintext (local format) |
 | `crypto_contact_store_plaintext` | Contact store blob plaintext, including retained revocations (local format) |
 | `crypto_sealed_envelope` | Local storage envelope header and authenticated opening; asserts unauthenticated input never opens |
+| `crypto_qr_payload` | `QrPayload::from_bytes` and `QrPayload::from_text`: exact lengths, `TODOKE:` prefix, canonical RFC 9285 Base45, magic, version, suite, pairing ID, Ed25519/X25519/ML-KEM key validation, and expiry, checked at the expiry the input claims so that expiry never masks the other checks (PROTOCOL §3.1) |
 | `proto_session_prelude` | Prelude length prefix and record split, `ClientHello`/`ServerHello` (echo check on a split input), and `NoiseHandshake` records for every mode (PROTOCOL §4.1, §4.2.5) |
 | `crypto_session_handshake` | Session handshake driver (responder and initiator, all three modes) fed fuzzer-supplied prelude records, set up deterministically from the public §4.2 fixture inputs so mutated fixture records reach the Noise layer (PROTOCOL §4.1, §4.2) |
 | `crypto_session_establishment` | `Establishment::receive`: identity confirmation and the PSK ratchet transaction against an honest peer, with fuzzer-chosen wire operations (deliver, corrupt, replay, drop, swap, raw bytes, clock jumps, deadline checks) after a deterministic contact handshake between fixed public test identities (PROTOCOL §4.3, §4.4, §13) |
@@ -20,8 +21,8 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `proto_session_frames` | Transport length prefix, decrypted frame header, and `Identity`, ratchet, `Error`, `KeyUpdate`, and `Ping` bodies (PROTOCOL §4.3, §4.4, §5, §12, §13) |
 | `proto_code_pairing` | `todoke_proto::pairing` bodies: `CodeOfferRequest`, `CodeOffer` (alone and as the echoing reply to a request), and `CodeShareA`/`CodeShareB` (PROTOCOL §3.2, §4.1) |
 
-The `crypto_*` targets call `todoke_crypto::identity::fuzzing` or
-`todoke_crypto::session::fuzzing`, which exist only under `--cfg fuzzing` (set
+The `crypto_*` targets call `todoke_crypto::identity::fuzzing`,
+`todoke_crypto::pairing::fuzzing`, or `todoke_crypto::session::fuzzing`, which exist only under `--cfg fuzzing` (set
 by cargo-fuzz). Each of their functions wraps the same decoder or state machine
 that production code uses. Under `--cfg fuzzing` the session engine may use
 scripted (fixture) randomness, as in unit tests; release builds cannot. The

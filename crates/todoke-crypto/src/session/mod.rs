@@ -68,7 +68,7 @@ mod establish;
 pub mod fuzzing;
 mod handshake;
 mod io;
-mod kdf;
+pub(crate) mod kdf;
 mod keys;
 mod transport;
 
@@ -390,6 +390,6 @@ impl<K: KeyStore> fmt::Debug for LocalIdentity<'_, K> {
 }
 
 #[cfg(test)]
-mod test_vectors;
+pub(crate) mod test_vectors;
 #[cfg(test)]
 mod tests;

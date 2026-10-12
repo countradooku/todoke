@@ -999,6 +999,7 @@ version = "0.1.0"
 name = "todoke-crypto"
 version = "0.1.0"
 dependencies = [
+ "base45",
  "blake3",
  "curve25519-dalek",
  "ed25519-dalek",
