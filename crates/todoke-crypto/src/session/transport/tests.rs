@@ -743,3 +743,26 @@ fn pong_timeout_before_binding_expiry_reports_timeout() -> TestResult {
     assert_eq!(queued_error(&mut a, &mut b)?.code(), ErrorCode::TIMEOUT);
     Ok(())
 }
+
+/// A body over the §5 maximum is the caller's error: refused with Usage
+/// before encryption, and the session stays open and usable.
+#[test]
+fn oversized_bodies_are_refused_without_closing() -> TestResult {
+    let (mut a, mut b) = cores(MAX_SESSION_DURATION)?;
+    let largest = vec![1; todoke_proto::session::MAX_BODY_LEN];
+    assert_eq!(
+        a.send(
+            FrameType::CAPABILITIES,
+            &[largest.as_slice(), &[1]].concat(),
+            T0
+        ),
+        Err(SessionError::Usage)
+    );
+    assert!(!a.is_closed());
+    assert_eq!(drain(&mut a), Vec::<Vec<u8>>::new());
+    a.send(FrameType::CAPABILITIES, &largest, T0)?;
+    let frames = relay(&mut a, &mut b, T0)?;
+    assert_eq!(frames.len(), 1);
+    assert_eq!(frames[0].body(), largest.as_slice());
+    Ok(())
+}

@@ -723,6 +723,129 @@ fn debug_output_names_no_secret() -> TestResult {
     Ok(())
 }
 
+/// An ML-KEM adapter that sends an encapsulation key failing the FIPS 203
+/// modulus check (every 12-bit coefficient 4095 >= q).
+struct InvalidE1(MlKem768, Box<[u8; KEM_PUBLIC_LEN]>);
+
+impl Kem for InvalidE1 {
+    fn name(&self) -> &'static str {
+        self.0.name()
+    }
+
+    fn pub_len(&self) -> usize {
+        self.0.pub_len()
+    }
+
+    fn ciphertext_len(&self) -> usize {
+        self.0.ciphertext_len()
+    }
+
+    fn shared_secret_len(&self) -> usize {
+        self.0.shared_secret_len()
+    }
+
+    fn generate(&mut self, rng: &mut dyn Random) {
+        self.0.generate(rng);
+    }
+
+    fn pubkey(&self) -> &[u8] {
+        self.1.as_slice()
+    }
+
+    fn encapsulate(
+        &self,
+        public: &[u8],
+        shared_out: &mut [u8],
+        ciphertext_out: &mut [u8],
+    ) -> Result<(usize, usize), snow::Error> {
+        self.0.encapsulate(public, shared_out, ciphertext_out)
+    }
+
+    fn decapsulate(&self, ciphertext: &[u8], shared_out: &mut [u8]) -> Result<usize, snow::Error> {
+        self.0.decapsulate(ciphertext, shared_out)
+    }
+}
+
+struct InvalidE1Resolver(Resolver);
+
+impl CryptoResolver for InvalidE1Resolver {
+    fn resolve_rng(&self) -> Option<Box<dyn Random>> {
+        self.0.resolve_rng()
+    }
+
+    fn resolve_dh(&self, choice: &DHChoice) -> Option<Box<dyn Dh>> {
+        self.0.resolve_dh(choice)
+    }
+
+    fn resolve_hash(&self, choice: &HashChoice) -> Option<Box<dyn Hash>> {
+        self.0.resolve_hash(choice)
+    }
+
+    fn resolve_cipher(&self, choice: &CipherChoice) -> Option<Box<dyn Cipher>> {
+        self.0.resolve_cipher(choice)
+    }
+
+    fn resolve_kem(&self, _choice: &KemChoice) -> Option<Box<dyn Kem>> {
+        Some(Box::new(InvalidE1(
+            MlKem768 {
+                entropy: Entropy::Os,
+                failed: Arc::new(AtomicBool::new(false)),
+                private: Zeroizing::new([0; KEM_PRIVATE_LEN]),
+                public: Box::new([0; KEM_PUBLIC_LEN]),
+            },
+            Box::new([0xff; KEM_PUBLIC_LEN]),
+        )))
+    }
+}
+
+/// §4.2.6: a malformed ML-KEM encapsulation key closes the attempt. In XX
+/// message 1 the `e1` tag uses a key derived only from public inputs, so
+/// anyone can deliver a well-formed message carrying an invalid key; the
+/// responder accepts the message, then refuses to encapsulate to that key
+/// when writing message 2, reports the generic failure, and is poisoned.
+#[test]
+fn invalid_encapsulation_key_closes_the_attempt() -> TestResult {
+    let prologue = b"invalid e1";
+    let psk = [0x66; 32];
+    let params = NoiseParams::new(
+        Pattern::XxPsk3.protocol_name().to_owned(),
+        BaseChoice::Noise,
+        "XXpsk3+hfs".parse()?,
+        DHChoice::Curve25519,
+        Some(KemChoice::Kyber1024),
+        CipherChoice::ChaChaPoly,
+        HashChoice::SHA256,
+    );
+    let resolver = InvalidE1Resolver(Resolver {
+        entropy: Entropy::Os,
+        kem_failed: Arc::new(AtomicBool::new(false)),
+    });
+    let mut attacker = snow::Builder::with_resolver(params, Box::new(resolver))
+        .local_private_key(&[0x11; 32])?
+        .psk(3, &psk)?
+        .prologue(prologue)?
+        .build_initiator()?;
+    let mut first = vec![0; 1248];
+    assert_eq!(attacker.write_message(&[], &mut first)?, 1248);
+    let mut responder = NoiseHandshake::new(&HandshakeInputs {
+        pattern: Pattern::XxPsk3,
+        initiator: false,
+        prologue,
+        psk: &psk,
+        local_static: &[0x33; 32],
+        remote_static: None,
+        entropy: Entropy::Os,
+    })?;
+    responder.read_message(&first)?;
+    assert_eq!(responder.write_message(), Err(NoiseError::Authentication));
+    assert_eq!(responder.write_message(), Err(NoiseError::State));
+    assert_eq!(
+        responder.into_transport().map(|_| ()),
+        Err(NoiseError::State)
+    );
+    Ok(())
+}
+
 /// §4.2.2: every attempt draws fresh X25519 ephemerals, a fresh ML-KEM key
 /// pair, and fresh encapsulation randomness from the OS CSPRNG. Two attempts
 /// with identical static inputs send different `e_i` and `e_r`, and the

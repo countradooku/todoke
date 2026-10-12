@@ -1159,3 +1159,77 @@ fn incoming_session_debug_redacts_the_locator() -> TestResult {
     assert!(debug.contains("IncomingSession") && debug.contains("[16 bytes]"));
     Ok(())
 }
+
+/// Local refusals before anything is sent: an initiator plan with a zero
+/// locator and a responder plan for another mode are usage errors, and the
+/// peer only sees the stream end. A session whose peer went away stays
+/// closed for every later call.
+#[test]
+fn refused_plans_send_nothing_and_a_dead_pipe_stays_closed() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+    let alice_local = alice.local()?;
+    let bob_local = bob.local()?;
+    let psk = || PairingPsk::from_bytes(Zeroizing::new([0x9a; 32]));
+    let (alice_end, bob_end) = duplex(4096);
+    let mut authority = PairingAuthority::new(None);
+    let result = block_on(Session::initiate(
+        alice_end,
+        ManualTimer::at(START),
+        GATE,
+        &alice_local,
+        wall,
+        InitiatorPlan::qr([0; 16], *bob.noise.public_key(), psk()),
+        &mut authority,
+    ))?;
+    assert_eq!(result.map(|_| ()), Err(SessionError::Usage));
+    let listener = block_on(IncomingSession::accept(
+        bob_end,
+        ManualTimer::at(START),
+        GATE,
+    ))?;
+    assert_eq!(listener.map(|_| ()), Err(SessionError::Closed));
+    // A contact Hello answered with a QR plan.
+    let timer = ManualTimer::at(START);
+    let (alice_end, bob_end) = duplex(4096);
+    let bob_key = bob.key();
+    let mut alice_authority = alice_store.session_authority(&bob_key)?;
+    let plan = alice_authority.initiator_plan(LOCATOR)?;
+    let initiator = Session::initiate(
+        alice_end,
+        timer.clone(),
+        GATE,
+        &alice_local,
+        wall,
+        plan,
+        &mut alice_authority,
+    );
+    let responder = async {
+        let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
+        let mut authority = PairingAuthority::new(None);
+        incoming
+            .respond(&bob_local, wall, ResponderPlan::qr(psk()), &mut authority)
+            .await
+            .map(|_| ())
+    };
+    let (initiator, responder) = join(initiator, responder)?;
+    assert_eq!(responder, Err(SessionError::Usage));
+    assert_eq!(initiator.map(|_| ()), Err(SessionError::Closed));
+    assert_eq!(usable(&alice_store, &bob_key)?, Some((GENERATION, OLD_PSK)));
+    // An established session whose peer went away.
+    let (mut a, b) = contact_sessions(
+        &alice,
+        &bob,
+        &mut alice_store,
+        &mut bob_store,
+        &ManualTimer::at(START),
+    )?;
+    drop(b);
+    assert_eq!(block_on(a.recv())?.map(|_| ()), Err(SessionError::Closed));
+    assert!(a.is_closed());
+    assert_eq!(
+        block_on(a.send(FrameType::CAPABILITIES, b"late"))?,
+        Err(SessionError::Closed)
+    );
+    Ok(())
+}
