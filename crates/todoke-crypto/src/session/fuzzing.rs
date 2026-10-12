@@ -14,6 +14,9 @@
 //!
 //! The record-stream harness runs the async adapter's incremental record
 //! reader over arbitrary bytes delivered in short reads.
+//!
+//! The code-pairing harness drives the `CPace` share exchange and the
+//! `XXpsk3` handshake with fixed public inputs and scripted randomness.
 
 use core::num::NonZeroU64;
 use core::pin::Pin;
@@ -166,6 +169,89 @@ pub fn handshake_records(data: &[u8]) {
             return;
         }
     }
+}
+
+/// Human-code pairing handshakes (`CPace`, then `XXpsk3`) with fixed public
+/// inputs: the code `0123456789` (or, when the selector's bit 1 is set,
+/// `0123456780`), fixed offer records, and scripted randomness. The first
+/// byte also selects the role (bit 0 clear: responder); the rest is a
+/// stream of prelude records fed to the driver: the responder receives
+/// `CodeShareA` and the Noise messages, the initiator `ServerHello`,
+/// `CodeShareB`, and the Noise messages.
+///
+/// Needs the `unaudited-code-pairing` feature, which `fuzz/Cargo.toml`
+/// enables.
+#[cfg(feature = "unaudited-code-pairing")]
+pub fn code_pairing_records(data: &[u8]) {
+    use crate::pairing::{HumanCode, UnauditedCodePairing};
+    const CODE_GATE: UnauditedCodePairing =
+        UnauditedCodePairing::acknowledge_not_production_ready();
+
+    let Some((&selector, stream)) = data.split_first() else {
+        return;
+    };
+    let code = if selector & 2 == 0 {
+        "0123456789"
+    } else {
+        "0123456780"
+    };
+    let (Ok(code), Some(initiator_static), Some(responder_static), Some(hello)) = (
+        HumanCode::parse(code),
+        key(INIT_STATIC),
+        key(RESP_STATIC),
+        client_hello(SessionMode::Code),
+    ) else {
+        return;
+    };
+    let offer = code_offer();
+    let driver = if selector & 1 == 0 {
+        let mut plan = ResponderPlan::code_pairing(CODE_GATE, code);
+        if plan.bind_code_offer(offer).is_err() {
+            return;
+        }
+        let entropy = Entropy::scripted(vec![vec![0x67; 64], vec![0x62; 32], vec![0x64; 32]]);
+        HandshakeDriver::responder(
+            GATE,
+            hello,
+            plan,
+            &responder_static,
+            [0xa6; 16],
+            entropy,
+            START,
+        )
+        .map(|(driver, _)| driver)
+    } else {
+        let plan = InitiatorPlan::code_pairing(CODE_GATE, [0xa1; 16], code, offer);
+        let entropy = Entropy::scripted(vec![vec![0x65; 64], vec![0x61; 32], vec![0x63; 64]]);
+        HandshakeDriver::initiator(GATE, plan, &initiator_static, [0xa5; 16], entropy, START)
+            .map(|(driver, _)| driver)
+    };
+    let Ok(mut driver) = driver else {
+        return;
+    };
+    for record in records(stream) {
+        if driver.receive(record, START).is_err() {
+            return;
+        }
+        if driver.is_done() {
+            let _ = driver.finish();
+            return;
+        }
+    }
+}
+
+/// Fixed public `CodeOfferRequest || CodeOffer` bodies for pairing ID
+/// `[0xa1; 16]`.
+#[cfg(feature = "unaudited-code-pairing")]
+fn code_offer() -> [u8; CODE_OFFER_LEN] {
+    let mut offer = [0; CODE_OFFER_LEN];
+    offer[..2].copy_from_slice(&[0, 1]);
+    offer[2..10].copy_from_slice(&[0x5e; 8]);
+    offer[10..12].copy_from_slice(&[0, 1]);
+    offer[12..20].copy_from_slice(&[0x5e; 8]);
+    offer[20..36].copy_from_slice(&[0xa1; 16]);
+    offer[36..].copy_from_slice(&1_760_000_300_u64.to_be_bytes());
+    offer
 }
 
 // ---------------------------------------------------------------------------

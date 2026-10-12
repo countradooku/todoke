@@ -30,6 +30,32 @@
 //! pairing and burn the offer in one write; the commit creates the contact
 //! through the same path as [`ContactStore::pair`](crate::identity::ContactStore::pair).
 //!
+//! # Human-code pairing (`CPace`, then `XXpsk3`)
+//!
+//! Disabled for production (O2): every entry point needs an
+//! [`UnauditedCodePairing`] acknowledgement, and the `CPace` backend
+//! (`pakery`, `docs/adr/0002-cpace.md`) exists only with the non-default
+//! `unaudited-code-pairing` feature.
+//!
+//! ```text
+//! displayer                                   entrant
+//! offers.create_code(now, mono) -> HumanCode == shown ==> HumanCode::parse(typed)
+//! IncomingSession::accept_any(..)  <-- CodeOfferRequest --  Session::initiate_code_pairing(
+//!   -> request.answer(gate, &offers, token, now)              .., token, &code, &mut store)
+//!                                  --- CodeOffer --->
+//!                                  <-- ClientHello ---
+//! offers.reserve(hello, now, mono)
+//!   -> reservation.into_code_responder(gate, &mut store)
+//! incoming.respond(.., plan, &mut authority)
+//!            ServerHello, CodeShareA/B (CPace), XX messages, Identity, ratchet
+//! ```
+//!
+//! The PSK is `HKDF(B3(pre_noise), ISK, "todoke/v1/cpace-psk\0", 32)` over
+//! the exact §3.2 transcript, which also forms the Noise prologue. A wrong
+//! code fails the Noise authentication at the displayer, which closes
+//! silently; each attempt that does not reach the journal costs the offer
+//! one of its five failures.
+//!
 //! # Offers and budgets
 //!
 //! [`PairingOffers`] holds the displayer's offers in memory and enforces
@@ -50,19 +76,11 @@
 mod authority;
 mod base45;
 mod code;
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "wired into the code-pairing handshake next")
-)]
 pub(crate) mod cpace;
 #[cfg(fuzzing)]
 pub mod fuzzing;
 mod offers;
 mod qr;
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "wired into the code-pairing handshake next")
-)]
 pub(crate) mod transcript;
 
 use core::fmt;
@@ -112,6 +130,9 @@ pub enum PairingError {
     Random,
     /// The offer table is unusable after a panic elsewhere (fail closed).
     Unavailable,
+    /// This build has no `CPace` backend: human-code pairing is disabled
+    /// (PROTOCOL §16, O2).
+    CodePairingUnavailable,
 }
 
 impl fmt::Display for PairingError {
@@ -130,6 +151,9 @@ impl fmt::Display for PairingError {
             Self::LocalIdentity => f.write_str("local identity is not valid now"),
             Self::Random => f.write_str("randomness unavailable"),
             Self::Unavailable => f.write_str("pairing offers unavailable"),
+            Self::CodePairingUnavailable => {
+                f.write_str("code pairing is not available in this build")
+            }
         }
     }
 }
@@ -176,5 +200,7 @@ impl From<QrError> for PairingError {
     }
 }
 
+#[cfg(test)]
+mod code_tests;
 #[cfg(test)]
 mod tests;

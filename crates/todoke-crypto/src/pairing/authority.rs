@@ -8,9 +8,12 @@ use todoke_proto::session::SessionMode;
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
-use super::PairingError;
+use todoke_proto::pairing::{CODE_OFFER_TRANSCRIPT_LEN, CodeOffer, CodeOfferRequest};
+
+use super::code::HumanCode;
 use super::offers::{OfferReservation, OfferSecret};
-use super::qr::{QrPayload, check_offer_expiry};
+use super::qr::{ExpiryError, QrPayload, check_offer_expiry};
+use super::{PairingError, UnauditedCodePairing};
 use crate::identity::contacts::{PairOutcome, PairingJournal};
 use crate::identity::{
     BlobStorage, ContactError, ContactStore, Ed25519PublicKey, IdentityError, PersonIdentity,
@@ -105,6 +108,38 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
         Ok((plan, authority))
     }
 
+    /// Starts code pairing as the entrant (§3.2) once the stream's
+    /// `CodeOfferRequest`/`CodeOffer` exchange is done: the plan that runs
+    /// `CPace` with `code` and the authority that creates the contact.
+    pub(crate) fn begin_code_pairing(
+        &mut self,
+        gate: UnauditedCodePairing,
+        request: CodeOfferRequest,
+        offer: &CodeOffer,
+        code: &HumanCode,
+        now: UnixTime,
+    ) -> Result<(InitiatorPlan, PairingAuthority<'_, S, B>), PairingError> {
+        check_offer_expiry(offer.expires_at(), now).map_err(|error| match error {
+            ExpiryError::Expired | ExpiryError::TooFar => PairingError::Expired,
+        })?;
+        self.check_can_pair(offer.pairing_id())?;
+        let mut code_offer = [0; CODE_OFFER_TRANSCRIPT_LEN];
+        code_offer[..10].copy_from_slice(&request.encode());
+        code_offer[10..].copy_from_slice(&offer.encode());
+        let plan = InitiatorPlan::code_pairing(gate, *offer.pairing_id(), code.clone(), code_offer);
+        let authority = PairingAuthority {
+            store: self,
+            mode: SessionMode::Code,
+            origin: TrustOrigin::CodePairing,
+            pairing_id: *offer.pairing_id(),
+            expires_at: offer.expires_at(),
+            side: Side::Initiator { pins: None },
+            confirmed_at: None,
+            outcome: None,
+        };
+        Ok((plan, authority))
+    }
+
     fn check_can_pair(&self, pairing_id: &[u8; 16]) -> Result<(), PairingError> {
         if self.pairing_burned(pairing_id) {
             return Err(PairingError::Burned);
@@ -140,6 +175,44 @@ impl OfferReservation {
             store,
             mode: SessionMode::Qr,
             origin: TrustOrigin::QrPairing,
+            pairing_id: *self.pairing_id(),
+            expires_at: self.expires_at(),
+            side: Side::Responder { reservation: self },
+            confirmed_at: None,
+            outcome: None,
+        };
+        Ok((plan, authority))
+    }
+}
+
+impl OfferReservation {
+    /// The responder side of a reserved code offer (§3.2): the plan that
+    /// runs `CPace` with the offer's code, and the authority that burns the
+    /// offer and creates the contact. The offer records exchanged on the
+    /// stream are bound in when the plan is used with the
+    /// [`IncomingSession`](crate::session::IncomingSession) that answered
+    /// the request.
+    ///
+    /// Dropping either before the journal records a failed attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::Mode`] for a QR offer, [`PairingError::Burned`], or
+    /// [`PairingError::PairingInProgress`].
+    pub fn into_code_responder<S: Sealer, B: BlobStorage>(
+        self,
+        gate: UnauditedCodePairing,
+        store: &mut ContactStore<S, B>,
+    ) -> Result<(ResponderPlan, PairingAuthority<'_, S, B>), PairingError> {
+        let OfferSecret::Code(code) = self.secret() else {
+            return Err(PairingError::Mode);
+        };
+        store.check_can_pair(self.pairing_id())?;
+        let plan = ResponderPlan::code_pairing(gate, code.clone());
+        let authority = PairingAuthority {
+            store,
+            mode: SessionMode::Code,
+            origin: TrustOrigin::CodePairing,
             pairing_id: *self.pairing_id(),
             expires_at: self.expires_at(),
             side: Side::Responder { reservation: self },

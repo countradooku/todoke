@@ -31,11 +31,11 @@
 //!
 //! - Plans come only from authorities: [`ContactAuthority`] for existing
 //!   contacts (`KKpsk2`) and [`PairingAuthority`](crate::pairing::PairingAuthority)
-//!   for QR pairing (`IKpsk2`, see [`crate::pairing`]), which burns the
-//!   offer and creates the contact when the ratchet commits.
-//! - Human-code pairing (`CPace`, then `XXpsk3`) is not wired into the
-//!   handshake yet; code mode exists only with a synthetic transcript in
-//!   tests and fuzzing.
+//!   for QR (`IKpsk2`) and human-code (`CPace`, then `XXpsk3`) pairing,
+//!   which burns the offer and creates the contact when the ratchet
+//!   commits (see [`crate::pairing`]). Code pairing also needs the
+//!   [`UnauditedCodePairing`](crate::pairing::UnauditedCodePairing) gate
+//!   (O2).
 //! - A [`ContactAuthority`] borrows its [`ContactStore`](crate::identity::ContactStore)
 //!   mutably for the whole establishment, so one store serves one contact
 //!   session establishment at a time. That borrow is the only exclusion:
@@ -67,7 +67,7 @@ pub(crate) mod engine;
 pub(crate) mod establish;
 #[cfg(fuzzing)]
 pub mod fuzzing;
-mod handshake;
+pub(crate) mod handshake;
 mod io;
 pub(crate) mod kdf;
 mod keys;
@@ -87,7 +87,9 @@ pub use authority::{ContactAuthority, PeerAuthority, PeerPresentation, PendingRa
 #[cfg(test)]
 pub(crate) use handshake::CodeTranscript;
 pub use handshake::{InitiatorPlan, ResponderPlan};
-pub use io::{IncomingSession, Session, Timer};
+pub use io::{
+    Accepted, CODE_OFFER_EXCHANGE_TIMEOUT, IncomingCodeRequest, IncomingSession, Session, Timer,
+};
 pub(crate) use keys::PairingPsk;
 pub use keys::{InvalidNoiseKey, NoiseStaticKey};
 pub use todoke_proto::session::{

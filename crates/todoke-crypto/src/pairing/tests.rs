@@ -1,6 +1,7 @@
 //! End-to-end QR pairing over the sans-IO session harness: contact
 //! creation, replay, expiry, active attackers on the wire, and crashes at
-//! every point of the transaction.
+//! every point of the transaction. Code pairing reuses these helpers in
+//! `code_tests`.
 
 use core::time::Duration;
 
@@ -21,15 +22,15 @@ use crate::session::tests::support::{
 use crate::session::{LocalIdentity, PairingPsk, ResponderPlan, Role, SessionError, WallClock};
 
 /// Monotonic time at which offers are created.
-const MONO: Duration = Duration::from_secs(5_000);
+pub(super) const MONO: Duration = Duration::from_secs(5_000);
 /// The client nonce the harness's initiator uses.
-const CLIENT_NONCE: [u8; 16] = [0xc1; 16];
+pub(super) const CLIENT_NONCE: [u8; 16] = [0xc1; 16];
 
-fn wall() -> AnyResult<UnixTime> {
+pub(super) fn wall() -> AnyResult<UnixTime> {
     Ok(UnixTime::new(WALL).ok_or("time")?)
 }
 
-fn empty_store() -> AnyResult<Store> {
+pub(super) fn empty_store() -> AnyResult<Store> {
     Ok(crate::identity::ContactStore::open(
         crate::identity::test_support::sealer(9),
         crate::identity::MemoryStorage::new(),
@@ -75,17 +76,17 @@ impl Pairing {
     }
 }
 
-type Auth<'a> =
+pub(super) type Auth<'a> =
     PairingAuthority<'a, crate::identity::SoftwareSealer, crate::identity::MemoryStorage>;
 
 /// The handshake hash each side opened with, and each authority's outcome.
 #[derive(Debug, Default)]
-struct RunResult {
-    scanner_open: Option<[u8; 32]>,
-    displayer_open: Option<[u8; 32]>,
-    displayer_error: Option<SessionError>,
-    scanner_outcome: Option<PairOutcome>,
-    displayer_outcome: Option<PairOutcome>,
+pub(super) struct RunResult {
+    pub(super) scanner_open: Option<[u8; 32]>,
+    pub(super) displayer_open: Option<[u8; 32]>,
+    pub(super) displayer_error: Option<SessionError>,
+    pub(super) scanner_outcome: Option<PairOutcome>,
+    pub(super) displayer_outcome: Option<PairOutcome>,
 }
 
 /// Runs one QR pairing attempt: the scanner begins from its payload, the
@@ -108,25 +109,30 @@ fn qr_run(
     responder.defer_ack = defer_ack;
     let mut harness = Harness::new(initiator, responder, plan)?;
     run(&mut harness);
+    Ok(finish(&mut harness))
+}
+
+/// Ends a run: deadlines fire on anything unfinished; collects the result.
+pub(super) fn finish(harness: &mut Harness<'_, Auth<'_>, Auth<'_>>) -> RunResult {
     harness.finish();
     let hash = |core: Option<&mut crate::session::transport::SessionCore>| {
         core.map(|core| core.info().handshake_hash)
     };
-    Ok(RunResult {
+    RunResult {
         scanner_open: hash(harness.initiator.core()),
         displayer_open: hash(harness.responder.core()),
         displayer_error: harness.responder.error(),
         scanner_outcome: harness.initiator.authority.outcome(),
         displayer_outcome: harness.responder.authority.outcome(),
-    })
+    }
 }
 
-fn drain(harness: &mut Harness<'_, Auth<'_>, Auth<'_>>) {
+pub(super) fn drain(harness: &mut Harness<'_, Auth<'_>, Auth<'_>>) {
     harness.drain();
 }
 
 /// `(generation, psk)` of `peer` in `store`, if usable now.
-fn view(store: &Store, peer: &Ed25519PublicKey) -> AnyResult<Option<(u64, [u8; 32])>> {
+pub(super) fn view(store: &Store, peer: &Ed25519PublicKey) -> AnyResult<Option<(u64, [u8; 32])>> {
     match store.contact(peer) {
         None => Ok(None),
         Some(_) => usable(store, peer),
@@ -536,7 +542,7 @@ fn crash_at_every_point_burns_the_offer_once_journaled() -> TestResult {
 }
 
 /// Whether a side has passed its §4.4 journal step.
-fn side_journaled(stage: &Stage, role: Role) -> bool {
+pub(super) fn side_journaled(stage: &Stage, role: Role) -> bool {
     match stage {
         Stage::Establish(establishment) => match role {
             Role::Initiator => !matches!(establishment.phase(), Phase::AwaitIdentity),

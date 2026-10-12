@@ -53,13 +53,7 @@ pub(crate) enum OfferSecret {
     /// The QR one-time PSK.
     Qr(Zeroizing<[u8; 32]>),
     /// The human code.
-    Code(
-        #[expect(
-            dead_code,
-            reason = "read by the code-pairing responder, added with CPace"
-        )]
-        HumanCode,
-    ),
+    Code(HumanCode),
 }
 
 impl OfferSecret {

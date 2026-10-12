@@ -10,6 +10,7 @@
 use core::fmt;
 use core::time::Duration;
 
+use todoke_proto::pairing::{CodeRole, CodeShare};
 use todoke_proto::session::{
     Hello, NoiseHandshakeRecord, PreludeKind, PreludeRecord, SessionMode, encode_prelude_record,
 };
@@ -18,6 +19,9 @@ use zeroize::Zeroizing;
 use super::engine::{Entropy, HandshakeInputs, NoiseHandshake, NoiseTransport, Pattern};
 use super::keys::{NoiseStaticKey, PairingPsk};
 use super::{ErrorCode, HANDSHAKE_TIMEOUT, Role, SessionError, UnauditedSuite0001};
+use crate::pairing::cpace::{self, CpaceError};
+use crate::pairing::transcript::{self, AD_A, AD_B};
+use crate::pairing::{HumanCode, PairingError, UnauditedCodePairing};
 
 const PROLOGUE_DOMAIN: &[u8] = b"todoke/v1/noise-prologue\0";
 /// §13: at most 16 Noise records and 64 KiB of prelude per attempt.
@@ -32,7 +36,8 @@ pub(crate) const CODE_SHARE_LEN: usize = 49;
 /// `code_offer = CodeOfferRequest || CodeOffer` and both `CPace` shares.
 ///
 /// They enter the prologue `code_offer || ClientHello || ServerHello ||
-/// CodeShareA || CodeShareB`.
+/// CodeShareA || CodeShareB`. Real code pairing builds this after the
+/// `CPace` exchange; tests and fuzzing may supply a synthetic one.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct CodeTranscript {
     code_offer: [u8; CODE_OFFER_LEN],
@@ -63,18 +68,40 @@ impl fmt::Debug for CodeTranscript {
     }
 }
 
+/// The secret a plan authenticates with.
+enum PlanSecret {
+    /// A PSK known before the handshake: QR, contact, or (tests and
+    /// fuzzing) a synthetic code transcript.
+    Psk {
+        psk: PairingPsk,
+        code: Option<CodeTranscript>,
+    },
+    /// Human-code pairing: the code and, once exchanged, the public offer
+    /// records. The PSK comes from `CPace` (§3.2).
+    Code {
+        code: HumanCode,
+        code_offer: Option<[u8; CODE_OFFER_LEN]>,
+    },
+}
+
+impl PlanSecret {
+    fn psk(psk: PairingPsk) -> Self {
+        Self::Psk { psk, code: None }
+    }
+}
+
 /// What the initiator needs before sending `ClientHello`. `Debug` omits
 /// the locator (§14.2: contact tokens are not logged) and the keys.
 ///
 /// Only authorities build plans: [`ContactAuthority::initiator_plan`](crate::session::ContactAuthority::initiator_plan)
-/// and [`ContactStore::begin_qr_pairing`](crate::identity::ContactStore::begin_qr_pairing).
+/// and [`ContactStore::begin_qr_pairing`](crate::identity::ContactStore::begin_qr_pairing)
+/// (and, for code pairing, [`Session::initiate_code_pairing`](crate::session::Session::initiate_code_pairing)).
 pub struct InitiatorPlan {
     mode: SessionMode,
     generation: u64,
     locator: [u8; 16],
-    psk: PairingPsk,
+    secret: PlanSecret,
     remote_static: Option<[u8; 32]>,
-    code: Option<CodeTranscript>,
 }
 
 impl InitiatorPlan {
@@ -90,9 +117,29 @@ impl InitiatorPlan {
             mode: SessionMode::Qr,
             generation: 0,
             locator: pairing_id,
-            psk,
+            secret: PlanSecret::psk(psk),
             remote_static: Some(responder_noise_static),
-            code: None,
+        }
+    }
+
+    /// Human-code pairing (`CPace`, then `XXpsk3`, §3.2) for the offer
+    /// `code_offer = CodeOfferRequest || CodeOffer` exchanged on this
+    /// stream.
+    pub(crate) fn code_pairing(
+        _gate: UnauditedCodePairing,
+        pairing_id: [u8; 16],
+        code: HumanCode,
+        code_offer: [u8; CODE_OFFER_LEN],
+    ) -> Self {
+        Self {
+            mode: SessionMode::Code,
+            generation: 0,
+            locator: pairing_id,
+            secret: PlanSecret::Code {
+                code,
+                code_offer: Some(code_offer),
+            },
+            remote_static: None,
         }
     }
 
@@ -110,9 +157,11 @@ impl InitiatorPlan {
             mode: SessionMode::Code,
             generation: 0,
             locator: pairing_id,
-            psk,
+            secret: PlanSecret::Psk {
+                psk,
+                code: Some(transcript),
+            },
             remote_static: None,
-            code: Some(transcript),
         }
     }
 
@@ -126,9 +175,8 @@ impl InitiatorPlan {
             mode: SessionMode::Contact,
             generation,
             locator,
-            psk: PairingPsk(psk),
+            secret: PlanSecret::psk(PairingPsk(psk)),
             remote_static: Some(remote_static),
-            code: None,
         }
     }
 
@@ -143,13 +191,13 @@ impl InitiatorPlan {
 /// the keys.
 ///
 /// Only authorities build plans: [`ContactAuthority::responder_plan`](crate::session::ContactAuthority::responder_plan)
-/// and [`OfferReservation::into_qr_responder`](crate::pairing::OfferReservation::into_qr_responder).
+/// and [`OfferReservation::into_qr_responder`](crate::pairing::OfferReservation::into_qr_responder)
+/// or [`OfferReservation::into_code_responder`](crate::pairing::OfferReservation::into_code_responder).
 pub struct ResponderPlan {
     mode: SessionMode,
     generation: u64,
-    psk: PairingPsk,
+    secret: PlanSecret,
     remote_static: Option<[u8; 32]>,
-    code: Option<CodeTranscript>,
 }
 
 impl ResponderPlan {
@@ -159,10 +207,46 @@ impl ResponderPlan {
         Self {
             mode: SessionMode::Qr,
             generation: 0,
-            psk,
+            secret: PlanSecret::psk(psk),
             remote_static: None,
-            code: None,
         }
+    }
+
+    /// Human-code pairing as the displayer. The offer records exchanged on
+    /// the stream are bound in by [`Self::bind_code_offer`].
+    pub(crate) fn code_pairing(_gate: UnauditedCodePairing, code: HumanCode) -> Self {
+        Self {
+            mode: SessionMode::Code,
+            generation: 0,
+            secret: PlanSecret::Code {
+                code,
+                code_offer: None,
+            },
+            remote_static: None,
+        }
+    }
+
+    /// Binds `code_offer = CodeOfferRequest || CodeOffer` from this stream
+    /// into a code-pairing plan.
+    pub(crate) fn bind_code_offer(
+        &mut self,
+        offer: [u8; CODE_OFFER_LEN],
+    ) -> Result<(), SessionError> {
+        match &mut self.secret {
+            PlanSecret::Code {
+                code_offer: slot @ None,
+                ..
+            } => {
+                *slot = Some(offer);
+                Ok(())
+            }
+            _ => Err(SessionError::Usage),
+        }
+    }
+
+    /// Whether this plan runs `CPace` (real code pairing).
+    pub(crate) fn is_code_pairing(&self) -> bool {
+        matches!(self.secret, PlanSecret::Code { .. })
     }
 
     /// See [`InitiatorPlan::code_with_psk`]: fixture and tests only.
@@ -172,9 +256,11 @@ impl ResponderPlan {
         Self {
             mode: SessionMode::Code,
             generation: 0,
-            psk,
+            secret: PlanSecret::Psk {
+                psk,
+                code: Some(transcript),
+            },
             remote_static: None,
-            code: Some(transcript),
         }
     }
 
@@ -186,9 +272,8 @@ impl ResponderPlan {
         Self {
             mode: SessionMode::Contact,
             generation,
-            psk: PairingPsk(psk),
+            secret: PlanSecret::psk(PairingPsk(psk)),
             remote_static: Some(remote_static),
-            code: None,
         }
     }
 
@@ -244,9 +329,32 @@ impl fmt::Debug for Split {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Phase {
     AwaitServerHello,
+    /// Code pairing, initiator: `CodeShareA` sent, waiting for `CodeShareB`.
+    AwaitShareB,
+    /// Code pairing, responder: `ServerHello` sent, waiting for `CodeShareA`.
+    AwaitShareA,
     Noise,
     Done,
     Failed,
+}
+
+/// The `CPace` part of a code-pairing attempt.
+struct CpaceState {
+    code: HumanCode,
+    code_offer: [u8; CODE_OFFER_LEN],
+    /// Initiator only, between `CodeShareA` and `CodeShareB`.
+    initiator: Option<cpace::Initiator>,
+    share_a: Option<[u8; CODE_SHARE_LEN]>,
+}
+
+fn cpace_error(error: CpaceError) -> SessionError {
+    match error {
+        // An invalid, neutral, or noncanonical element: abort without
+        // detail (§3.2, §4.2.6).
+        CpaceError::Abort => SessionError::Authentication,
+        CpaceError::Random => SessionError::Random,
+        CpaceError::Unavailable => SessionError::Pairing(PairingError::CodePairingUnavailable),
+    }
 }
 
 /// Reads a `ClientHello` record (`kind || body`).
@@ -266,16 +374,28 @@ const fn state() -> SessionError {
     SessionError::Protocol(ErrorCode::STATE)
 }
 
+/// A plan's PSK (if known up front), synthetic code transcript, and
+/// `CPace` state.
+type SecretParts = (
+    Option<Zeroizing<[u8; 32]>>,
+    Option<CodeTranscript>,
+    Option<CpaceState>,
+);
+
 /// One handshake attempt.
 pub(crate) struct HandshakeDriver {
     role: Role,
     client: Hello,
     phase: Phase,
     deadline: Duration,
-    psk: Zeroizing<[u8; 32]>,
+    /// Known up front, or derived from `CPace` in code pairing.
+    psk: Option<Zeroizing<[u8; 32]>>,
     local_static: Zeroizing<[u8; 32]>,
     remote_static: Option<[u8; 32]>,
     code: Option<CodeTranscript>,
+    cpace: Option<CpaceState>,
+    /// The `ServerHello`, once sent or received.
+    server: Option<Hello>,
     entropy: Entropy,
     noise: Option<NoiseHandshake>,
     noise_records: usize,
@@ -299,15 +419,18 @@ impl HandshakeDriver {
             .map_err(|_| SessionError::Usage)?;
         let record = encode_prelude_record(PreludeKind::ClientHello, &client.encode())
             .map_err(|_| SessionError::Usage)?;
+        let (psk, code, cpace) = Self::split_secret(plan.secret)?;
         let driver = Self {
             role: Role::Initiator,
             client,
             phase: Phase::AwaitServerHello,
             deadline: started.saturating_add(HANDSHAKE_TIMEOUT),
-            psk: plan.psk.0,
+            psk,
             local_static: Zeroizing::new(*local_static.secret()),
             remote_static: plan.remote_static,
-            code: plan.code,
+            code,
+            cpace,
+            server: None,
             entropy,
             noise: None,
             noise_records: 0,
@@ -340,22 +463,47 @@ impl HandshakeDriver {
             .map_err(|_| SessionError::Random)?;
         let record = encode_prelude_record(PreludeKind::ServerHello, &server.encode())
             .map_err(|_| SessionError::Usage)?;
+        let (psk, code, cpace) = Self::split_secret(plan.secret)?;
         let mut driver = Self {
             role: Role::Responder,
             client,
             phase: Phase::Noise,
             deadline: started.saturating_add(HANDSHAKE_TIMEOUT),
-            psk: plan.psk.0,
+            psk,
             local_static: Zeroizing::new(*local_static.secret()),
             remote_static: plan.remote_static,
-            code: plan.code,
+            code,
+            cpace,
+            server: Some(server),
             entropy,
             noise: None,
             noise_records: 0,
             prelude_bytes: record.len(),
         };
-        driver.start_noise(&server)?;
+        if driver.cpace.is_some() {
+            // §3.2: the shares follow both Hellos; Noise waits for the PSK.
+            driver.phase = Phase::AwaitShareA;
+        } else {
+            driver.start_noise(&server)?;
+        }
         Ok((driver, record))
+    }
+
+    fn split_secret(secret: PlanSecret) -> Result<SecretParts, SessionError> {
+        Ok(match secret {
+            PlanSecret::Psk { psk, code } => (Some(psk.0), code, None),
+            PlanSecret::Code { code, code_offer } => (
+                None,
+                None,
+                Some(CpaceState {
+                    code,
+                    // A code plan cannot start without the offer records.
+                    code_offer: code_offer.ok_or(SessionError::Usage)?,
+                    initiator: None,
+                    share_a: None,
+                }),
+            ),
+        })
     }
 
     /// The absolute handshake deadline.
@@ -388,11 +536,12 @@ impl HandshakeDriver {
 
     fn start_noise(&mut self, server: &Hello) -> Result<(), SessionError> {
         let prologue = self.prologue(server)?;
+        let psk = self.psk.as_ref().ok_or_else(state)?;
         let noise = NoiseHandshake::new(&HandshakeInputs {
             pattern: Pattern::for_mode(self.client.mode()),
             initiator: self.role == Role::Initiator,
             prologue: &prologue,
-            psk: &self.psk,
+            psk,
             local_static: &self.local_static,
             remote_static: self.remote_static.as_ref(),
             entropy: self.entropy.clone(),
@@ -460,8 +609,26 @@ impl HandshakeDriver {
             (Phase::AwaitServerHello, PreludeKind::ServerHello) => {
                 let server =
                     Hello::decode_server(decoded.body(), &self.client).map_err(|_| malformed())?;
+                self.server = Some(server);
+                if self.cpace.is_some() {
+                    return Ok(vec![self.send_share_a(&server)?]);
+                }
                 self.start_noise(&server)?;
                 Ok(vec![self.write_noise()?])
+            }
+            (Phase::AwaitShareB, PreludeKind::CodeShareB) => {
+                let share = self.read_share(decoded.body(), CodeRole::B)?;
+                self.finish_cpace_initiator(&share)?;
+                let server = self.server.ok_or_else(state)?;
+                self.start_noise(&server)?;
+                Ok(vec![self.write_noise()?])
+            }
+            (Phase::AwaitShareA, PreludeKind::CodeShareA) => {
+                let share = self.read_share(decoded.body(), CodeRole::A)?;
+                let reply = self.respond_cpace(&share)?;
+                let server = self.server.ok_or_else(state)?;
+                self.start_noise(&server)?;
+                Ok(vec![reply])
             }
             (Phase::Noise, PreludeKind::NoiseHandshake) => {
                 let mode = self.client.mode();
@@ -487,11 +654,101 @@ impl HandshakeDriver {
         }
     }
 
-    /// Poisons the attempt: the Noise state, and with it the ephemeral
-    /// secrets, is dropped and every later call fails.
+    /// §3.2: exactly the pending offer's share from the expected role;
+    /// anything else aborts. Element validity is `CPace`'s check.
+    fn read_share(&self, body: &[u8], role: CodeRole) -> Result<CodeShare, SessionError> {
+        let share = CodeShare::decode(body).map_err(|_| malformed())?;
+        if share.role() != role || share.pairing_id() != self.client.locator() {
+            return Err(state());
+        }
+        Ok(share)
+    }
+
+    /// Initiator (party A): `Ya` from the code and the public context.
+    fn send_share_a(&mut self, server: &Hello) -> Result<Vec<u8>, SessionError> {
+        let state = self.cpace.as_mut().ok_or_else(state)?;
+        let ci = transcript::channel_identifier(&state.code_offer, &self.client, server);
+        let sid = transcript::session_identifier(server);
+        let (element, initiator) =
+            cpace::start(state.code.password(), &ci, &sid, AD_A, &self.entropy)
+                .map_err(cpace_error)?;
+        let share = CodeShare::new(*self.client.locator(), CodeRole::A, element)
+            .map_err(|_| SessionError::Usage)?
+            .encode();
+        state.initiator = Some(initiator);
+        state.share_a = Some(share);
+        let record = encode_prelude_record(PreludeKind::CodeShareA, &share)
+            .map_err(|_| SessionError::Usage)?;
+        self.prelude_bytes = self.prelude_bytes.saturating_add(record.len());
+        self.phase = Phase::AwaitShareB;
+        Ok(record)
+    }
+
+    /// Initiator: the ISK from `Yb`, then the PSK and the code transcript.
+    fn finish_cpace_initiator(&mut self, share_b: &CodeShare) -> Result<(), SessionError> {
+        let cpace_state = self.cpace.take().ok_or_else(state)?;
+        let initiator = cpace_state.initiator.ok_or_else(state)?;
+        let share_a = cpace_state.share_a.ok_or_else(state)?;
+        let isk = initiator
+            .finish(share_b.element(), AD_B)
+            .map_err(cpace_error)?;
+        self.install_code_psk(&cpace_state.code_offer, share_a, share_b.encode(), &isk)
+    }
+
+    /// Responder (party B): `Yb` and the ISK from `Ya`, then the PSK and
+    /// the code transcript. Returns the `CodeShareB` record.
+    fn respond_cpace(&mut self, share_a: &CodeShare) -> Result<Vec<u8>, SessionError> {
+        let cpace_state = self.cpace.take().ok_or_else(state)?;
+        let server = self.server.ok_or_else(state)?;
+        let ci = transcript::channel_identifier(&cpace_state.code_offer, &self.client, &server);
+        let sid = transcript::session_identifier(&server);
+        let (element, isk) = cpace::respond(
+            share_a.element(),
+            cpace_state.code.password(),
+            &ci,
+            &sid,
+            AD_A,
+            AD_B,
+            &self.entropy,
+        )
+        .map_err(cpace_error)?;
+        let share_b = CodeShare::new(*self.client.locator(), CodeRole::B, element)
+            .map_err(|_| SessionError::Usage)?
+            .encode();
+        self.install_code_psk(&cpace_state.code_offer, share_a.encode(), share_b, &isk)?;
+        let record = encode_prelude_record(PreludeKind::CodeShareB, &share_b)
+            .map_err(|_| SessionError::Usage)?;
+        self.prelude_bytes = self.prelude_bytes.saturating_add(record.len());
+        Ok(record)
+    }
+
+    /// `psk = HKDF(B3(pre_noise), ISK, "todoke/v1/cpace-psk\0", 32)` and the
+    /// transcript bound into the XX prologue (§3.2).
+    fn install_code_psk(
+        &mut self,
+        code_offer: &[u8; CODE_OFFER_LEN],
+        share_a: [u8; CODE_SHARE_LEN],
+        share_b: [u8; CODE_SHARE_LEN],
+        isk: &cpace::Isk,
+    ) -> Result<(), SessionError> {
+        let server = self.server.ok_or_else(state)?;
+        let pre_noise =
+            transcript::pre_noise(code_offer, &self.client, &server, &share_a, &share_b);
+        self.psk = Some(transcript::psk(&pre_noise, isk).map_err(|_| SessionError::Random)?);
+        self.code = Some(CodeTranscript {
+            code_offer: *code_offer,
+            share_a,
+            share_b,
+        });
+        Ok(())
+    }
+
+    /// Poisons the attempt: the Noise and `CPace` state, and with them the
+    /// ephemeral secrets, are dropped and every later call fails.
     fn fail(&mut self) {
         self.phase = Phase::Failed;
         self.noise = None;
+        self.cpace = None;
     }
 
     /// The completed handshake. Fails unless every message was processed.
@@ -514,7 +771,7 @@ impl HandshakeDriver {
             role: self.role,
             mode: self.client.mode(),
             generation: self.client.generation(),
-            psk: Zeroizing::new(*self.psk),
+            psk: self.psk.take().ok_or_else(state)?,
             handshake_hash,
             session_id: super::session_id(&handshake_hash),
             peer_static,

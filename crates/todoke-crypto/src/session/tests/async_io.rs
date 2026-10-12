@@ -16,16 +16,18 @@ use zeroize::Zeroizing;
 use super::support::*;
 use crate::identity::contacts::PairOutcome;
 use crate::identity::contacts::Unavailable;
-use crate::pairing::{PairingOffers, QrPayload};
+use crate::pairing::{HumanCode, PairingError, PairingOffers, QrPayload, UnauditedCodePairing};
 use crate::session::authority::testing::ScriptedAuthority;
 use crate::session::{
-    ErrorCode, ErrorRecord, ErrorScope, FrameType, IncomingSession, InitiatorPlan, PairingPsk,
-    ResponderPlan, Role, Session, SessionError, SessionMode, Timer, UnauditedSuite0001,
+    Accepted, ErrorCode, ErrorRecord, ErrorScope, FrameType, IncomingSession, InitiatorPlan,
+    PairingPsk, ResponderPlan, Role, Session, SessionError, SessionMode, Timer, UnauditedSuite0001,
 };
 
 const GENERATION: u64 = 2;
 const LOCATOR: [u8; 16] = [0xa7; 16];
 const GATE: UnauditedSuite0001 = UnauditedSuite0001::acknowledge_not_production_ready();
+const CODE_GATE: UnauditedCodePairing = UnauditedCodePairing::acknowledge_not_production_ready();
+const TOKEN: [u8; 8] = [0x5e; 8];
 
 #[derive(Default)]
 struct Shared {
@@ -416,7 +418,11 @@ fn qr_pairing_over_a_byte_pipe() -> TestResult {
         &mut initiator_authority,
     );
     let responder = async {
-        let incoming = IncomingSession::accept(bob_end, timer.clone(), GATE).await?;
+        let Accepted::Hello(incoming) =
+            IncomingSession::accept_any(bob_end, timer.clone(), GATE).await?
+        else {
+            return Err("expected a ClientHello".into());
+        };
         let reservation = offers.reserve(incoming.client_hello(), wall, timer.now())?;
         let (plan, mut authority) = reservation.into_qr_responder(&mut bob_store)?;
         let session = incoming
@@ -436,6 +442,173 @@ fn qr_pairing_over_a_byte_pipe() -> TestResult {
         crate::session::kdf::psk_next(a.handshake_hash(), payload.psk()).map_err(|_| "kdf")?;
     assert_eq!(usable(&alice_store, &bob.key())?, Some((1, *next)));
     assert_eq!(usable(&bob_store, &alice.key())?, Some((1, *next)));
+    Ok(())
+}
+
+/// Code pairing over the pipe: the offer exchange, `CPace`, `XXpsk3`,
+/// identity, and the first ratchet. With a wrong code both sides fail, the
+/// displayer without saying why, and the offer records one failure.
+#[test]
+fn code_pairing_over_a_byte_pipe() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    let shown = offers.create_code(wall, timer.now())?;
+    let id = offers.code_pairing_id().ok_or("offer")?;
+    let right = HumanCode::parse(shown.as_str())?;
+    let mut wrong_digits = shown.as_str().as_bytes().to_vec();
+    wrong_digits[0] = if wrong_digits[0] == b'0' { b'1' } else { b'0' };
+    let wrong = HumanCode::parse(core::str::from_utf8(&wrong_digits)?)?;
+    for (attempt, code) in [&wrong, &right].into_iter().enumerate() {
+        let mut alice_store = empty_store()?;
+        let mut bob_store = empty_store()?;
+        let (alice_end, bob_end) = duplex(4096);
+        let (alice_local, bob_local) = (alice.local()?, bob.local()?);
+        let initiator = Session::initiate_code_pairing(
+            alice_end,
+            timer.clone(),
+            GATE,
+            CODE_GATE,
+            &alice_local,
+            wall,
+            TOKEN,
+            code,
+            &mut alice_store,
+        );
+        let responder = async {
+            let Accepted::CodeOfferRequest(request) =
+                IncomingSession::accept_any(bob_end, timer.clone(), GATE).await?
+            else {
+                return Err::<_, Box<dyn std::error::Error>>("expected a request".into());
+            };
+            assert_eq!(request.stranger_token(), &TOKEN);
+            assert!(format!("{request:?}").starts_with(
+                "IncomingCodeRequest { request: CodeOfferRequest { stranger_token: [8 bytes] }"
+            ));
+            let incoming = request.answer(CODE_GATE, &offers, &TOKEN, wall).await?;
+            assert!(format!("{incoming:?}").contains("code_offer_exchanged: true"));
+            assert_eq!(incoming.client_hello().mode(), SessionMode::Code);
+            let reservation = offers.reserve(incoming.client_hello(), wall, timer.now())?;
+            let (plan, mut authority) =
+                reservation.into_code_responder(CODE_GATE, &mut bob_store)?;
+            let session = incoming
+                .respond(&bob_local, wall, plan, &mut authority)
+                .await;
+            Ok((session, authority.outcome()))
+        };
+        let (a, b) = join(initiator, responder)?;
+        let (b, outcome) = b?;
+        if attempt == 0 {
+            assert!(a.is_err());
+            assert_eq!(b.err(), Some(SessionError::Authentication));
+            assert_eq!(outcome, None);
+            assert_eq!(offers.failures(&id), Some(1));
+            assert!(alice_store.contact(&bob.key()).is_none());
+            assert!(!alice_store.pairing_burned(&id));
+            timer.advance(crate::pairing::CODE_ATTEMPT_SPACING);
+        } else {
+            let (a, a_outcome) = a?;
+            let b = b?;
+            assert_eq!(a.mode(), SessionMode::Code);
+            assert_eq!(a.handshake_hash(), b.handshake_hash());
+            assert_eq!(a_outcome, PairOutcome::New);
+            assert_eq!(outcome, Some(PairOutcome::New));
+            assert_eq!(usable(&alice_store, &bob.key())?.map(|v| v.0), Some(1));
+            assert_eq!(
+                usable(&alice_store, &bob.key())?,
+                usable(&bob_store, &alice.key())?
+            );
+            assert!(alice_store.pairing_burned(&id) && bob_store.pairing_burned(&id));
+        }
+    }
+    Ok(())
+}
+
+/// A request for a token this device does not advertise is closed
+/// without an answer; a plain `accept` refuses a code offer request; and
+/// plans that do not match how the stream began are refused.
+#[test]
+fn code_offer_exchange_refusals() -> TestResult {
+    let wall = crate::identity::test_support::time(WALL)?;
+    let alice = Device::new()?;
+    let bob = Device::new()?;
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    let shown = offers.create_code(wall, timer.now())?;
+    let code = HumanCode::parse(shown.as_str())?;
+    // Stale token.
+    let mut alice_store = empty_store()?;
+    let (alice_end, bob_end) = duplex(4096);
+    let alice_local = alice.local()?;
+    let initiator = Session::initiate_code_pairing(
+        alice_end,
+        timer.clone(),
+        GATE,
+        CODE_GATE,
+        &alice_local,
+        wall,
+        [0x11; 8],
+        &code,
+        &mut alice_store,
+    );
+    let responder = async {
+        match IncomingSession::accept_any(bob_end, timer.clone(), GATE).await {
+            Ok(Accepted::CodeOfferRequest(request)) => request
+                .answer(CODE_GATE, &offers, &TOKEN, wall)
+                .await
+                .map(|_| ()),
+            other => Err(SessionError::Io(std::io::ErrorKind::Other)).map(|()| drop(other)),
+        }
+    };
+    let (a, b) = join(initiator, responder)?;
+    assert_eq!(a.err(), Some(SessionError::Closed));
+    assert_eq!(b, Err(SessionError::Pairing(PairingError::UnknownOffer)));
+    // A plain accept treats a code offer request as out of order.
+    let (alice_end, bob_end) = duplex(4096);
+    let mut alice_store = empty_store()?;
+    let initiator = Session::initiate_code_pairing(
+        alice_end,
+        timer.clone(),
+        GATE,
+        CODE_GATE,
+        &alice_local,
+        wall,
+        TOKEN,
+        &code,
+        &mut alice_store,
+    );
+    let responder = IncomingSession::accept(bob_end, timer.clone(), GATE);
+    let (a, b) = join(initiator, responder)?;
+    assert!(a.is_err());
+    assert_eq!(b.err(), Some(SessionError::Protocol(ErrorCode::STATE)));
+    // A code plan on a stream without the exchange, and a QR plan on a
+    // stream with it.
+    let bob_local = bob.local()?;
+    let (alice_end, bob_end) = duplex(4096);
+    let hello = todoke_proto::session::Hello::client(SessionMode::Code, 0, [0xa1; 16], [1; 16])?;
+    let mut record = vec![0, 67, 1];
+    record.extend_from_slice(&hello.encode());
+    let mut writer = alice_end;
+    block_on(futures_write_all(&mut writer, &record))??;
+    let incoming = block_on(IncomingSession::accept(bob_end, timer.clone(), GATE))??;
+    let plan = ResponderPlan::code_pairing(CODE_GATE, code.clone());
+    let mut authority = ScriptedAuthority::new(None);
+    assert_eq!(
+        block_on(incoming.respond(&bob_local, wall, plan, &mut authority))?.err(),
+        Some(SessionError::Usage)
+    );
+    Ok(())
+}
+
+/// Writes all of `bytes` to `io`.
+async fn futures_write_all(io: &mut End, bytes: &[u8]) -> io::Result<()> {
+    let mut written = 0;
+    while written < bytes.len() {
+        written += core::future::poll_fn(|cx| Pin::new(&mut *io).poll_write(cx, &bytes[written..]))
+            .await?;
+    }
     Ok(())
 }
 

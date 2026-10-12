@@ -20,6 +20,10 @@ pub(crate) const SHARE_LEN: usize = 32;
 pub(crate) const ISK_LEN: usize = 64;
 /// Randomness drawn per scalar: pakery reduces 64 uniform bytes modulo the
 /// group order (draft-21 §8.3 permits uniform sampling).
+#[cfg_attr(
+    not(any(test, feature = "unaudited-code-pairing")),
+    expect(dead_code, reason = "only the CPace backend draws randomness")
+)]
 const SCALAR_SEED_LEN: usize = 64;
 
 /// Why `CPace` did not produce a key. Carries no detail about the input.
@@ -27,15 +31,23 @@ const SCALAR_SEED_LEN: usize = 64;
 pub(crate) enum CpaceError {
     /// No `CPace` backend in this build (gate O2).
     #[cfg_attr(
-        test,
+        any(test, feature = "unaudited-code-pairing"),
         expect(dead_code, reason = "only a build without the backend returns it")
     )]
     Unavailable,
     /// The peer's share is not a canonical, non-neutral Ristretto255
     /// element, or the shared point is the neutral element: abort (§3.2,
     /// draft-21 §7.2).
+    #[cfg_attr(
+        not(any(test, feature = "unaudited-code-pairing")),
+        expect(dead_code, reason = "only the CPace backend aborts")
+    )]
     Abort,
     /// Randomness was unavailable.
+    #[cfg_attr(
+        not(any(test, feature = "unaudited-code-pairing")),
+        expect(dead_code, reason = "only the CPace backend draws randomness")
+    )]
     Random,
 }
 

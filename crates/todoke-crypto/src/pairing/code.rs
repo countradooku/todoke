@@ -88,10 +88,6 @@ impl HumanCode {
     }
 
     /// The `CPace` password bytes (§3.2).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "the CPace password, read by code pairing")
-    )]
     pub(crate) fn password(&self) -> &[u8; CODE_DIGITS] {
         &self.0
     }
