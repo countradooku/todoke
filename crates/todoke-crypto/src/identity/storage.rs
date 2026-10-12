@@ -7,10 +7,19 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 
-/// Whole-blob storage with atomic replacement.
+/// Whole-blob storage with atomic, durable replacement.
 ///
 /// Rollback resistance (restoring an older blob from a backup) is not provided
 /// here and remains a release gate (O3, §14.2).
+///
+/// **Single writer.** Implementations need not, and [`FileStorage`] does not,
+/// exclude other writers: a second process, or a second store object over the
+/// same blob, races with this one and can lose updates. Callers that persist
+/// security state through a store built on this trait (the session ratchet
+/// journal of §4.4, whose "disables concurrent sessions" is otherwise
+/// enforced only by a `&mut` borrow within one process) must guarantee one
+/// writer per blob; `todoke-core` is responsible for that, for example with
+/// an OS file lock or a single owning daemon.
 pub trait BlobStorage {
     /// Reads the blob, or `None` if none was stored. Implementations must
     /// reject blobs longer than `max_len` before reading them fully.
@@ -20,8 +29,12 @@ pub trait BlobStorage {
     /// [`StorageError`] on I/O failure or an oversized blob.
     fn load(&self, max_len: usize) -> Result<Option<Vec<u8>>, StorageError>;
 
-    /// Atomically replaces the blob: after a crash, readers observe either the
-    /// old or the new contents, never a mixture.
+    /// Atomically and durably replaces the blob: after a crash, readers
+    /// observe either the old or the new contents, never a mixture, and once
+    /// this returns `Ok` the new contents survive a crash or power loss (the
+    /// data and the replacement itself are synced to stable storage).
+    /// §4.4 relies on this: a ratchet journal or commit counts as durable
+    /// only when `store` has returned `Ok`.
     ///
     /// # Errors
     ///
@@ -176,7 +189,10 @@ fn sync_parent(path: &Path) -> Result<(), StorageError> {
     Ok(())
 }
 
-/// In-memory [`BlobStorage`] for tests and ephemeral stores.
+/// In-memory [`BlobStorage`] for tests and ephemeral stores. Its contents do
+/// not survive the process, so it is not durable in the sense of
+/// [`BlobStorage::store`]; it must not back a store whose ratchet journal has
+/// to outlive a crash.
 #[derive(Debug, Default)]
 pub struct MemoryStorage {
     blob: Option<Vec<u8>>,

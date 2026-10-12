@@ -37,7 +37,10 @@
 //!   and `CPace` is not implemented (O2).
 //! - A [`ContactAuthority`] borrows its [`ContactStore`](crate::identity::ContactStore)
 //!   mutably for the whole establishment, so one store serves one contact
-//!   session establishment at a time.
+//!   session establishment at a time. That borrow is the only exclusion:
+//!   nothing stops a second process or store object over the same blob, so
+//!   the caller (`todoke-core`) must keep one writer per store
+//!   ([`BlobStorage`](crate::identity::BlobStorage)).
 //! - [`Session`] has no full-duplex split; `send` and `recv` take `&mut self`.
 //! - Capabilities (§6), transfers (§7), the "one session per device pair" rule,
 //!   and unauthenticated-attempt rate limits (§13) belong to higher layers.
