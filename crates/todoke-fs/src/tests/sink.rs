@@ -835,3 +835,148 @@ fn a_junction_at_the_root_path_refuses_offers_and_writes_nothing() -> TestResult
     std::fs::rename(&moved, harness.dest.path())?;
     Ok(())
 }
+
+/// The local path of `file_id` as the strings a `Renamed` report holds.
+fn renamed_paths(
+    sink: &Sink,
+    transfer_id: &TransferId,
+    file_id: u32,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let renamed = sink.renamed(transfer_id, file_id)?;
+    let strings = |path: &[crate::LocalName]| -> Vec<String> {
+        path.iter().map(|name| name.as_str().to_owned()).collect()
+    };
+    Some((strings(renamed.planned()), strings(renamed.actual())))
+}
+
+/// A name taken between consent and publication: nothing is overwritten,
+/// the next free name is used, and the deviation from what the user saw
+/// is reported per file.
+#[test]
+fn a_name_taken_after_consent_is_reported_as_renamed() -> TestResult {
+    let (mut harness, consented) = setup(27)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    let dest = harness.dest.path().to_owned();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    std::fs::write(dest.join("c.txt"), b"late")?;
+    std::fs::create_dir(dest.join("photos"))?;
+    for file_id in FILES {
+        harness.sink()?.publish(&consented.manifest, file_id)?;
+    }
+    assert_eq!(std::fs::read(dest.join("c.txt"))?, b"late");
+    assert_eq!(std::fs::read(dest.join("c (2).txt"))?, content(100, 4));
+    let sink = harness.sink()?;
+    assert_eq!(
+        renamed_paths(sink, &transfer_id, 6),
+        Some((vec!["c.txt".to_owned()], vec!["c (2).txt".to_owned()]))
+    );
+    assert_eq!(
+        renamed_paths(sink, &transfer_id, 5),
+        Some((
+            vec!["photos".to_owned(), "deep".to_owned(), "b.bin".to_owned()],
+            vec![
+                "photos (2)".to_owned(),
+                "deep".to_owned(),
+                "b.bin".to_owned()
+            ]
+        ))
+    );
+    // The plan still shows what the user consented to.
+    let plan = sink.plan(&transfer_id).ok_or("plan")?;
+    assert_eq!(plan.entry(6).map(|e| e.local().as_str()), Some("c.txt"));
+    Ok(())
+}
+
+/// After a restart the names the user consented to are loaded from the
+/// journal, not computed again against the destination as it is now: a
+/// name taken meanwhile is a reported deviation, never a silent change of
+/// the plan.
+#[test]
+fn consented_names_survive_a_restart() -> TestResult {
+    let (mut harness, consented) = setup(28)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    let dest = harness.dest.path().to_owned();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    std::fs::write(dest.join("c.txt"), b"late")?;
+    std::fs::create_dir(dest.join("photos"))?;
+    harness.reopen(WALL + 1)?;
+    let sink = harness.sink()?;
+    let plan = sink.plan(&transfer_id).ok_or("plan")?;
+    assert_eq!(plan.entry(6).map(|e| e.local().as_str()), Some("c.txt"));
+    assert_eq!(plan.entry(1).map(|e| e.local().as_str()), Some("photos"));
+    assert_eq!(
+        plan.entry(6).map(crate::PlannedEntry::changes),
+        Some(&[][..])
+    );
+    // A resumed session publishes; the deviations are reported.
+    let fixture = fixture()?;
+    let resumed = Consented::new(&fixture, &consented.manifest, &entries(), &FILES, true, 28)?;
+    sink.record_accept(&resumed.manifest, &resumed.accept)?;
+    for file_id in FILES {
+        let file = resumed.accept.file(file_id).ok_or("file")?;
+        sink.record_file_key(&file, &resumed.master(file_id)?)?;
+        sink.publish(&resumed.manifest, file_id)?;
+    }
+    assert_eq!(
+        renamed_paths(sink, &transfer_id, 6),
+        Some((vec!["c.txt".to_owned()], vec!["c (2).txt".to_owned()]))
+    );
+    assert_eq!(
+        renamed_paths(sink, &transfer_id, 2),
+        Some((
+            vec!["photos".to_owned(), "a.bin".to_owned()],
+            vec!["photos (2)".to_owned(), "a.bin".to_owned()]
+        ))
+    );
+    // Reported after another restart too.
+    harness.reopen(WALL + 2)?;
+    assert!(renamed_paths(harness.sink()?, &transfer_id, 6).is_some());
+    assert_eq!(std::fs::read(dest.join("c.txt"))?, b"late");
+    Ok(())
+}
+
+/// An Accept whose offer plan is no longer kept (more offers arrived since)
+/// is refused rather than mapped again against the destination as it is
+/// now, which could differ from what the user saw.
+#[test]
+fn an_accept_without_the_plan_shown_is_refused() -> TestResult {
+    let (mut harness, consented) = setup(29)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    let fixture = fixture()?;
+    let sink = harness.sink()?;
+    sink.check_offer(&consented.manifest)
+        .map_err(|r| format!("{r:?}"))?;
+    for id in 0..16_u8 {
+        let other = build_manifest(&fixture, [0x80 + id; 16], &entries(), 3600)?;
+        sink.check_offer(&other).map_err(|r| format!("{r:?}"))?;
+    }
+    assert!(sink.plan(&transfer_id).is_none());
+    assert_eq!(
+        sink.record_accept(&consented.manifest, &consented.accept),
+        Err(SinkError::Storage)
+    );
+    assert!(!harness.transfer_dir(&transfer_id).exists());
+    Ok(())
+}
+
+/// A journal that does not record the consented names cannot be
+/// published safely: it counts as damaged.
+#[test]
+fn a_journal_without_consented_names_is_discarded() -> TestResult {
+    let (mut harness, consented) = setup(30)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    harness.sink = None;
+    let journal = harness.transfer_dir(&transfer_id).join("journal");
+    let (header, _, _) = decode_journal(&std::fs::read(&journal)?).map_err(|_| "journal")?;
+    std::fs::write(&journal, header.encode())?;
+    harness.reopen(WALL)?;
+    assert!(
+        harness
+            .sink()?
+            .retained(&transfer_id, time(WALL)?)
+            .is_none()
+    );
+    assert!(!harness.transfer_dir(&transfer_id).exists());
+    Ok(())
+}

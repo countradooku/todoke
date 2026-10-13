@@ -64,6 +64,37 @@ impl fmt::Debug for LocalName {
     }
 }
 
+/// A file published under another path than the one shown before consent:
+/// a name on the way (the file's own, or a top-level directory's) was
+/// taken by the time it was published, and the next free name was used
+/// instead of overwriting anything. `Debug` prints no names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Renamed {
+    planned: Vec<LocalName>,
+    actual: Vec<LocalName>,
+}
+
+impl Renamed {
+    pub(crate) fn new(planned: Vec<String>, actual: Vec<String>) -> Self {
+        Self {
+            planned: planned.into_iter().map(LocalName).collect(),
+            actual: actual.into_iter().map(LocalName).collect(),
+        }
+    }
+
+    /// The path the user consented to, one name per level.
+    #[must_use]
+    pub fn planned(&self) -> &[LocalName] {
+        &self.planned
+    }
+
+    /// Where the file was actually published, one name per level.
+    #[must_use]
+    pub fn actual(&self) -> &[LocalName] {
+        &self.actual
+    }
+}
+
 /// How path lengths are measured.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PathUnits {
@@ -291,6 +322,44 @@ impl DestinationPlan {
         plan.avoid_existing(listed, exists);
         plan.check_paths(root_len);
         plan
+    }
+
+    /// The plan the user consented to, rebuilt from the manifest and the
+    /// local names recorded at the Accept (`names`, by entry ID): those
+    /// entries get exactly those names, whatever the destination holds
+    /// now. Entries not in `names` keep their sanitized names.
+    pub(crate) fn consented(
+        manifest: &Manifest,
+        profile: &FsProfile,
+        names: &BTreeMap<u32, String>,
+    ) -> Self {
+        let mut plan = Self::sanitized(manifest, profile);
+        for (&id, name) in names {
+            let Some(entry) = plan.entry_mut(id) else {
+                continue;
+            };
+            if entry.parent == 0 && entry.local.0 != *name {
+                push_change(&mut entry.changes, Change::Exists);
+            }
+            entry.local = LocalName(name.clone());
+            entry.rejection = None;
+        }
+        plan
+    }
+
+    /// The local names of `selection`'s files and of every directory on
+    /// their paths, by entry ID: what [`Self::consented`] rebuilds from.
+    pub(crate) fn names_for(&self, selection: &[u32]) -> Option<BTreeMap<u32, String>> {
+        let mut names = BTreeMap::new();
+        for &file_id in selection {
+            let mut id = file_id;
+            while id != 0 && !names.contains_key(&id) {
+                let entry = self.entry(id)?;
+                names.insert(id, entry.local.0.clone());
+                id = entry.parent;
+            }
+        }
+        Some(names)
     }
 
     /// Sanitizes every name and separates siblings; no destination access.

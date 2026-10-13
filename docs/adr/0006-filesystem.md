@@ -185,8 +185,19 @@ temporary file, and checks length and whole-file BLAKE3.
 
 The journal (`TDKJ`, versioned, BLAKE3 check values) records the accepted
 selection and expiry, a secret salt from which temporary names are derived,
-top-level directories created, and files published; a torn tail is cut, a
-damaged header discards the transfer. Start-up deletes a transfer only when
+the local names the user consented to (every selected file and each
+directory on its path, written with the header in one atomic write at the
+Accept), top-level directories created, and files published; a torn tail is
+cut, a damaged header discards the transfer, and so does a journal missing a
+consented name. Publication and restarts use the consented names and never
+map the manifest again against the destination as it is later; an Accept
+whose plan is no longer kept (the sink keeps the last 16 offers' plans) is
+refused rather than mapped again. If a consented name (a file's, or a
+top-level directory's) was taken by the time of publication, nothing is
+overwritten: the next free `" (n)"` name is used and the deviation is
+reported per file (`FsSink::renamed`, which survives restarts); a retained
+transfer whose consented entry cannot be published at all fails with
+`STORAGE`. Start-up deletes a transfer only when
 its records are positively damaged (or missing) or expired: a journal or
 manifest that cannot be read now (permissions, an I/O error, too many open
 files) is kept on disk, unused, and no new Accept may replace it that run. Tombstones (`TDKT`) are a sorted,

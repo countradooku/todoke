@@ -31,9 +31,10 @@
 //!    destination; one whose smallest file exceeds the quarantine quota,
 //!    as quota.
 //! 2. **At consent** (`record_accept`): a private quarantine directory for
-//!    the transfer gets the manifest and a journal, durably, before the
-//!    Accept is sent. A selection with a rejected file, or over the quota,
-//!    is refused and nothing is sent.
+//!    the transfer gets the manifest and a journal with the local names the
+//!    user was shown, durably, before the Accept is sent. A selection with
+//!    a rejected file, over the quota, or whose plan is no longer kept, is
+//!    refused and nothing is sent.
 //! 3. **Keys** (`record_file_key`): each file's master is sealed with the
 //!    platform `Sealer` (§8) and kept only sealed.
 //! 4. **Segments** (`store_segment`): only the verified content
@@ -44,7 +45,8 @@
 //!    verified again into a temporary file in the destination directory,
 //!    the exact length and whole-file BLAKE3 root are checked (§7.7), the
 //!    file is marked ([`dest::OriginMarker`]), synced, and published under
-//!    its planned name, or the next free `" (n)"` name, without replacing
+//!    its consented name, or, if that was taken since, the next free
+//!    `" (n)"` name (reported by `FsSink::renamed`), without replacing
 //!    anything and atomically where the filesystem allows. Its ciphertext
 //!    and sealed master are deleted. Its content type is checked
 //!    ([`detect`]) for UI warnings (`FsSink::content_report`).
@@ -115,7 +117,7 @@ pub use name::{
     Change, Kind, MAX_COMPONENT_BYTES, MAX_COMPONENT_NFD_UNITS, NameRules, sanitize_component,
 };
 pub use plan::{
-    DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection,
+    DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection, Renamed,
     UntrustedName, Warning,
 };
 #[cfg(any(unix, windows))]

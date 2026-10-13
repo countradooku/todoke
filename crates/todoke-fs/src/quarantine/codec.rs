@@ -62,9 +62,19 @@ impl core::fmt::Debug for JournalHeader {
     }
 }
 
-/// One appended journal entry.
+/// One journal entry after the header.
 #[derive(Clone, PartialEq, Eq)]
 pub enum JournalEntry {
+    /// Entry `id` (a selected file or one of its directories) was shown to
+    /// the user as `name` before consent. Written with the header, once
+    /// per entry, when the Accept is recorded: publication uses these
+    /// names, never a mapping computed again later.
+    Planned {
+        /// The manifest entry ID.
+        id: u32,
+        /// The local name the user consented to.
+        name: String,
+    },
     /// Top-level directory `id` was created under `name`.
     TopDirectory {
         /// The manifest directory ID.
@@ -86,6 +96,7 @@ pub enum JournalEntry {
 impl core::fmt::Debug for JournalEntry {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
+            Self::Planned { id, .. } => write!(f, "Planned({id})"),
             Self::TopDirectory { id, .. } => write!(f, "TopDirectory({id})"),
             Self::Published { id, .. } => write!(f, "Published({id})"),
             Self::Finished => f.write_str("Finished"),
@@ -250,6 +261,7 @@ fn decode_entry(reader: &mut Reader<'_>) -> Result<JournalEntry, Corrupt> {
         (1, 1..) => Ok(JournalEntry::TopDirectory { id, name: name()? }),
         (2, 1..) => Ok(JournalEntry::Published { id, name: name()? }),
         (3, 0) if name_len == 0 => Ok(JournalEntry::Finished),
+        (4, 1..) => Ok(JournalEntry::Planned { id, name: name()? }),
         _ => Err(Corrupt),
     }
 }
@@ -262,6 +274,7 @@ impl JournalEntry {
             Self::TopDirectory { id, name } => (1_u8, *id, name.as_bytes()),
             Self::Published { id, name } => (2, *id, name.as_bytes()),
             Self::Finished => (3, 0, &[][..]),
+            Self::Planned { id, name } => (4, *id, name.as_bytes()),
         };
         let name = &name[..name.len().min(MAX_COMPONENT_BYTES)];
         let mut out = Vec::with_capacity(7 + name.len() + ENTRY_CHECK_LEN);
@@ -345,6 +358,10 @@ mod tests {
     #[test]
     fn journals_round_trip_and_stop_at_a_torn_tail() -> TestResult {
         let entries = vec![
+            JournalEntry::Planned {
+                id: 1,
+                name: "Photos".to_owned(),
+            },
             JournalEntry::TopDirectory {
                 id: 1,
                 name: "Photos (2)".to_owned(),

@@ -155,6 +155,9 @@ struct Transfer {
     header: JournalHeader,
     /// Valid journal bytes; appends start here.
     journal_len: u64,
+    /// The local names the user consented to, by entry ID: every selected
+    /// file and the directories on its path (journaled at the Accept).
+    names: BTreeMap<u32, String>,
     top_dirs: BTreeMap<u32, String>,
     published: BTreeMap<u32, String>,
     finished: bool,
@@ -167,7 +170,7 @@ struct Transfer {
     /// Files known to have no slots file yet (saves a failed open per
     /// requested segment).
     no_slots: BTreeSet<u32>,
-    /// The destination plan (computed when first needed).
+    /// The consented plan, rebuilt from `names` and the manifest.
     plan: Option<DestinationPlan>,
     /// Sizes of the selected files.
     sizes: BTreeMap<u32, u64>,
@@ -336,6 +339,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         }
         let mut transfer = Transfer {
             journal_len: valid as u64,
+            names: BTreeMap::new(),
             top_dirs: BTreeMap::new(),
             published: BTreeMap::new(),
             finished: false,
@@ -350,6 +354,9 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         };
         for entry in entries {
             match entry {
+                JournalEntry::Planned { id, name } => {
+                    transfer.names.insert(id, name);
+                }
                 JournalEntry::TopDirectory { id, name } => {
                     transfer.top_dirs.insert(id, name);
                 }
@@ -366,13 +373,27 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
                 transfer.keyed.insert(file_id);
             }
         }
+        // Every selected file needs the name the user consented to; a
+        // journal without them cannot be published safely.
+        if transfer
+            .header
+            .selection
+            .iter()
+            .any(|id| !transfer.names.contains_key(id))
+        {
+            return Err(LoadError::Corrupt);
+        }
         match self.stored_manifest(&transfer.header) {
             Ok(manifest) => {
                 if !transfer.finished {
                     transfer.reserved = reservation(&manifest, &transfer.header.selection);
                 }
                 transfer.sizes = sizes(&manifest, &transfer.header.selection);
-                transfer.plan = Some(self.plan_for(&manifest));
+                let plan = self.consented_plan(&manifest, &transfer.names);
+                if !consented_names_complete(&plan, &transfer) {
+                    return Err(LoadError::Corrupt);
+                }
+                transfer.plan = Some(plan);
             }
             // A finished transfer needs only its journal (the engine
             // passes the manifest to re-check published files).
@@ -394,6 +415,16 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             return Err(LoadError::Corrupt);
         }
         Ok(manifest)
+    }
+
+    /// The plan the user consented to: `manifest` with the journaled
+    /// `names`, never mapped again against the destination.
+    fn consented_plan(
+        &self,
+        manifest: &CanonicalManifest,
+        names: &BTreeMap<u32, String>,
+    ) -> DestinationPlan {
+        DestinationPlan::consented(manifest.manifest(), &self.config.profile, names)
     }
 
     /// The plan for `manifest` against the destination as it is now: the
@@ -444,6 +475,22 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         let mut path = Self::directory_names(transfer, plan, file_id)?;
         path.push(leaf.clone());
         Some(path)
+    }
+
+    /// Whether file `file_id` was published under another path than the
+    /// one the user consented to, and both paths. Local data: never log
+    /// it.
+    #[must_use]
+    pub fn renamed(&self, transfer_id: &TransferId, file_id: u32) -> Option<crate::Renamed> {
+        let transfer = self.transfers.get(transfer_id)?;
+        let plan = transfer.plan.as_ref()?;
+        let planned: Vec<String> = plan
+            .local_path(file_id)?
+            .iter()
+            .map(|name| name.as_str().to_owned())
+            .collect();
+        let actual = self.published_path(transfer_id, file_id)?;
+        (planned != actual).then(|| crate::Renamed::new(planned, actual))
     }
 
     /// What content checking found in published file `file_id` (this
@@ -627,6 +674,9 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         transfer.journal_len =
             store::append(&path, transfer.journal_len, &entry.encode()).map_err(storage)?;
         match entry {
+            JournalEntry::Planned { id, name } => {
+                transfer.names.insert(*id, name.clone());
+            }
             JournalEntry::TopDirectory { id, name } => {
                 transfer.top_dirs.insert(*id, name.clone());
             }
@@ -903,12 +953,8 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         }
         let name = transfer.published.get(&file_id)?.clone();
         if transfer.plan.is_none() {
-            let plan = DestinationPlan::new(
-                manifest.manifest(),
-                &self.config.profile,
-                self.destination.root_len(),
-                &mut |_| false,
-            );
+            let names = transfer.names.clone();
+            let plan = self.consented_plan(manifest, &names);
             self.transfers.get_mut(&transfer_id)?.plan = Some(plan);
         }
         let chain = self.resolve(&transfer_id, file_id, false).ok()?;
@@ -936,6 +982,25 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             .quota_bytes
             .saturating_sub(self.reserved_bytes())
     }
+}
+
+/// Whether the consented names cover every selected file and every
+/// directory on its path, each of the right kind.
+fn consented_names_complete(plan: &DestinationPlan, transfer: &Transfer) -> bool {
+    transfer.header.selection.iter().all(|&file_id| {
+        let mut id = file_id;
+        while id != 0 {
+            let Some(entry) = plan.entry(id) else {
+                return false;
+            };
+            if !transfer.names.contains_key(&id) {
+                return false;
+            }
+            id = entry.parent();
+        }
+        plan.entry(file_id)
+            .is_some_and(|entry| entry.kind() == crate::Kind::File)
+    })
 }
 
 /// The sizes of `selection`'s files.
@@ -1067,14 +1132,20 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
             transfer.accepted.clear();
             return Ok(());
         }
+        // The plan the user was shown. If it is no longer kept, the Accept
+        // is refused: mapping again now could publish under other names.
         let plan = self
             .offers
             .iter()
             .find(|(id, _)| *id == transfer_id)
-            .map_or_else(|| self.plan_for(manifest), |(_, plan)| plan.clone());
+            .map(|(_, plan)| plan.clone())
+            .ok_or(SinkError::Storage)?;
         if !plan.accepts(accept.selection()) {
             return Err(SinkError::Storage);
         }
+        let names = plan
+            .names_for(accept.selection())
+            .ok_or(SinkError::Storage)?;
         // A different manifest under this ID: nothing carries over.
         self.discard_transfer(&transfer_id);
         let needed = reservation(manifest, accept.selection());
@@ -1097,23 +1168,35 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
             self.release_root_if_idle();
             return Err(SinkError::Storage);
         }
+        // The header and the consented names, in one atomic write.
+        let mut journal = header.encode();
+        for (&id, name) in &names {
+            journal.extend_from_slice(
+                &JournalEntry::Planned {
+                    id,
+                    name: name.clone(),
+                }
+                .encode(),
+            );
+        }
         let dir = self.state.transfer(&transfer_id);
         let written = create_transfer_dir(&dir)
             .and_then(|()| write_atomic(&dir.join("manifest"), manifest.bytes()))
-            .and_then(|()| write_atomic(&dir.join("journal"), &header.encode()))
+            .and_then(|()| write_atomic(&dir.join("journal"), &journal))
             .and_then(|()| store::sync_dir(&self.state.transfers()));
         if written.is_err() {
             let _ = remove_tree(&dir);
             self.release_root_if_idle();
             return Err(SinkError::Storage);
         }
-        let journal_len = header.encode().len() as u64;
+        let journal_len = journal.len() as u64;
         self.offers.retain(|(id, _)| *id != transfer_id);
         self.transfers.insert(
             transfer_id,
             Transfer {
                 header,
                 journal_len,
+                names,
                 top_dirs: BTreeMap::new(),
                 published: BTreeMap::new(),
                 finished: false,

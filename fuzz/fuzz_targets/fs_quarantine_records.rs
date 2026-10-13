@@ -21,8 +21,9 @@ fuzz_target!(|data: &[u8]| {
         let mut encoded = header.encode();
         for entry in &entries {
             encoded.extend_from_slice(&entry.encode());
-            if let JournalEntry::TopDirectory { name, .. } | JournalEntry::Published { name, .. } =
-                entry
+            if let JournalEntry::Planned { name, .. }
+            | JournalEntry::TopDirectory { name, .. }
+            | JournalEntry::Published { name, .. } = entry
             {
                 assert!(!name.contains(['/', '\\', ':']) && name != "." && name != "..");
             }
