@@ -53,6 +53,9 @@ pub(crate) struct Hooks {
     pub(crate) fail_sync: Cell<bool>,
     /// What the sink last asked of `hold_root`.
     pub(crate) held: Cell<Option<bool>>,
+    /// Names `create_dir` reports as taken, as if something appeared there
+    /// just before.
+    pub(crate) taken: RefCell<std::collections::BTreeSet<String>>,
 }
 
 /// A [`DirDestination`] with [`Hooks`] for races and injected failures.
@@ -106,6 +109,9 @@ impl Destination for Hooked {
         self.inner.exists(dir, name)
     }
     fn create_dir(&self, dir: &DirHandle, name: &str) -> Result<DirHandle, DestError> {
+        if self.hooks.taken.borrow().contains(name) {
+            return Err(DestError::Exists);
+        }
         self.inner.create_dir(dir, name)
     }
     fn open_dir(&self, dir: &DirHandle, name: &str) -> Result<DirHandle, DestError> {
@@ -288,9 +294,13 @@ struct HookedRun {
 
 impl HookedRun {
     fn new(id: u8) -> AnyResult<Self> {
+        Self::with(id, &entries(), &FILES)
+    }
+
+    fn with(id: u8, files: &[Entry], selection: &[u32]) -> AnyResult<Self> {
         let fixture = fixture()?;
-        let manifest = build_manifest(&fixture, [id; 16], &entries(), 3600)?;
-        let consented = Consented::new(&fixture, &manifest, &entries(), &FILES, false, id)?;
+        let manifest = build_manifest(&fixture, [id; 16], files, 3600)?;
+        let consented = Consented::new(&fixture, &manifest, files, selection, false, id)?;
         let (state, dest) = (TempDir::new()?, TempDir::new()?);
         let (destination, hooks) = Hooked::new(DirDestination::open(dest.path())?);
         let mut sink = FsSink::open(
@@ -300,7 +310,7 @@ impl HookedRun {
             SinkConfig::default(),
             time(WALL)?,
         )?;
-        receive_all(&mut sink, &consented, &FILES)?;
+        receive_all(&mut sink, &consented, selection)?;
         Ok(Self {
             state,
             dest,
@@ -502,5 +512,63 @@ fn the_root_is_held_exactly_while_transfers_are_retained() -> TestResult {
     )?;
     assert_eq!(hooks.held.get(), Some(true), "after a restart");
     let _ = consented;
+    Ok(())
+}
+
+/// A top-level directory the user keeps removing: re-created under the
+/// same name, it is not journaled again; under a new name (its name was
+/// taken just before, a race), at most a few times, after which
+/// publication fails with STORAGE instead of growing the journal without
+/// bound.
+#[test]
+fn top_directory_records_are_bounded() -> TestResult {
+    let mut files = vec![dir_entry("d", 0)];
+    for k in 0..8 {
+        files.push(file_entry(&format!("f{k}"), 1, content(10, k)));
+    }
+    let selection: Vec<u32> = (2..=9).collect();
+    let mut run = HookedRun::with(32, &files, &selection)?;
+    let manifest = run.consented.manifest.clone();
+    let transfer_id = *manifest.transfer_id();
+    let top_records = |run: &HookedRun| -> AnyResult<usize> {
+        Ok(run
+            .journal()?
+            .1
+            .iter()
+            .filter(|entry| matches!(entry, JournalEntry::TopDirectory { .. }))
+            .count())
+    };
+    run.sink.publish(&manifest, 2)?;
+    assert_eq!(top_records(&run)?, 1);
+    // Removed and re-created under the same name: no new record.
+    std::fs::remove_dir_all(run.dest.path().join("d"))?;
+    run.sink.publish(&manifest, 3)?;
+    assert!(run.dest.path().join("d").join("f1").exists());
+    assert_eq!(top_records(&run)?, 1);
+    // Removed, and its name taken each time it is re-created: a new name
+    // and a new record, up to the bound.
+    let mut current = "d".to_owned();
+    let mut recorded = 1;
+    for file_id in 4..=9 {
+        std::fs::remove_dir_all(run.dest.path().join(&current))?;
+        run.hooks.taken.borrow_mut().insert(current.clone());
+        let result = run.sink.publish(&manifest, file_id);
+        if result.is_err() {
+            assert_eq!(result, Err(SinkError::Storage));
+            break;
+        }
+        recorded += 1;
+        assert_eq!(top_records(&run)?, recorded);
+        current = run
+            .sink
+            .published_path(&transfer_id, file_id)
+            .and_then(|path| path.first().cloned())
+            .ok_or("path")?;
+    }
+    assert_eq!(
+        recorded,
+        crate::quarantine::codec::MAX_TOP_DIRECTORY_RECORDS
+    );
+    assert_eq!(top_records(&run)?, recorded);
     Ok(())
 }

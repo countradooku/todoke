@@ -23,9 +23,17 @@ const CHECK_LEN: usize = 32;
 const ENTRY_CHECK_LEN: usize = 16;
 /// The most files one transfer can select (§7.3).
 pub(crate) const MAX_SELECTION: usize = 10_000;
-/// The most entries a journal holds: each selected file and each
-/// directory is recorded at most a few times (published, and a top-level
-/// directory created again after the user removed it).
+/// The most `TopDirectory` records per top-level directory: its creation
+/// and up to three re-creations under a new name after the user removed it
+/// and its name was taken. The sink then fails the transfer rather than
+/// record more.
+pub(crate) const MAX_TOP_DIRECTORY_RECORDS: usize = 4;
+/// The most entries a journal holds. The sink writes at most one consented
+/// name per manifest entry, one publication per file,
+/// [`MAX_TOP_DIRECTORY_RECORDS`] per top-level directory, and the end
+/// marker: with at most 10,000 entries, files and directories together,
+/// that is at most 50,001. A journal with more intact entries is damaged
+/// as a whole; it is never cut at the cap.
 pub(crate) const MAX_JOURNAL_ENTRIES: usize = 4 * 20_000;
 /// The most tombstones the list file holds.
 pub(crate) const MAX_TOMBSTONES: usize = 65_536;
@@ -223,8 +231,12 @@ pub fn decode_journal(bytes: &[u8]) -> Result<(JournalHeader, Vec<JournalEntry>,
     };
     let mut entries = Vec::new();
     let mut valid = reader.at;
-    while !reader.rest().is_empty() && entries.len() < MAX_JOURNAL_ENTRIES {
+    while !reader.rest().is_empty() {
         match decode_entry(&mut reader) {
+            // More intact entries than any journal the sink writes: the
+            // whole journal is damaged. Cutting it here would make the
+            // next append truncate the intact entries after the cap.
+            Ok(_) if entries.len() == MAX_JOURNAL_ENTRIES => return Err(Corrupt),
             Ok(entry) => {
                 entries.push(entry);
                 valid = reader.at;
@@ -432,6 +444,44 @@ mod tests {
             decode_journal(&bytes).map(|(_, e, v)| (e.len(), v)),
             Ok((0, valid))
         );
+    }
+
+    /// A journal with more intact entries than the cap is refused as a
+    /// whole: it is never cut there, which would make the next append
+    /// truncate the intact entries after the cap.
+    #[test]
+    fn a_journal_over_the_entry_cap_is_refused_not_cut() -> TestResult {
+        let entry = JournalEntry::Published {
+            id: 5,
+            name: "a.jpg".to_owned(),
+        }
+        .encode();
+        let mut bytes = header().encode();
+        for _ in 0..MAX_JOURNAL_ENTRIES {
+            bytes.extend_from_slice(&entry);
+        }
+        let (_, entries, valid) = decode_journal(&bytes).map_err(|_| "at the cap")?;
+        assert_eq!((entries.len(), valid), (MAX_JOURNAL_ENTRIES, bytes.len()));
+        // A torn entry after the cap is still a torn tail.
+        let mut torn = bytes.clone();
+        torn.extend_from_slice(&entry[..5]);
+        assert_eq!(
+            decode_journal(&torn).map(|(_, e, v)| (e.len(), v)),
+            Ok((MAX_JOURNAL_ENTRIES, bytes.len()))
+        );
+        bytes.extend_from_slice(&entry);
+        assert_eq!(decode_journal(&bytes).map(|_| ()), Err(Corrupt));
+        Ok(())
+    }
+
+    /// What the sink can write stays within the cap: one consented name
+    /// per entry, one publication per file, a bounded number of top-level
+    /// directory records per directory, and the end marker.
+    #[test]
+    fn the_sink_writes_fewer_entries_than_the_cap() {
+        const MAX_ENTRIES: usize = 10_000;
+        let bound = MAX_ENTRIES + MAX_ENTRIES * MAX_TOP_DIRECTORY_RECORDS.max(1) + 1;
+        assert!(bound <= MAX_JOURNAL_ENTRIES, "{bound}");
     }
 
     #[test]

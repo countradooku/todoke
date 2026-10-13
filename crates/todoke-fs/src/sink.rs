@@ -20,7 +20,8 @@ use crate::name::TEMP_PREFIX;
 use crate::name::fold::collision_key;
 use crate::plan::{DestinationPlan, FsProfile};
 use crate::quarantine::codec::{
-    Corrupt, JournalEntry, JournalHeader, decode_journal, decode_tombstones, encode_tombstones,
+    Corrupt, JournalEntry, JournalHeader, MAX_JOURNAL_ENTRIES, MAX_TOP_DIRECTORY_RECORDS,
+    decode_journal, decode_tombstones, encode_tombstones,
 };
 use crate::quarantine::store::{
     self, Slots, StateDir, StateError, create_transfer_dir, hex, read_bounded, remove, remove_tree,
@@ -155,6 +156,11 @@ struct Transfer {
     header: JournalHeader,
     /// Valid journal bytes; appends start here.
     journal_len: u64,
+    /// Entries in the journal (bounded by [`MAX_JOURNAL_ENTRIES`]).
+    journal_entries: usize,
+    /// `TopDirectory` records per top-level directory (bounded by
+    /// [`MAX_TOP_DIRECTORY_RECORDS`]).
+    top_records: BTreeMap<u32, usize>,
     /// The local names the user consented to, by entry ID: every selected
     /// file and the directories on its path (journaled at the Accept).
     names: BTreeMap<u32, String>,
@@ -339,6 +345,8 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         }
         let mut transfer = Transfer {
             journal_len: valid as u64,
+            journal_entries: entries.len(),
+            top_records: BTreeMap::new(),
             names: BTreeMap::new(),
             top_dirs: BTreeMap::new(),
             published: BTreeMap::new(),
@@ -358,6 +366,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
                     transfer.names.insert(id, name);
                 }
                 JournalEntry::TopDirectory { id, name } => {
+                    *transfer.top_records.entry(id).or_default() += 1;
                     transfer.top_dirs.insert(id, name);
                 }
                 JournalEntry::Published { id, name } => {
@@ -611,12 +620,25 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             None if !create => return Err(SinkError::Storage),
             None => {
                 let mut created = None;
+                // The name it had (if the user removed it), then the
+                // consented name, then the next free ones. Once its records
+                // reach the bound, only its last name: the journal never
+                // grows without bound.
                 let local = plan
                     .entry(top)
                     .map(|entry| entry.local().as_str().to_owned());
-                let candidates = local
-                    .into_iter()
-                    .chain(plan.candidates(top).map(|(_, name)| name));
+                let bounded = transfer.top_records.get(&top).copied().unwrap_or(0)
+                    >= MAX_TOP_DIRECTORY_RECORDS;
+                let candidates: Vec<String> = if bounded {
+                    existing.iter().cloned().collect()
+                } else {
+                    existing
+                        .iter()
+                        .cloned()
+                        .chain(local)
+                        .chain(plan.candidates(top).map(|(_, name)| name))
+                        .collect()
+                };
                 for name in candidates {
                     match self.destination.create_dir(root, &name) {
                         Ok(dir) => {
@@ -629,7 +651,10 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
                 }
                 let (dir, name) = created.ok_or(SinkError::Storage)?;
                 self.destination.sync_dir(root).map_err(storage)?;
-                self.append(transfer_id, &JournalEntry::TopDirectory { id: top, name })?;
+                // Journaled only when the name changes.
+                if existing.as_deref() != Some(name.as_str()) {
+                    self.append(transfer_id, &JournalEntry::TopDirectory { id: top, name })?;
+                }
                 dir
             }
         };
@@ -671,13 +696,19 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             .transfers
             .get_mut(transfer_id)
             .ok_or(SinkError::Storage)?;
+        // Never more than a later start would read back.
+        if transfer.journal_entries >= MAX_JOURNAL_ENTRIES {
+            return Err(SinkError::Storage);
+        }
         transfer.journal_len =
             store::append(&path, transfer.journal_len, &entry.encode()).map_err(storage)?;
+        transfer.journal_entries += 1;
         match entry {
             JournalEntry::Planned { id, name } => {
                 transfer.names.insert(*id, name.clone());
             }
             JournalEntry::TopDirectory { id, name } => {
+                *transfer.top_records.entry(*id).or_default() += 1;
                 transfer.top_dirs.insert(*id, name.clone());
             }
             JournalEntry::Published { id, name } => {
@@ -1196,6 +1227,8 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
             Transfer {
                 header,
                 journal_len,
+                journal_entries: names.len(),
+                top_records: BTreeMap::new(),
                 names,
                 top_dirs: BTreeMap::new(),
                 published: BTreeMap::new(),
