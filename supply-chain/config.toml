@@ -240,7 +240,7 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace 
 [[exemptions.hmac]]
 version = "0.13.0"
 criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; raised from safe-to-run to safe-to-deploy on 2026-10-13 because pakery-crypto (code pairing, non-default unaudited-code-pairing feature) uses it at runtime; replace with an audit or imported audit."
+notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; raised from safe-to-run to safe-to-deploy on 2026-10-13 because pakery-crypto (code pairing, non-default unaudited-code-pairing feature) uses it at runtime; since 2026-10-14 todoke-crypto also uses it at runtime for HMAC-BLAKE3 discovery tokens (PROTOCOL §9); replace with an audit or imported audit."
 
 [[exemptions.hybrid-array]]
 version = "0.4.15"
