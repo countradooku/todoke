@@ -1,6 +1,6 @@
 # ADR 0005: Cross-crate consent API and the transfer engine's shape
 
-- **Status:** proposed (needs maintainer acceptance).
+- **Status:** accepted by the maintainer on 2026-10-13.
 - **Date:** 2026-10-13
 - **Scope:** how `todoke-transfer` obtains the right to seal or open file
   content, where the signed `Accept` (`AcceH`) and `DeliveryReceipt` are
