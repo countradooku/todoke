@@ -1,10 +1,37 @@
 //! Segment arithmetic, suites, and bindings.
 
 use super::TestResult;
+use crate::content::keys::{AAD_LEN, CONTEXT_LEN};
 use crate::content::{
-    ContentError, ContentSuite, ContentSuites, EPOCH_SEGMENTS, FileBinding, MAX_FILE_SIZE,
-    MAX_SEGMENT_COUNT, SEGMENT_LEN, SegmentLayout,
+    ContentError, ContentSuite, ContentSuites, EPOCH_SEGMENTS, FILE_KEY_BODY_LEN, FileBinding,
+    MAX_CIPHERTEXT_LEN, MAX_FILE_SIZE, MAX_RESUME_RANGES, MAX_SEGMENT_COUNT, MAX_SLICE_LEN,
+    MAX_TRACKED_RANGES, MIN_CIPHERTEXT_LEN, SEGMENT_LEN, SegmentLayout, TAG_LEN,
 };
+
+/// The limits are the spec's literal numbers, not values derived from
+/// each other, so that changing one fails here.
+#[test]
+fn constants_are_the_spec_values() {
+    // §7.4: 16384-byte segments, at most 67108864 of them for 1 TiB
+    // (§6 max_file_bytes 1099511627776), and a slice of at most 32768
+    // bytes; Chunk content_len is 24..=32784.
+    assert_eq!(SEGMENT_LEN, 16_384);
+    assert_eq!(MAX_FILE_SIZE, 1_099_511_627_776);
+    assert_eq!(MAX_SEGMENT_COUNT, 67_108_864);
+    assert_eq!(MAX_SLICE_LEN, 32_768);
+    assert_eq!((MIN_CIPHERTEXT_LEN, MAX_CIPHERTEXT_LEN), (24, 32_784));
+    // §8: 65536 segments per epoch, a 16-byte tag, the 86-byte FileKey
+    // body, the 26-byte HKDF context, and the 123-byte AAD.
+    assert_eq!(EPOCH_SEGMENTS, 65_536);
+    assert_eq!(TAG_LEN, 16);
+    assert_eq!(FILE_KEY_BODY_LEN, 86);
+    assert_eq!(CONTEXT_LEN, 26);
+    assert_eq!(AAD_LEN, 123);
+    // §7.5: range_count is 0..1024. The per-file range cap is todoke's
+    // (docs/DESIGN.md).
+    assert_eq!(MAX_RESUME_RANGES, 1024);
+    assert_eq!(MAX_TRACKED_RANGES, 4096);
+}
 
 #[test]
 fn segment_counts_and_ranges() -> TestResult {
@@ -94,8 +121,12 @@ fn suite_ids_bits_and_selection() -> TestResult {
     use ContentSuite::{Aes256GcmStream as Aes, XChaCha20Poly1305Stream as XChaCha};
     assert_eq!(ContentSuite::from_id(1), Some(Aes));
     assert_eq!(ContentSuite::from_id(2), Some(XChaCha));
-    for id in [0, 3, 4, 0x0101, u16::MAX] {
-        assert_eq!(ContentSuite::from_id(id), None);
+    for id in 0..=u16::MAX {
+        let parsed = ContentSuite::from_id(id);
+        assert_eq!(
+            parsed.map(ContentSuite::id),
+            (id == 1 || id == 2).then_some(id)
+        );
     }
     assert_eq!((Aes.id(), XChaCha.id()), (1, 2));
     assert_eq!((Aes.nonce_len(), XChaCha.nonce_len()), (12, 24));
