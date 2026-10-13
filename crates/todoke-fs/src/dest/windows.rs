@@ -192,6 +192,29 @@ pub(super) fn publish(
     }
 }
 
+/// Two names of one file share its size, attributes, and creation and
+/// write times. Without a stable identity API (see the module notes) this
+/// is a comparison of those, so a deliberately forged copy could pass; it
+/// only decides whether start-up removes a leftover temporary name, which
+/// this crate created under a secret-derived name.
+pub(super) fn same_file(_: &Handle, dir: &Path, a: &str, b: &str) -> Result<bool, DestError> {
+    let metadata = |name: &str| match std::fs::symlink_metadata(dir.join(name)) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(DestError::from(error)),
+    };
+    let (Some(first), Some(second)) = (metadata(a)?, metadata(b)?) else {
+        return Ok(false);
+    };
+    Ok(first.is_file()
+        && second.is_file()
+        && first.file_attributes() & ATTRIBUTE_REPARSE_POINT == 0
+        && first.file_attributes() == second.file_attributes()
+        && first.file_size() == second.file_size()
+        && first.creation_time() == second.creation_time()
+        && first.last_write_time() == second.last_write_time())
+}
+
 pub(super) fn release(
     handle: &Handle,
     dir: &Path,

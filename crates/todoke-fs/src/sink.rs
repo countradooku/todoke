@@ -624,8 +624,10 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         Ok(())
     }
 
-    /// Removes temporary files a crash left for this transfer's
-    /// unpublished files.
+    /// Removes temporary files a crash left for this transfer: those of
+    /// unpublished files, and the temporary name of a published file when
+    /// it is a second link to that file (its removal failed after a hard
+    /// link); anything else under a published file's temporary name stays.
     fn clean_temporaries(&mut self, transfer_id: &TransferId) {
         let Some(transfer) = self.transfers.get(transfer_id) else {
             return;
@@ -633,18 +635,31 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         if transfer.plan.is_none() {
             return;
         }
-        let pending: Vec<(u32, String)> = transfer
+        let pending: Vec<(u32, String, Option<String>)> = transfer
             .header
             .selection
             .iter()
-            .filter(|id| !transfer.published.contains_key(id))
-            .map(|&id| (id, temp_name(&transfer.header, id)))
+            .map(|&id| {
+                let published = transfer.published.get(&id).cloned();
+                (id, temp_name(&transfer.header, id), published)
+            })
             .collect();
-        for (file_id, temp) in pending {
-            if let Ok(chain) = self.resolve(transfer_id, file_id, false)
-                && let Some(dir) = chain.last()
-            {
-                let _ = self.destination.discard(dir, &temp);
+        for (file_id, temp, published) in pending {
+            let Ok(chain) = self.resolve(transfer_id, file_id, false) else {
+                continue;
+            };
+            let Some(dir) = chain.last() else {
+                continue;
+            };
+            match published {
+                None => {
+                    let _ = self.destination.discard(dir, &temp);
+                }
+                Some(name) => {
+                    if self.destination.same_file(dir, &temp, &name) == Ok(true) {
+                        let _ = self.destination.discard(dir, &temp);
+                    }
+                }
             }
         }
     }
@@ -759,15 +774,25 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         // substitute stays untouched.
         let _ = self.destination.release(dir, staged, &temp);
         let (name, prefix) = committed?;
-        self.destination.sync_dir(dir).map_err(storage)?;
+        // The file is published. It is journaled before any later failure
+        // is returned, so that no resume publishes it a second time.
+        let synced = self.destination.sync_dir(dir);
         drop(chain);
-        self.append(
+        let journaled = self.append(
             &transfer_id,
             &JournalEntry::Published {
                 id: file_id,
                 name: name.clone(),
             },
-        )?;
+        );
+        if journaled.is_err() {
+            // Not durable, but this session must not publish it again.
+            // Its ciphertext and master stay; the transfer fails.
+            if let Some(transfer) = self.transfers.get_mut(&transfer_id) {
+                transfer.published.insert(file_id, name);
+            }
+            return Err(SinkError::Storage);
+        }
         let mime = manifest
             .manifest()
             .entry(file_id)
@@ -783,7 +808,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         }
         let _ = remove(&base.join(format!("s{file_id}")));
         let _ = remove(&base.join(format!("k{file_id}")));
-        Ok(())
+        synced.map_err(storage)
     }
 
     /// Decrypts and verifies every stored segment into `staged`, hashing

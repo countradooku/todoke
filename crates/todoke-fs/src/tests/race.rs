@@ -1,10 +1,16 @@
-//! Races with a local attacker who can write the destination directory:
-//! the temporary file replaced between staging and publication (finding
-//! F1). Publication is bound to the staged file that was hashed, so a
-//! substitute is never published, journaled, or acknowledged, and is left
-//! untouched.
+//! Races with a local attacker who can write the destination directory,
+//! and injected storage failures around publication.
+//!
+//! - The temporary file replaced between staging and publication:
+//!   publication is bound to the staged file that was hashed, so a
+//!   substitute is never published, journaled, or acknowledged, and is
+//!   left untouched.
+//! - A publication that succeeded but whose temporary name could not be
+//!   removed, or whose directory sync failed: it is journaled anyway, so a
+//!   resume never publishes a duplicate, and start-up removes only the
+//!   leftover name.
 
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -27,42 +33,63 @@ pub(crate) enum Plant {
     Link(PathBuf),
 }
 
-/// A [`DirDestination`] that, at the first publication, removes the staged
-/// temporary file by name and plants something else there, as anyone with
-/// write access to the directory could (the name is visible to `readdir`).
-/// `substituted` records whether that worked: on Windows it must not,
-/// because the staged file is held without `FILE_SHARE_DELETE`.
-pub(crate) struct Substituting {
-    inner: DirDestination,
-    plant: Plant,
-    substituted: Rc<Cell<Option<bool>>>,
+/// Behaviour a test switches on in a [`Hooked`] destination.
+#[derive(Default)]
+pub(crate) struct Hooks {
+    /// Planted under the temporary name at the next publication, as
+    /// anyone with write access to the directory could (the name is
+    /// visible to `readdir`).
+    pub(crate) plant: RefCell<Option<Plant>>,
+    /// Whether planting worked: on Windows it must not, because the staged
+    /// file is held without `FILE_SHARE_DELETE`.
+    pub(crate) substituted: Cell<Option<bool>>,
+    /// Publish with a hard link that keeps the temporary name, as the Unix
+    /// link path and Windows do (APFS and ext4 would rename instead).
+    pub(crate) link: Cell<bool>,
+    /// `release` fails without removing the temporary name, as a failing
+    /// `unlinkat` would.
+    pub(crate) fail_release: Cell<bool>,
+    /// `sync_dir` fails.
+    pub(crate) fail_sync: Cell<bool>,
 }
 
-impl Substituting {
-    pub(crate) fn new(inner: DirDestination, plant: Plant) -> (Self, Rc<Cell<Option<bool>>>) {
-        let substituted = Rc::new(Cell::new(None));
+/// A [`DirDestination`] with [`Hooks`] for races and injected failures.
+pub(crate) struct Hooked {
+    inner: DirDestination,
+    hooks: Rc<Hooks>,
+}
+
+impl Hooked {
+    pub(crate) fn new(inner: DirDestination) -> (Self, Rc<Hooks>) {
+        let hooks = Rc::new(Hooks::default());
         (
             Self {
                 inner,
-                plant,
-                substituted: Rc::clone(&substituted),
+                hooks: Rc::clone(&hooks),
             },
-            substituted,
+            hooks,
         )
     }
 
-    fn substitute(&self, path: &std::path::Path) -> bool {
+    /// A destination that plants `plant` at the first publication.
+    pub(crate) fn substituting(inner: DirDestination, plant: Plant) -> (Self, Rc<Hooks>) {
+        let (hooked, hooks) = Self::new(inner);
+        *hooks.plant.borrow_mut() = Some(plant);
+        (hooked, hooks)
+    }
+
+    fn substitute(path: &std::path::Path, plant: &Plant) -> bool {
         if std::fs::remove_file(path).is_err() {
             return false;
         }
-        match &self.plant {
+        match plant {
             Plant::File => std::fs::write(path, b"planted").is_ok(),
             Plant::Link(target) => symlink_file(target, path).is_ok_and(|made| made.is_some()),
         }
     }
 }
 
-impl Destination for Substituting {
+impl Destination for Hooked {
     type Dir = DirHandle;
     type Staged = StagedFile;
     type Reader = std::fs::File;
@@ -95,14 +122,27 @@ impl Destination for Substituting {
         temp: &str,
         name: &str,
     ) -> Result<Atomicity, DestError> {
-        if self.substituted.get().is_none() {
-            let done = self.substitute(&dir.path().join(temp));
-            self.substituted.set(Some(done));
+        if let Some(plant) = self.hooks.plant.borrow_mut().take() {
+            let done = Self::substitute(&dir.path().join(temp), &plant);
+            self.hooks.substituted.set(Some(done));
+        }
+        if self.hooks.link.get() {
+            return match std::fs::hard_link(dir.path().join(temp), dir.path().join(name)) {
+                Ok(()) => Ok(Atomicity::Atomic),
+                Err(error) => Err(DestError::from(error)),
+            };
         }
         self.inner.publish(dir, staged, temp, name)
     }
     fn release(&self, dir: &DirHandle, staged: StagedFile, temp: &str) -> Result<(), DestError> {
+        if self.hooks.fail_release.get() {
+            drop(staged);
+            return Err(DestError::Io(std::io::ErrorKind::Other));
+        }
         self.inner.release(dir, staged, temp)
+    }
+    fn same_file(&self, dir: &DirHandle, a: &str, b: &str) -> Result<bool, DestError> {
+        self.inner.same_file(dir, a, b)
     }
     fn discard(&self, dir: &DirHandle, temp: &str) -> Result<(), DestError> {
         self.inner.discard(dir, temp)
@@ -111,6 +151,9 @@ impl Destination for Substituting {
         self.inner.open_file(dir, name)
     }
     fn sync_dir(&self, dir: &DirHandle) -> Result<(), DestError> {
+        if self.hooks.fail_sync.get() {
+            return Err(DestError::Io(std::io::ErrorKind::Other));
+        }
         self.inner.sync_dir(dir)
     }
     fn root_len(&self) -> usize {
@@ -145,9 +188,9 @@ fn a_temporary_file_replaced_before_publication_is_never_published() -> TestResu
     std::fs::write(outside.path().join("target"), b"outside")?;
     for plant in [Plant::File, Plant::Link(outside.path().join("target"))] {
         let (state, dest) = (TempDir::new()?, TempDir::new()?);
-        let (destination, substituted) =
-            Substituting::new(DirDestination::open(dest.path())?, plant.clone());
-        let mut sink: FsSink<Substituting, SoftwareSealer> = FsSink::open(
+        let (destination, hooks) =
+            Hooked::substituting(DirDestination::open(dest.path())?, plant.clone());
+        let mut sink: FsSink<Hooked, SoftwareSealer> = FsSink::open(
             state.path(),
             destination,
             sealer(7),
@@ -156,7 +199,7 @@ fn a_temporary_file_replaced_before_publication_is_never_published() -> TestResu
         )?;
         receive_all(&mut sink, &consented, &FILES)?;
         let result = sink.publish(&manifest, 6);
-        if substituted.get() != Some(true) {
+        if hooks.substituted.get() != Some(true) {
             if !cfg!(windows) {
                 return Err("the staged file could not be replaced on this platform".into());
             }
@@ -225,5 +268,187 @@ fn a_held_staged_file_cannot_be_renamed_or_deleted() -> TestResult {
     destination.release(&root, staged, ".t")?;
     assert!(!path.exists());
     assert_eq!(std::fs::read(temp.path().join("final"))?, b"payload");
+    Ok(())
+}
+
+/// A sink publishing into a [`Hooked`] destination, with its directories.
+struct HookedRun {
+    state: TempDir,
+    dest: TempDir,
+    hooks: Rc<Hooks>,
+    sink: FsSink<Hooked, SoftwareSealer>,
+    consented: Consented,
+}
+
+impl HookedRun {
+    fn new(id: u8) -> AnyResult<Self> {
+        let fixture = fixture()?;
+        let manifest = build_manifest(&fixture, [id; 16], &entries(), 3600)?;
+        let consented = Consented::new(&fixture, &manifest, &entries(), &FILES, false, id)?;
+        let (state, dest) = (TempDir::new()?, TempDir::new()?);
+        let (destination, hooks) = Hooked::new(DirDestination::open(dest.path())?);
+        let mut sink = FsSink::open(
+            state.path(),
+            destination,
+            sealer(7),
+            SinkConfig::default(),
+            time(WALL)?,
+        )?;
+        receive_all(&mut sink, &consented, &FILES)?;
+        Ok(Self {
+            state,
+            dest,
+            hooks,
+            sink,
+            consented,
+        })
+    }
+
+    fn journal(&self) -> AnyResult<(crate::quarantine::codec::JournalHeader, Vec<JournalEntry>)> {
+        let path = self
+            .state
+            .path()
+            .join("transfers")
+            .join(crate::quarantine::store::hex(
+                self.consented.manifest.transfer_id(),
+            ))
+            .join("journal");
+        let (header, entries, _) = decode_journal(&std::fs::read(path)?).map_err(|_| "journal")?;
+        Ok((header, entries))
+    }
+
+    fn published(&self) -> AnyResult<Vec<u32>> {
+        Ok(self
+            .journal()?
+            .1
+            .iter()
+            .filter_map(|entry| match entry {
+                JournalEntry::Published { id, .. } => Some(*id),
+                _ => None,
+            })
+            .collect())
+    }
+
+    /// Drops the sink (a restart) and opens a plain one on the same state.
+    fn restart(self) -> AnyResult<(TempDir, TempDir, super::sink::Sink, Consented)> {
+        let Self {
+            state,
+            dest,
+            sink,
+            consented,
+            ..
+        } = self;
+        drop(sink);
+        let sink = FsSink::open(
+            state.path(),
+            DirDestination::open(dest.path())?,
+            sealer(7),
+            SinkConfig::default(),
+            time(WALL + 1)?,
+        )?;
+        Ok((state, dest, sink, consented))
+    }
+}
+
+/// A hard link succeeded but the temporary name could not be removed:
+/// publication still succeeds and is journaled, and the next start removes
+/// only the leftover name (a second link to the published file).
+#[test]
+fn a_temporary_name_left_after_a_hard_link_is_journaled_and_cleaned() -> TestResult {
+    let mut run = HookedRun::new(20)?;
+    run.hooks.link.set(true);
+    run.hooks.fail_release.set(true);
+    run.sink.publish(&run.consented.manifest, 6)?;
+    assert_eq!(run.published()?, [6]);
+    let (header, _) = run.journal()?;
+    let temp = run.dest.path().join(crate::sink::temp_name(&header, 6));
+    let published = run.dest.path().join("c.txt");
+    assert_eq!(std::fs::read(&temp)?, content(100, 4), "the leftover link");
+    assert_eq!(std::fs::read(&published)?, content(100, 4));
+    let (_state, dest, mut sink, consented) = run.restart()?;
+    assert!(!temp.exists(), "the leftover name was not removed");
+    assert_eq!(std::fs::read(&published)?, content(100, 4));
+    // A resume finds the file published and publishes nothing again.
+    assert!(sink.published_intact(&consented.manifest, 6));
+    sink.publish(&consented.manifest, 6)?;
+    assert_eq!(
+        super::sink::files_below(dest.path())?,
+        [dest.path().join("c.txt")]
+    );
+    Ok(())
+}
+
+/// Start-up removes the leftover temporary name of a published file only
+/// while it is a link to that file: anything else under it stays.
+#[test]
+fn a_leftover_name_that_is_not_the_published_file_is_kept() -> TestResult {
+    let mut run = HookedRun::new(21)?;
+    run.sink.publish(&run.consented.manifest, 6)?;
+    let (header, _) = run.journal()?;
+    let temp = run.dest.path().join(crate::sink::temp_name(&header, 6));
+    std::fs::write(&temp, b"someone else's")?;
+    let (_state, _dest, _sink, _) = run.restart()?;
+    assert_eq!(std::fs::read(&temp)?, b"someone else's");
+    Ok(())
+}
+
+/// The directory sync after a successful publication failed: the file is
+/// journaled as published before the error is returned, so neither this
+/// session nor a resume publishes it again.
+#[test]
+fn a_failed_directory_sync_after_publication_is_journaled_first() -> TestResult {
+    let mut run = HookedRun::new(22)?;
+    run.hooks.fail_sync.set(true);
+    assert_eq!(
+        run.sink.publish(&run.consented.manifest, 6),
+        Err(SinkError::Storage)
+    );
+    assert_eq!(run.published()?, [6]);
+    run.hooks.fail_sync.set(false);
+    run.sink.publish(&run.consented.manifest, 6)?;
+    let (_state, dest, mut sink, consented) = run.restart()?;
+    assert!(sink.published_intact(&consented.manifest, 6));
+    sink.publish(&consented.manifest, 6)?;
+    assert_eq!(
+        super::sink::files_below(dest.path())?,
+        [dest.path().join("c.txt")]
+    );
+    Ok(())
+}
+
+/// The journal could not record a publication: the error is reported, and
+/// the same session does not publish the file a second time.
+#[cfg(unix)]
+#[test]
+fn a_publication_the_journal_cannot_record_is_not_repeated() -> TestResult {
+    use std::os::unix::fs::PermissionsExt as _;
+    let mut run = HookedRun::new(23)?;
+    let journal = run
+        .state
+        .path()
+        .join("transfers")
+        .join(crate::quarantine::store::hex(
+            run.consented.manifest.transfer_id(),
+        ))
+        .join("journal");
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o400))?;
+    if std::fs::OpenOptions::new()
+        .write(true)
+        .open(&journal)
+        .is_ok()
+    {
+        eprintln!("skipping: this account writes read-only files (root)");
+        return Ok(());
+    }
+    assert_eq!(
+        run.sink.publish(&run.consented.manifest, 6),
+        Err(SinkError::Storage)
+    );
+    run.sink.publish(&run.consented.manifest, 6)?;
+    assert_eq!(
+        super::sink::files_below(run.dest.path())?,
+        [run.dest.path().join("c.txt")]
+    );
+    std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600))?;
     Ok(())
 }

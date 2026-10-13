@@ -176,6 +176,10 @@ impl Destination for DirDestination {
         sys::release(&dir.handle, &dir.path, staged.file, temp)
     }
 
+    fn same_file(&self, dir: &DirHandle, a: &str, b: &str) -> Result<bool, DestError> {
+        sys::same_file(&dir.handle, &dir.path, a, b)
+    }
+
     fn discard(&self, dir: &DirHandle, temp: &str) -> Result<(), DestError> {
         sys::remove_file(&dir.handle, &dir.path, temp)
     }

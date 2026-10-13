@@ -539,14 +539,14 @@ fn engines_share_one_sink() -> TestResult {
 /// substitution itself is impossible and the transfer completes.
 #[test]
 fn a_substituted_temporary_file_fails_the_transfer_without_a_receipt() -> TestResult {
-    use super::race::{Plant, Substituting};
+    use super::race::{Hooked, Plant};
     let fixture = fixture()?;
     let (sources, state, dest) = (TempDir::new()?, TempDir::new()?, TempDir::new()?);
     let files = vec![file_entry("report.txt", 0, content(30_000, 9))];
     let (offer, source) = offer_from_disk(&fixture, sources.path(), &files)?;
     let transfer_id = *offer.transfer_id();
-    let (destination, substituted) =
-        Substituting::new(DirDestination::open(dest.path())?, Plant::File);
+    let (destination, hooks) =
+        Hooked::substituting(DirDestination::open(dest.path())?, Plant::File);
     let sink = FsSink::open(
         state.path(),
         destination,
@@ -566,7 +566,7 @@ fn a_substituted_temporary_file_fails_the_transfer_without_a_receipt() -> TestRe
     let confirmed = has(&link.alice_events, |e| {
         matches!(e, TransferEvent::DeliveryConfirmed { .. })
     });
-    if substituted.get() != Some(true) {
+    if hooks.substituted.get() != Some(true) {
         if !cfg!(windows) {
             return Err("the staged file could not be replaced on this platform".into());
         }

@@ -239,6 +239,16 @@ pub trait Destination {
     /// clean-up.
     fn release(&self, dir: &Self::Dir, staged: Self::Staged, temp: &str) -> Result<(), DestError>;
 
+    /// Whether names `a` and `b` in `dir` are both the same regular file
+    /// (two hard links), without following links. A missing name is not.
+    /// Start-up clean-up uses it to remove a temporary name left as a
+    /// second link to a published file, and nothing else.
+    ///
+    /// # Errors
+    ///
+    /// [`DestError`].
+    fn same_file(&self, dir: &Self::Dir, a: &str, b: &str) -> Result<bool, DestError>;
+
     /// Removes the temporary file `temp` from `dir` if it is there (a
     /// link there is removed, not followed).
     ///

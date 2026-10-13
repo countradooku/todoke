@@ -249,6 +249,14 @@ fn copy_exclusive(dir: &Handle, path: &Path, staged: &File, name: &str) -> Resul
     verify(dir, name, &target, 1)
 }
 
+pub(super) fn same_file(dir: &Handle, _: &Path, a: &str, b: &str) -> Result<bool, DestError> {
+    match rustix::fs::statat(dir, a, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(first) => same(dir, b, &first),
+        Err(Errno::NOENT) => Ok(false),
+        Err(other) => Err(error(other)),
+    }
+}
+
 pub(super) fn release(
     dir: &Handle,
     path: &Path,

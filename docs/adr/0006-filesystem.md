@@ -80,6 +80,14 @@ does not apply and long paths work.
 - *Crash between publication and journaling:* the file is published, the
   journal does not know, and a resume publishes it again under the next
   suffix. Nothing is lost or overwritten; the user may see a duplicate.
+  Failures after a successful rename or link no longer cause this: a
+  temporary name that cannot be removed after a hard link leaves the
+  publication successful (start-up removes that name once it is a second
+  link to the published file, and nothing else under it), and the file is
+  journaled before a failed directory sync is reported. If the journal
+  itself cannot be written, the transfer fails with `STORAGE` and the same
+  session does not publish the file again; only a restart before the
+  journal recovers can still lead to the duplicate.
 
 **Alternatives.** `cap-std`/`cap-fs-ext` 4.0.3 (Bytecode Alliance, used by
 Wasmtime) give the same sandboxing on all three systems without `unsafe` in
