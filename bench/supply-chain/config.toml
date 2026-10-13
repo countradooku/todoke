@@ -100,7 +100,7 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmar
 [[exemptions.cmov]]
 version = "0.5.4"
 criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted on 2026-10-14 for hmac 0.13, which todoke-crypto now uses at runtime (discovery tokens), a development dependency only; replace with an audit or imported audit."
+notes = "Not yet reviewed. Exempted on 2026-10-14 for hmac 0.13, which todoke-crypto uses at runtime (discovery tokens) and this benchmark workspace only in development builds; replace with an audit or imported audit."
 
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
@@ -135,7 +135,7 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 [[exemptions.ctutils]]
 version = "0.4.3"
 criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted on 2026-10-14 for hmac 0.13, which todoke-crypto now uses at runtime (discovery tokens), a development dependency only; replace with an audit or imported audit."
+notes = "Not yet reviewed. Exempted on 2026-10-14 for hmac 0.13, which todoke-crypto uses at runtime (discovery tokens) and this benchmark workspace only in development builds; replace with an audit or imported audit."
 
 [[exemptions.curve25519-dalek]]
 version = "5.0.0"
@@ -225,7 +225,7 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 [[exemptions.hmac]]
 version = "0.13.0"
 criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-crypto (HMAC-BLAKE3 discovery tokens, PROTOCOL §9), a development dependency only; replace with an audit or imported audit."
+notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-crypto (HMAC-BLAKE3 discovery tokens, PROTOCOL §9), which this benchmark workspace uses only in development builds; replace with an audit or imported audit."
 
 [[exemptions.hybrid-array]]
 version = "0.4.15"

@@ -174,25 +174,30 @@ mod lan {
         let body = vec![0x5a; MAX_BODY_LEN];
         let (mut sent, mut acked) = (0_u64, 0_u64);
         while sent < total {
-            while sent - acked >= WINDOW {
-                acked = acknowledged(&session.recv().await?)?;
+            while sent.saturating_sub(acked) >= WINDOW {
+                acked = acknowledged(&session.recv().await?, sent)?;
             }
             let len = usize::try_from((total - sent).min(MAX_BODY_LEN as u64))?;
             session.send(FrameType::CHUNK, &body[..len]).await?;
             sent += len as u64;
         }
         while acked < total {
-            acked = acknowledged(&session.recv().await?)?;
+            acked = acknowledged(&session.recv().await?, sent)?;
         }
         Ok(())
     }
 
-    fn acknowledged(frame: &todoke_crypto::session::Frame) -> AnyResult<u64> {
+    /// The byte count a peer acknowledged; never more than was sent.
+    fn acknowledged(frame: &todoke_crypto::session::Frame, sent: u64) -> AnyResult<u64> {
         let bytes: [u8; 8] = frame.body().try_into()?;
         if frame.frame_type() != FrameType::CHUNK_REQUEST {
             return Err("unexpected frame".into());
         }
-        Ok(u64::from_be_bytes(bytes))
+        let acked = u64::from_be_bytes(bytes);
+        if acked > sent {
+            return Err("the receiver acknowledged more than was sent".into());
+        }
+        Ok(acked)
     }
 
     async fn session_receive<IO: AsyncRead + AsyncWrite + Unpin, T: Timer>(
