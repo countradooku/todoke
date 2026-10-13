@@ -425,6 +425,36 @@ fn transfer_binding_and_bounded_receive() -> TestResult {
     Ok(())
 }
 
+/// `recv_until` handles session records that carry no frame for the
+/// caller (here a `KeyUpdate`) and keeps waiting: the frame behind it is
+/// returned, decrypted under the new key, before the deadline.
+#[test]
+fn bounded_receive_continues_past_session_records() -> TestResult {
+    let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+    let timer = ManualTimer::at(START);
+    let (mut a, mut b) = contact_sessions(&alice, &bob, &mut alice_store, &mut bob_store, &timer)?;
+    timer.advance(Duration::from_secs(2));
+    block_on(a.rekey())??;
+    block_on(a.send(FrameType::CAPABILITIES, b"after rekey"))??;
+    let deadline = START + Duration::from_secs(3);
+    let frame = block_on(b.recv_until(deadline))??.ok_or("frame")?;
+    assert_eq!(frame.body(), b"after rekey");
+    assert!(!b.is_closed());
+    // Only a KeyUpdate waiting: nothing for the caller by the deadline.
+    timer.advance(Duration::from_secs(2));
+    block_on(a.rekey())??;
+    let waiting = b.recv_until(START + Duration::from_secs(5));
+    let advance = async {
+        timer.advance(Duration::from_secs(1));
+    };
+    let (received, ()) = join(waiting, advance)?;
+    assert!(received?.is_none());
+    block_on(a.send(FrameType::CAPABILITIES, b"later"))??;
+    let frame = block_on(b.recv_until(START + Duration::from_secs(6)))??.ok_or("frame")?;
+    assert_eq!(frame.body(), b"later");
+    Ok(())
+}
+
 /// Real QR pairing over the pipe: the displayer offers, the scanner reads
 /// the QR text, the displayer reserves its offer for the incoming Hello,
 /// and both create the contact.
