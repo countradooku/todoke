@@ -490,3 +490,26 @@ portable implementation while `ContentSuites::local` still advertises AES
 environment or appears in a repository workflow or `.cargo/config*` file,
 and its test script covers the environment, a workflow, and a Cargo
 config. No dependency changed.
+
+## Transfer layer dependencies (2026-10-13)
+
+The manifest codec (PROTOCOL §7.1, `todoke_proto::transfer::manifest`)
+must reject names that are not in Unicode NFC. Normalization depends on
+the Unicode Character Database, so todoke uses a library instead of its own
+tables. `todoke-proto` gains its first runtime dependency:
+
+| Package | Published | Why | Notes |
+| --- | --- | --- | --- |
+| `unicode-normalization 0.1.25` | 2025-10-30 | `is_nfc` for manifest names | Latest release. `MIT OR Apache-2.0`. `default-features = false` (no `std` feature; the check needs only `core`/`alloc`). Covered by Mozilla's imported wildcard audit of its publisher (Manish Goregaokar). |
+| `tinyvec 1.13.3` | 2026-09-13 | Dependency of `unicode-normalization` (`alloc` feature) | Latest release. `Zlib OR Apache-2.0 OR MIT`, within the allow list. Imported audits cover only 1.9.0, so it has an exact-version "Not yet reviewed" exemption. |
+
+`ICU4X`'s `icu_normalizer 2.3.0` was the alternative; it pulls in a much
+larger data-provider graph for the same check.
+
+No new license, source, advisory, or duplicate-version exception was
+needed. `cargo vet regenerate exemptions` (root, then inside `fuzz/` and
+`bench/`) added the `tinyvec` exemption to each store (`safe-to-deploy` in
+the root and fuzz stores, `safe-to-run` in `bench/`) and the imported
+`unicode-normalization` audit to each `imports.lock`; the notes follow the
+existing "Not yet reviewed" format. `fuzz/Cargo.lock` and `bench/Cargo.lock`
+gained both packages at the root lock's versions.

@@ -17,7 +17,12 @@
 //! Decoding checks layout only; key validation, signature verification,
 //! decryption, and state machines belong to `todoke-crypto`. The QR payload
 //! (§3.1) carries a secret and lives in `todoke-crypto::pairing`.
-//! Capabilities, transfer, and discovery records are not implemented yet.
+//! The `Capabilities` record and the transfer records of [`transfer`]
+//! (§6, §7): `ManifestStart`/`ManifestPart` and the canonical manifest,
+//! `Accept`/`Reject`, `ChunkRequest`/`Chunk`, `ResumeQuery`/`ResumeStatus`,
+//! `Cancel`/`CancelAck`, `Complete`, and `DeliveryReceipt` (the secret
+//! `FileKey` body is in `todoke-crypto`). Discovery records are not
+//! implemented yet.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
 #![forbid(unsafe_code)]
@@ -26,3 +31,4 @@ pub mod identity;
 pub mod pairing;
 pub mod session;
 pub mod time;
+pub mod transfer;
