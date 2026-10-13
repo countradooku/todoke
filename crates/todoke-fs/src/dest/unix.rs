@@ -131,9 +131,11 @@ pub(super) fn publish(
     temp: &str,
     name: &str,
 ) -> Result<Atomicity, DestError> {
-    // Android's app seccomp policy is not documented to allow renameat2
-    // on every supported release, and a disallowed call kills the process,
-    // so Android starts with the hard link.
+    // Android: bionic declares renameat2 from API level 30 (Android 11),
+    // but whether the app seccomp filter of every supported release allows
+    // the system call is unverified, and a disallowed call kills the
+    // process, so Android starts with the hard link until P16 verifies it
+    // on devices (docs/adr/0006-filesystem.md).
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     match rustix::fs::renameat_with(dir, temp, dir, name, rustix::fs::RenameFlags::NOREPLACE) {
         Ok(()) => return Ok(Atomicity::Atomic),

@@ -61,10 +61,14 @@ does not apply and long paths work.
 - *Exclusive-copy fallback:* nothing is overwritten, but the final name
   exists while the copy runs, and a crash leaves a truncated file there. Only
   filesystems with neither rename-without-replace nor hard links reach it.
-- *Android:* bionic uses `renameat2` only since Android 14, and I could not
-  confirm that the app seccomp policy of every supported release allows it (a
-  disallowed call kills the process). Android therefore starts with the hard
-  link. Verify on devices in P16 and enable `renameat2` where it is allowed.
+- *Android:* bionic declares `renameat2` with `__INTRODUCED_IN(30)`, so the
+  libc wrapper exists from API level 30 (Android 11), not from Android 14 as
+  an earlier draft of this ADR said. Whether the app seccomp filter of every
+  supported release allows the `renameat2` system call is **unverified** (a
+  disallowed call kills the process, and the libc wrapper's existence says
+  nothing about the filter). Android therefore keeps the hard link first.
+  P16 verifies the seccomp question on devices and enables `renameat2` where
+  it is allowed.
 - *Crash between publication and journaling:* the file is published, the
   journal does not know, and a resume publishes it again under the next
   suffix. Nothing is lost or overwritten; the user may see a duplicate.
