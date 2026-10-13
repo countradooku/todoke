@@ -181,7 +181,14 @@ sessions: it keeps them sealed (§8 allows "encrypted local key state"), and a
 resumed transfer whose `FileKey` brings a different master discards that
 file's retained ciphertext. Publication opens the master, decrypts and
 re-verifies every segment through the content layer into the destination's
-temporary file, and checks length and whole-file BLAKE3.
+temporary file, and checks length and whole-file BLAKE3. A key for a file
+the sink already published is refused and creates no sealed master: the
+engine sends none for a file it counts as published, and if it asks again
+because the published file was removed or changed since, the transfer fails
+with `STORAGE` rather than publish nothing and claim delivery. The slot
+stride is checked against real Bao slices of many tree shapes, and through
+a model of the Bao tree that those slices validate, for trees deeper than 20
+levels up to 1 TiB.
 
 The journal (`TDKJ`, versioned, BLAKE3 check values) records the accepted
 selection and expiry, a secret salt from which temporary names are derived,

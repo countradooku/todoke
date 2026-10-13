@@ -1,6 +1,8 @@
 //! Crate tests that span modules, and shared fixtures.
 
 #[cfg(any(unix, windows))]
+mod bounds;
+#[cfg(any(unix, windows))]
 mod dest;
 #[cfg(any(unix, windows))]
 mod e2e;

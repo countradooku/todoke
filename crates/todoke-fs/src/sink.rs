@@ -1260,6 +1260,12 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
         let transfer = self.transfers.get(&transfer_id).ok_or(SinkError::Storage)?;
         if transfer.header.manifest_hash != *binding.manifest_hash()
             || transfer.header.selection.binary_search(&file_id).is_err()
+            // Requirement: no sealed master for a file already published.
+            // The engine sends none for a file it counts as published; one
+            // it asks for (the published file was removed or changed)
+            // cannot be published again under this record, so the
+            // transfer fails rather than claim delivery.
+            || transfer.published.contains_key(&file_id)
         {
             return Err(SinkError::Storage);
         }

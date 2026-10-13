@@ -980,3 +980,42 @@ fn a_journal_without_consented_names_is_discarded() -> TestResult {
     assert!(!harness.transfer_dir(&transfer_id).exists());
     Ok(())
 }
+
+/// A published file that was removed or changed afterwards is not
+/// re-intact, so a resumed engine asks for its key again. The sink refuses
+/// it (no sealed master is created): publishing it again under the same
+/// record would let the receiver claim delivery of a file that is no
+/// longer there, so the transfer fails with STORAGE instead.
+#[test]
+fn a_key_for_a_published_file_is_refused_and_keeps_no_master() -> TestResult {
+    let (mut harness, consented) = setup(33)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    harness.sink()?.publish(&consented.manifest, 6)?;
+    let master = harness.transfer_dir(&transfer_id).join("k6");
+    assert!(!master.exists());
+    std::fs::remove_file(harness.dest.path().join("c.txt"))?;
+    let sink = harness.sink()?;
+    assert!(!sink.published_intact(&consented.manifest, 6));
+    let file = consented.accept.file(6).ok_or("file")?;
+    assert_eq!(
+        sink.record_file_key(&file, &consented.master(6)?),
+        Err(SinkError::Storage)
+    );
+    assert!(!master.exists());
+    let fixture = fixture()?;
+    let other = Consented::new(
+        &fixture,
+        &consented.manifest,
+        &entries(),
+        &FILES,
+        true,
+        0x77,
+    )?;
+    assert_eq!(
+        sink.record_file_key(&file, &other.master(6)?),
+        Err(SinkError::Storage)
+    );
+    assert!(!master.exists());
+    Ok(())
+}

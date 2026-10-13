@@ -193,16 +193,13 @@ impl Run {
         let result = self.harness.sink()?.record_file_key(&accepted, &master);
         if self.model.gone {
             assert_eq!(result, Err(SinkError::Storage));
-        } else if self.model.published.contains(&file_id) && !self.model.sealed.contains(&file_id) {
-            // Published: keys are not needed (the engine never
-            // sends one), but accepting one is harmless.
-            result?;
-            self.model.sealed.insert(file_id);
-            self.model.keyed.insert(file_id);
-            self.model.other_master.remove(&file_id);
-            if other {
-                self.model.other_master.insert(file_id);
-            }
+        } else if self.model.published.contains(&file_id) {
+            // Requirement: a key for an already-published file (honest or
+            // not) is refused and creates no sealed master. The engine
+            // never sends one for a file it counts as published, and a
+            // published file is never published again, so accepting it
+            // would only keep a master at rest for nothing.
+            assert_eq!(result, Err(SinkError::Storage));
         } else {
             result?;
             let changed = self.model.other_master.contains(&file_id) != other
@@ -420,6 +417,17 @@ impl Run {
             expected.insert(path.clone());
         }
         if !self.model.gone {
+            // No sealed master is kept for a published file.
+            for &file_id in &self.model.published {
+                let master = self
+                    .harness
+                    .transfer_dir(&transfer_id)
+                    .join(format!("k{file_id}"));
+                assert!(
+                    !master.exists(),
+                    "a master kept for published file {file_id}"
+                );
+            }
             for &file_id in &self.model.published {
                 let path = self
                     .harness
