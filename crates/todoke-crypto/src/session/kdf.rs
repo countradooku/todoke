@@ -204,6 +204,50 @@ mod tests {
         );
     }
 
+    /// RFC 5869 A.1 and A.3 through the split helpers: Extract gives the
+    /// published PRK (an empty salt acting as 32 zero bytes), Expand fills
+    /// an output of any length up to 255 × 32 bytes, as the content key
+    /// schedule's 7- and 19-byte nonce prefixes need, and refuses longer
+    /// ones; `hkdf_sha256` is Extract then Expand.
+    #[test]
+    fn split_hkdf_matches_rfc5869() -> TestResult {
+        let ikm = [0x0b; 22];
+        let salt: Vec<u8> = (0..=0x0c).collect();
+        let info: Vec<u8> = (0xf0..=0xf9).collect();
+        for (salt, info, prk, okm) in [
+            (
+                salt.as_slice(),
+                info.as_slice(),
+                "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+            ),
+            (
+                &[][..],
+                &[][..],
+                "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04",
+                "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8",
+            ),
+        ] {
+            let derived = hkdf_sha256_extract(salt, &ikm).map_err(|_| "extract")?;
+            assert_eq!(hex::encode(*derived), prk);
+            let mut output = [0; 42];
+            hkdf_sha256_expand(&derived, info, &mut output).map_err(|_| "expand")?;
+            assert_eq!(hex::encode(output), okm);
+            let combined = hkdf_sha256(salt, &ikm, info).map_err(|_| "hkdf")?;
+            assert_eq!(combined.as_slice(), &output[..32]);
+        }
+        assert_eq!(
+            *hkdf_sha256_extract(&[], &ikm).map_err(|_| "extract")?,
+            *hkdf_sha256_extract(&[0; 32], &ikm).map_err(|_| "extract")?
+        );
+        let prk = [7; 32];
+        let mut longest = vec![0; 255 * 32];
+        assert_eq!(hkdf_sha256_expand(&prk, b"", &mut longest), Ok(()));
+        let mut too_long = vec![0; 255 * 32 + 1];
+        assert_eq!(hkdf_sha256_expand(&prk, b"", &mut too_long), Err(KdfError));
+        Ok(())
+    }
+
     #[test]
     fn confirmation_binds_every_input() {
         let base = ratchet_confirmation(
