@@ -17,8 +17,10 @@
 //! - The staged file is created without `FILE_SHARE_DELETE` and its handle
 //!   is held from creation until it is released, so while the sink writes,
 //!   hashes, and publishes it, nobody can rename, delete, or replace the
-//!   temporary name (nor, after the hard link, the final name: both are
-//!   names of the one held file).
+//!   temporary name. The final name is not pinned this way: NTFS lets
+//!   another link of a held file be deleted (and so replaced). After the
+//!   link it is compared with the temporary name (`same_file`), and a
+//!   mismatch is [`DestError::Replaced`].
 //! - Publication is `CreateHardLinkW` (fails if the name exists), then the
 //!   handle is closed and the temporary name removed; filesystems without
 //!   hard links (FAT, exFAT) get an exclusive copy, read from the held
@@ -185,9 +187,13 @@ pub(super) fn publish(
     name: &str,
 ) -> Result<Atomicity, DestError> {
     // `temp` is pinned to `staged` by the held handle (no
-    // FILE_SHARE_DELETE), so the link is to the file that was hashed.
+    // FILE_SHARE_DELETE), so the link is to the file that was hashed. The
+    // new name is not pinned (NTFS lets another link of a held file be
+    // deleted), so it is compared with `temp` afterwards; see `same_file`
+    // for what that comparison can and cannot tell.
     match std::fs::hard_link(dir.join(temp), dir.join(name)) {
-        Ok(()) => Ok(Atomicity::Atomic),
+        Ok(()) if same_file(handle, dir, temp, name)? => Ok(Atomicity::Atomic),
+        Ok(()) => Err(DestError::Replaced),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(DestError::Exists),
         Err(_) => {
             // FAT and exFAT have no hard links; some network shares refuse
@@ -209,9 +215,11 @@ pub(super) fn publish(
 
 /// Two names of one file share its size, attributes, and creation and
 /// write times. Without a stable identity API (see the module notes) this
-/// is a comparison of those, so a deliberately forged copy could pass; it
-/// only decides whether start-up removes a leftover temporary name, which
-/// this crate created under a secret-derived name.
+/// is a comparison of those, so a copy forged to match them could pass. It
+/// decides whether start-up removes a leftover temporary name (one this
+/// crate created under a secret-derived name), and, right after a
+/// publication's hard link, whether the final name is still the held file:
+/// a substitute put there in between that does not match is refused.
 pub(super) fn same_file(_: &Handle, dir: &Path, a: &str, b: &str) -> Result<bool, DestError> {
     let metadata = |name: &str| match std::fs::symlink_metadata(dir.join(name)) {
         Ok(metadata) => Ok(Some(metadata)),

@@ -68,9 +68,10 @@
 //! - **Bound to the verified file:** the staged file stays open from
 //!   creation to publication, and publication requires the final name to
 //!   be that file (same device and inode on Unix; on Windows the handle is
-//!   held without `FILE_SHARE_DELETE`, so the name cannot be replaced), so a
-//!   file substituted under the temporary name is never published,
-//!   journaled, or acknowledged.
+//!   held without `FILE_SHARE_DELETE`, so the temporary name cannot be
+//!   replaced, and the final name is compared with it after the hard link
+//!   by size, attributes, and times), so a file substituted under the
+//!   temporary name is never published, journaled, or acknowledged.
 //! - **No overwrite:** files and directories are created exclusively;
 //!   publication uses rename-without-replace, a hard link, or, on
 //!   filesystems with neither (FAT, exFAT, some network shares), an
