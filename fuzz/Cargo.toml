@@ -21,6 +21,9 @@ libfuzzer-sys = "=0.4.13"
 # module only with its gate's feature as well as `--cfg fuzzing`.
 todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["unaudited-code-pairing", "insecure-content-without-accept"] }
 todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
+# The receiver's name mapping, quarantine record codecs, and content-type
+# detection (no gate feature; its fuzzing module touches no filesystem).
+todoke-fs = { path = "../crates/todoke-fs", version = "0.1.0" }
 
 [[bin]]
 name = "proto_device_binding"
@@ -186,6 +189,27 @@ bench = false
 [[bin]]
 name = "crypto_consent_receipt"
 path = "fuzz_targets/crypto_consent_receipt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fs_name_mapping"
+path = "fuzz_targets/fs_name_mapping.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fs_quarantine_records"
+path = "fuzz_targets/fs_quarantine_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fs_content_type"
+path = "fuzz_targets/fs_content_type.rs"
 test = false
 doc = false
 bench = false

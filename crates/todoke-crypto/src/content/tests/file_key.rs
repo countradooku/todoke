@@ -135,3 +135,31 @@ fn masters_are_fresh_comparable_and_redacted() -> TestResult {
     assert!(!debug.contains("165") && !debug.contains("a5"), "{debug}");
     Ok(())
 }
+
+#[test]
+fn masters_seal_and_open_only_under_their_context() -> TestResult {
+    use crate::identity::sealing::{SealError, Sealer, SoftwareSealer, StorageKey};
+
+    let storage = SoftwareSealer::new(StorageKey::generate()?);
+    let blob = master().seal(&storage, b"context")?;
+    // The sealed form never contains the master in the clear.
+    assert!(!blob.windows(MASTER.len()).any(|window| window == MASTER));
+    let opened = FileMaster::open_sealed(&storage, b"context", &blob)?;
+    assert!(opened.ct_eq(&master()));
+    assert_eq!(
+        FileMaster::open_sealed(&storage, b"other", &blob).map(|_| ()),
+        Err(SealError)
+    );
+    let other = SoftwareSealer::new(StorageKey::generate()?);
+    assert_eq!(
+        FileMaster::open_sealed(&other, b"context", &blob).map(|_| ()),
+        Err(SealError)
+    );
+    // A sealed value of the wrong length is not a master.
+    let short = storage.seal(b"context", &MASTER[..31])?;
+    assert_eq!(
+        FileMaster::open_sealed(&storage, b"context", &short).map(|_| ()),
+        Err(SealError)
+    );
+    Ok(())
+}

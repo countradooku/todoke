@@ -12,7 +12,7 @@
 //! | --- | --- | --- |
 //! | [`ContentSuite`], [`ContentSuites`] | Suite IDs 1 (AES-256-GCM STREAM) and 2 (XChaCha20-Poly1305 STREAM), this device's advertisement, and the §6 selection rule | §6 |
 //! | [`SegmentLayout`], [`Segment`] | 16384-byte logical segments, epochs of 65536 segments, the final flag | §7.4, §8 |
-//! | [`FileMaster`], key schedule (private) | Fresh 32-byte master per file; per-epoch key and nonce prefix by HKDF-SHA-256; STREAM BE32 nonces; the 123-byte AAD | §8 |
+//! | [`FileMaster`], key schedule (private) | Fresh 32-byte master per file, sealed for local storage only through a [`Sealer`](crate::identity::Sealer) ([`FileMaster::seal`]); per-epoch key and nonce prefix by HKDF-SHA-256; STREAM BE32 nonces; the 123-byte AAD | §8 |
 //! | [`outboard`], [`write_outboard`] | BLAKE3 root and Bao 0.13.1 outboard tree of a source file | §7.1, §7.4 |
 //! | [`ContentSealer`] | Sender: extract the canonical Bao slice, check it against the manifest root (source mutation), then seal it | §7.4, §8 |
 //! | [`ContentOpener`], [`VerifiedSegment`] | Receiver: authenticate, then strictly verify the Bao slice against the root | §7.4, §8 |

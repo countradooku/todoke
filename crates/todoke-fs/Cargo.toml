@@ -10,3 +10,37 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+todoke-proto.workspace = true
+# Never enable a gate feature here (unaudited-suite-0001,
+# unaudited-code-pairing, insecure-content-without-accept): this is a
+# shipped graph, and scripts/ci/deny-exceptions-dev-only.sh checks it.
+todoke-crypto.workspace = true
+todoke-transfer = { path = "../todoke-transfer", version = "0.1.0" }
+# Whole-file BLAKE3 before publication (§7.7) and source hashing.
+blake3.workspace = true
+# NFD and NFC for collision keys and local names.
+unicode-normalization.workspace = true
+zeroize.workspace = true
+
+# openat-family calls without unsafe code in this crate: O_NOFOLLOW,
+# O_EXCL, renameat2(RENAME_NOREPLACE) / renameatx_np(RENAME_EXCL),
+# linkat, unlinkat, fsync (docs/adr/0006-filesystem.md). Windows uses
+# the standard library only.
+# The secret salt of each transfer's temporary file names.
+[target.'cfg(any(unix, windows))'.dependencies]
+getrandom.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"] }
+
+# Tests run real suite 0x0001 sessions to obtain verified Accepts (the
+# only source of AcceptedFile) and drive the transfer engine end to end;
+# development builds only, as in todoke-transfer.
+[dev-dependencies]
+todoke-crypto = { workspace = true, features = ["unaudited-suite-0001"] }
+futures-io.workspace = true
+# A valid ML-KEM-768 public credential for test device bindings.
+libcrux-ml-kem.workspace = true
+proptest.workspace = true

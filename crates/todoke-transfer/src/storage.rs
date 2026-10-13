@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use std::io::{Cursor, Read, Seek};
 
 use todoke_crypto::consent::{CanonicalManifest, VerifiedAccept};
-use todoke_crypto::content::{SEGMENT_LEN, VerifiedSegment, outboard};
+use todoke_crypto::content::{AcceptedFile, FileMaster, SEGMENT_LEN, VerifiedSegment, outboard};
 use todoke_crypto::identity::Ed25519PublicKey;
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::TransferId;
@@ -161,6 +161,30 @@ pub trait ReceiveSink {
         &mut self,
         manifest: &CanonicalManifest,
         accept: &VerifiedAccept,
+    ) -> Result<(), SinkError>;
+
+    /// Keeps file `file`'s master for [`Self::publish`]. Called once per
+    /// selected file and session, when the file's `FileKey` has passed the
+    /// consent gate and before any of its segments is revalidated or
+    /// stored; not called for a file an earlier session already published.
+    ///
+    /// A sink that keeps the master beyond this call must hold it sealed
+    /// (§8: local master storage is sealed by the platform's secret
+    /// storage, and inactive masters should stay sealed rather than open in
+    /// memory) and delete it with the transfer's other temporary data
+    /// ([`Self::tombstone`], [`Self::finish`], [`Self::revoke_sender`]).
+    /// `file` is this session's consent for the file: it authorizes opening
+    /// the sink's own verified ciphertext of that file for publication, and
+    /// nothing else.
+    ///
+    /// # Errors
+    ///
+    /// [`SinkError::Storage`]; the transfer then fails with the
+    /// transfer-scoped `STORAGE` error (§12).
+    fn record_file_key(
+        &mut self,
+        file: &AcceptedFile,
+        master: &FileMaster,
     ) -> Result<(), SinkError>;
 
     /// The stored content ciphertext of a retained segment, for
@@ -492,6 +516,18 @@ impl ReceiveSink for MemorySink {
         transfer.sender = *manifest.sender();
         transfer.expires_at = manifest.expires_at();
         transfer.selection = accept.selection().to_vec();
+        Ok(())
+    }
+
+    fn record_file_key(
+        &mut self,
+        _file: &AcceptedFile,
+        _master: &FileMaster,
+    ) -> Result<(), SinkError> {
+        // Segments are kept in plaintext here, so the master is not needed.
+        if self.failing {
+            return Err(SinkError::Storage);
+        }
         Ok(())
     }
 

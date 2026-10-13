@@ -7,7 +7,7 @@
 use core::time::Duration;
 
 use todoke_crypto::consent::{CanonicalManifest, VerifiedAccept};
-use todoke_crypto::content::VerifiedSegment;
+use todoke_crypto::content::{AcceptedFile, FileMaster, VerifiedSegment};
 use todoke_crypto::identity::{Ed25519PublicKey, KeyStore};
 use todoke_proto::session::{ErrorCode, ErrorScope};
 use todoke_proto::time::UnixTime;
@@ -20,12 +20,14 @@ use crate::{
     SendSource, SinkError, SinkRefusal, TransferEngine, TransferEvent,
 };
 
-/// A [`MemorySink`] whose reads of retained segments fail (`reads`), or
-/// whose publication fails with `publish`.
+/// A [`MemorySink`] whose reads of retained segments fail (`reads`),
+/// whose publication fails with `publish`, or that cannot keep file keys
+/// (`keys`).
 struct Failing {
     sink: MemorySink,
     reads: bool,
     publish: Option<SinkError>,
+    keys: bool,
 }
 
 impl ReceiveSink for Failing {
@@ -55,6 +57,17 @@ impl ReceiveSink for Failing {
         accept: &VerifiedAccept,
     ) -> Result<(), SinkError> {
         self.sink.record_accept(manifest, accept)
+    }
+
+    fn record_file_key(
+        &mut self,
+        file: &AcceptedFile,
+        master: &FileMaster,
+    ) -> Result<(), SinkError> {
+        if self.keys {
+            return Err(SinkError::Storage);
+        }
+        self.sink.record_file_key(file, master)
     }
 
     fn retained_segment(
@@ -237,6 +250,7 @@ fn a_failed_read_of_retained_data_fails_only_that_transfer() -> TestResult {
         sink: MemorySink::new(),
         reads: true,
         publish: None,
+        keys: false,
     })?;
     assert_eq!(
         errors,
@@ -277,6 +291,7 @@ fn a_failed_publication_sends_no_complete_or_receipt() -> TestResult {
                 sink: MemorySink::new(),
                 reads: false,
                 publish: Some(error),
+                keys: false,
             })?;
         assert_eq!(errors, vec![(ErrorScope::Transfer(transfer_id), wire)]);
         assert!(!closed);
@@ -293,5 +308,38 @@ fn a_failed_publication_sends_no_complete_or_receipt() -> TestResult {
             TransferEvent::Completed { .. } | TransferEvent::FileCompleted { .. }
         )));
     }
+    Ok(())
+}
+
+/// A sink that cannot keep a file's master (§8) fails that transfer with
+/// `STORAGE` before any segment is requested or stored.
+#[test]
+fn a_sink_that_cannot_keep_a_file_key_fails_only_that_transfer() -> TestResult {
+    let (transfer_id, errors, bob_events, alice_events, kinds, closed, stored) =
+        run_into(Failing {
+            sink: MemorySink::new(),
+            reads: false,
+            publish: None,
+            keys: true,
+        })?;
+    assert_eq!(
+        errors,
+        vec![(ErrorScope::Transfer(transfer_id), ErrorCode::STORAGE)]
+    );
+    assert!(!closed);
+    assert!(!kinds.contains(&todoke_proto::session::FrameType::CHUNK_REQUEST));
+    assert!(failed(
+        &bob_events,
+        &transfer_id,
+        FailureCode::Storage,
+        Party::Local
+    ));
+    assert!(failed(
+        &alice_events,
+        &transfer_id,
+        FailureCode::Storage,
+        Party::Peer
+    ));
+    assert_eq!(stored, 0);
     Ok(())
 }
