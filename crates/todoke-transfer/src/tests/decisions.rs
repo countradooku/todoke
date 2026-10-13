@@ -437,6 +437,46 @@ fn a_chunk_at_accept_expiry_is_discarded() -> TestResult {
     Ok(())
 }
 
+/// A `FileKey` that arrives once the Accept has expired, before a timer pass
+/// has expired the transfer, is discarded without being decoded and expires
+/// the transfer, as a late chunk does. The `FileKey` here carries an invalid
+/// content suite, so decoding it would be reported as MALFORMED.
+#[test]
+fn a_file_key_at_accept_expiry_is_discarded_without_decoding() -> TestResult {
+    let fixture = fixture()?;
+    for (elapsed, expired) in [(599, false), (600, true)] {
+        let (mut link, transfer_id, _) = offered(&fixture, &standard_specs(), 600, (16, 16))?;
+        link.b.accept(&transfer_id, vec![2], link.now)?;
+        run_until(&mut link, true, FrameType::FILE_KEY)?;
+        let OutgoingFrame::Frame { body, .. } = link.to_b.front_mut().ok_or("file key")? else {
+            return Err("not a frame".into());
+        };
+        // content_suite: transfer_id 16 + accept_hash 32 + file_id 4.
+        body[52..54].copy_from_slice(&[0xff, 0xff]);
+        link.now = START + Duration::from_secs(elapsed);
+        let delivered = link.deliver(true).ok_or("deliver")?;
+        if expired {
+            delivered?;
+            assert!(has(&link.b_events, |e| matches!(
+                e,
+                TransferEvent::Expired {
+                    direction: Direction::Incoming,
+                    ..
+                }
+            )));
+        } else {
+            assert!(
+                matches!(
+                    &delivered,
+                    Err(EngineError::Session(failure)) if failure.code == FailureCode::Malformed
+                ),
+                "{delivered:?}"
+            );
+        }
+    }
+    Ok(())
+}
+
 /// §7.4: a chunk must answer its request exactly. The right request ID
 /// with another (selected, keyed) file or another index is `STATE`, not
 /// an integrity failure after trying to open it.

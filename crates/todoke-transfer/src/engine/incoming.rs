@@ -566,12 +566,25 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         Ok(())
     }
 
-    pub(super) fn on_file_key(&mut self, body: &[u8], _now: Duration) -> Handled {
+    pub(super) fn on_file_key(&mut self, body: &[u8], now: Duration) -> Handled {
         // §7.2: no FileKey is processed before this side's Accept. Decide
         // from the transfer ID alone; the body (and its master) is decoded
         // only for a transfer whose consent gate is open.
         let transfer_id =
             FileKeyBody::peek_transfer_id(body).map_err(|_| violation(FailureCode::Malformed))?;
+        // Consent ends at the Accept's expiry (§7.3): a FileKey arriving at or
+        // after it is discarded without decoding and expires the transfer,
+        // exactly like a late chunk, even before a timer pass has run.
+        if let Some(Incoming::Receiving(receiving)) = self.incoming.get(&transfer_id)
+            && receiving.gate.proof().is_some()
+            && now >= receiving.expiry
+        {
+            self.expire_incoming(&transfer_id);
+            if let Some(ended) = self.ended_mut(&transfer_id) {
+                ended.late.take(LateKind::FileKey);
+            }
+            return Ok(());
+        }
         let receiving = match self.incoming.get_mut(&transfer_id) {
             Some(Incoming::Receiving(receiving)) if receiving.gate.proof().is_some() => receiving,
             None
