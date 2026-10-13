@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use proptest::prelude::*;
 use todoke_transfer::{ReceiveSink, SinkError};
 
-use super::sink::{Harness, files_below};
+use super::sink::{Harness, files_below, read_at_rest};
 use super::support::*;
 use super::*;
 use crate::{Durability, SinkConfig};
@@ -387,7 +387,7 @@ impl Run {
         let contents = self.consented().contents.clone();
         // At rest: never the plaintext of a file.
         for path in files_below(self.harness.state.path())? {
-            let bytes = std::fs::read(&path)?;
+            let bytes = read_at_rest(self.harness.state.path(), &path)?;
             for content in contents.values().filter(|c| c.len() >= 64) {
                 assert!(
                     !bytes

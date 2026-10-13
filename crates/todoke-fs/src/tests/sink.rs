@@ -86,6 +86,17 @@ pub(crate) fn files_below(path: &Path) -> AnyResult<Vec<PathBuf>> {
     Ok(out)
 }
 
+/// The bytes of `path`, a file below the state directory `state`. The
+/// open sink's lock file is checked to be empty instead of read: Windows
+/// byte-range locks are mandatory, so reading it fails while it is held.
+pub(crate) fn read_at_rest(state: &Path, path: &Path) -> AnyResult<Vec<u8>> {
+    if path == state.join("lock") {
+        assert_eq!(std::fs::metadata(path)?.len(), 0, "the lock file is empty");
+        return Ok(Vec::new());
+    }
+    Ok(std::fs::read(path)?)
+}
+
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
     !needle.is_empty()
         && haystack
@@ -143,7 +154,7 @@ fn a_transfer_is_quarantined_as_ciphertext_then_published() -> TestResult {
     let stored = files_below(harness.state.path())?;
     assert_ne!(stored, Vec::<PathBuf>::new());
     for path in &stored {
-        let bytes = std::fs::read(path)?;
+        let bytes = read_at_rest(harness.state.path(), path)?;
         for (file_id, content) in &consented.contents {
             assert!(!contains(&bytes, content), "file {file_id} in plaintext");
         }
