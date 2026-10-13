@@ -484,6 +484,146 @@ mod tests {
         assert!(bound <= MAX_JOURNAL_ENTRIES, "{bound}");
     }
 
+    /// An entry with an intact check value but fields the sink never
+    /// writes, built byte by byte.
+    fn raw_entry(kind: u8, id: u32, name: &[u8]) -> Vec<u8> {
+        let mut out = vec![kind];
+        out.extend_from_slice(&id.to_be_bytes());
+        let len = u16::try_from(name.len()).unwrap_or(u16::MAX);
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(name);
+        let value = check(ENTRY_DOMAIN, &out);
+        out.extend_from_slice(&value[..ENTRY_CHECK_LEN]);
+        out
+    }
+
+    /// Every entry kind needs its own ID range and a safe local name; an
+    /// entry that fails ends the journal there, like a torn one, whatever
+    /// follows it.
+    #[test]
+    fn entries_with_invalid_fields_end_the_journal() -> TestResult {
+        let good = JournalEntry::Planned {
+            id: 1,
+            name: "a".to_owned(),
+        };
+        assert_eq!(raw_entry(4, 1, b"a"), good.encode());
+        assert_eq!(raw_entry(3, 0, b""), JournalEntry::Finished.encode());
+        let alpha = "\u{1F82}".repeat(85);
+        let bad: Vec<Vec<u8>> = vec![
+            raw_entry(1, 0, b"a"),
+            raw_entry(2, 0, b"a"),
+            raw_entry(4, 0, b"a"),
+            raw_entry(3, 0, b"x"),
+            raw_entry(3, 1, b""),
+            raw_entry(0, 1, b"a"),
+            raw_entry(5, 1, b"a"),
+            raw_entry(2, 1, b""),
+            raw_entry(2, 1, &[0xff, 0xfe]),
+            raw_entry(2, 1, b".."),
+            raw_entry(2, 1, b"a/b"),
+            raw_entry(2, 1, b"x."),
+            raw_entry(2, 1, b"CON"),
+            raw_entry(2, 1, "COM\u{B9}".as_bytes()),
+            raw_entry(2, 1, b".todoke-0123.part"),
+            raw_entry(2, 1, b"$MFT"),
+            raw_entry(2, 1, "a\u{202E}b".as_bytes()),
+            raw_entry(2, 1, "a\u{200B}b".as_bytes()),
+            raw_entry(2, 1, "e\u{301}".as_bytes()),
+            raw_entry(2, 1, alpha.as_bytes()),
+            raw_entry(2, 1, "n".repeat(256).as_bytes()),
+        ];
+        let mut prefix = header().encode();
+        prefix.extend_from_slice(&good.encode());
+        for entry in &bad {
+            let mut bytes = prefix.clone();
+            bytes.extend_from_slice(entry);
+            bytes.extend_from_slice(&good.encode());
+            let (_, entries, valid) = decode_journal(&bytes).map_err(|_| "decode")?;
+            assert_eq!(entries, core::slice::from_ref(&good), "{entry:?}");
+            assert_eq!(valid, prefix.len(), "{entry:?}");
+        }
+        // The longest safe name is accepted.
+        let mut bytes = prefix.clone();
+        bytes.extend_from_slice(&raw_entry(2, 1, "n".repeat(255).as_bytes()));
+        let (_, entries, _) = decode_journal(&bytes).map_err(|_| "decode")?;
+        assert_eq!(entries.len(), 2);
+        Ok(())
+    }
+
+    /// The header's version, selection bound, and order are checked even
+    /// under an intact check value.
+    #[test]
+    fn header_fields_are_checked_under_an_intact_check_value() -> TestResult {
+        let resealed = |mut body: Vec<u8>| {
+            body.truncate(body.len() - CHECK_LEN);
+            let value = check(HEADER_DOMAIN, &body);
+            body.extend_from_slice(&value);
+            body
+        };
+        let mut version = header().encode();
+        version[5] = 2;
+        assert_eq!(decode_journal(&resealed(version)).map(|_| ()), Err(Corrupt));
+        let mut magic = header().encode();
+        magic[3] = b'X';
+        assert_eq!(decode_journal(&resealed(magic)).map(|_| ()), Err(Corrupt));
+        let mut largest = header();
+        largest.selection = (1..=10_000).collect();
+        let (decoded, _, _) = decode_journal(&largest.encode()).map_err(|_| "decode")?;
+        assert_eq!(decoded.selection.len(), MAX_SELECTION);
+        largest.selection = (1..=10_001).collect();
+        assert_eq!(decode_journal(&largest.encode()).map(|_| ()), Err(Corrupt));
+        let mut decreasing = header();
+        decreasing.selection = vec![5, 1];
+        assert_eq!(
+            decode_journal(&decreasing.encode()).map(|_| ()),
+            Err(Corrupt)
+        );
+        Ok(())
+    }
+
+    /// A tombstone list with an intact check value but a wrong magic,
+    /// version, count, or order is damaged.
+    #[test]
+    fn tombstone_fields_are_checked_under_an_intact_check_value() {
+        let raw = |magic: &[u8; 4], version: u16, count: u32, ids: &[([u8; 16], u64)]| {
+            let mut out = magic.to_vec();
+            out.extend_from_slice(&version.to_be_bytes());
+            out.extend_from_slice(&count.to_be_bytes());
+            for (id, until) in ids {
+                out.extend_from_slice(id);
+                out.extend_from_slice(&until.to_be_bytes());
+            }
+            let value = check(TOMBSTONE_DOMAIN, &out);
+            out.extend_from_slice(&value);
+            out
+        };
+        let list = [([1; 16], 5)];
+        assert_eq!(raw(b"TDKT", 1, 1, &list), encode_tombstones(&list));
+        assert_eq!(decode_tombstones(&raw(b"TDKX", 1, 1, &list)), Err(Corrupt));
+        assert_eq!(decode_tombstones(&raw(b"TDKT", 2, 1, &list)), Err(Corrupt));
+        assert_eq!(decode_tombstones(&raw(b"TDKT", 1, 2, &list)), Err(Corrupt));
+        assert_eq!(
+            decode_tombstones(&raw(b"TDKT", 1, 2, &[([1; 16], 5), ([1; 16], 6)])),
+            Err(Corrupt)
+        );
+        let ids = |count: usize| -> Vec<([u8; 16], u64)> {
+            (0..count)
+                .map(|n| {
+                    let mut id = [0; 16];
+                    id[8..].copy_from_slice(&(n as u64).to_be_bytes());
+                    (id, 1)
+                })
+                .collect()
+        };
+        let most = ids(MAX_TOMBSTONES);
+        assert_eq!(
+            decode_tombstones(&encode_tombstones(&most)).map(|list| list.len()),
+            Ok(MAX_TOMBSTONES)
+        );
+        let over = ids(MAX_TOMBSTONES + 1);
+        assert_eq!(decode_tombstones(&encode_tombstones(&over)), Err(Corrupt));
+    }
+
     #[test]
     fn tombstones_round_trip() -> TestResult {
         let list = vec![([1; 16], 5), ([2; 16], u64::MAX)];

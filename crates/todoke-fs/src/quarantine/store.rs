@@ -330,6 +330,7 @@ impl Slots {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::{TempDir, TestResult};
 
     #[test]
     fn hex_round_trips() {
@@ -369,5 +370,149 @@ mod tests {
             max_ciphertext_len(0),
             MIN_CIPHERTEXT_LEN.max(8 + 64 * 15 + 16)
         );
+    }
+
+    /// Slot indices stop at the segment count, and slot records at the
+    /// stride and the shortest ciphertext, so no write lands outside the
+    /// space the quota reserved.
+    #[test]
+    fn slots_refuse_indices_and_lengths_outside_their_bounds() -> TestResult {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("s1");
+        let size = 3 * u64::from(SEGMENT_LEN) + 5;
+        let layout = SegmentLayout::new(size)?;
+        assert_eq!(layout.count(), 4);
+        let mut slots = Slots::open(&path, &layout, true)?;
+        let stride = max_ciphertext_len(size);
+        let longest = vec![7; stride];
+        slots.write(3, &longest)?;
+        assert_eq!(slots.read(3)?, Some(longest.clone()));
+        let invalid = |result: io::Result<()>| {
+            result.is_err_and(|error| error.kind() == io::ErrorKind::InvalidInput)
+        };
+        assert!(invalid(slots.write(4, &longest)));
+        assert!(slots.read(4).is_err());
+        assert!(invalid(slots.clear(4)));
+        assert!(invalid(slots.write(0, &vec![7; stride + 1])));
+        assert!(invalid(slots.write(0, &[7; MIN_CIPHERTEXT_LEN - 1])));
+        slots.write(0, &[9; MIN_CIPHERTEXT_LEN])?;
+        assert_eq!(slots.read(0)?, Some(vec![9; MIN_CIPHERTEXT_LEN]));
+        // Nothing was written past the last slot.
+        let expected = 3 * (stride as u64 + 2) + 2 + stride as u64;
+        assert_eq!(std::fs::metadata(&path)?.len(), expected);
+        assert_eq!(Slots::reservation(&layout), 4 * (stride as u64 + 2));
+        Ok(())
+    }
+
+    /// A slot whose stored length is zero, too short, too long, or longer
+    /// than the file reads as absent; clearing past the end of the file
+    /// writes nothing.
+    #[test]
+    fn damaged_slots_read_as_absent() -> TestResult {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("s1");
+        let size = 2 * u64::from(SEGMENT_LEN);
+        let layout = SegmentLayout::new(size)?;
+        let stride = max_ciphertext_len(size);
+        let mut slots = Slots::open(&path, &layout, true)?;
+        assert_eq!(slots.read(1)?, None);
+        slots.clear(1)?;
+        assert_eq!(std::fs::metadata(&path)?.len(), 0);
+        slots.write(0, &[1; MIN_CIPHERTEXT_LEN])?;
+        let lengths = [0, MIN_CIPHERTEXT_LEN - 1, stride + 1, u16::MAX.into()];
+        for len in lengths {
+            let mut bytes = std::fs::read(&path)?;
+            let len = u16::try_from(len)?;
+            bytes[..2].copy_from_slice(&len.to_be_bytes());
+            std::fs::write(&path, &bytes)?;
+            assert_eq!(slots.read(0)?, None, "{len}");
+        }
+        // A length the file cannot hold: a torn write.
+        let mut bytes = (u16::try_from(stride)?).to_be_bytes().to_vec();
+        bytes.extend_from_slice(&[1; 10]);
+        std::fs::write(&path, &bytes)?;
+        assert_eq!(slots.read(0)?, None);
+        // A length cut in half.
+        std::fs::write(&path, [0])?;
+        assert_eq!(slots.read(0)?, None);
+        slots.clear(0)?;
+        assert_eq!(slots.read(0)?, None);
+        Ok(())
+    }
+
+    /// State records over 64 MiB are refused as damaged without being
+    /// read; up to it they are read whole.
+    #[test]
+    fn oversized_records_are_refused_unread() -> TestResult {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("journal");
+        let file = File::create(&path)?;
+        file.set_len(MAX_READ + 1)?;
+        assert_eq!(
+            read_bounded(&path).map_err(|error| error.kind()),
+            Err(io::ErrorKind::InvalidData)
+        );
+        file.set_len(MAX_READ)?;
+        assert_eq!(read_bounded(&path)?.len(), 64 << 20);
+        assert_eq!(
+            read_bounded(&temp.path().join("missing")).map_err(|error| error.kind()),
+            Err(io::ErrorKind::NotFound)
+        );
+        Ok(())
+    }
+
+    /// Appends first cut a torn tail; atomic writes leave no temporary.
+    #[test]
+    fn appends_cut_the_torn_tail_first() -> TestResult {
+        let temp = TempDir::new()?;
+        let path = temp.path().join("journal");
+        write_atomic(&path, b"abcdef")?;
+        assert_eq!(append(&path, 3, b"XY")?, 5);
+        assert_eq!(std::fs::read(&path)?, b"abcXY");
+        write_atomic(&path, b"new")?;
+        assert_eq!(std::fs::read(&path)?, b"new");
+        assert!(!temp.path().join("journal.tmp").exists());
+        Ok(())
+    }
+
+    /// Removing a missing file or tree is fine; any other failure is
+    /// reported.
+    #[test]
+    fn removal_reports_failures_other_than_absence() -> TestResult {
+        let temp = TempDir::new()?;
+        remove(&temp.path().join("missing"))?;
+        remove_tree(&temp.path().join("missing"))?;
+        std::fs::create_dir(temp.path().join("dir"))?;
+        assert!(remove(&temp.path().join("dir")).is_err());
+        std::fs::write(temp.path().join("file"), b"x")?;
+        assert!(remove_tree(&temp.path().join("file")).is_err());
+        assert!(temp.path().join("file").exists());
+        Ok(())
+    }
+
+    /// The quarantine is private: directories `0700`, files `0600`.
+    #[cfg(unix)]
+    #[test]
+    fn state_files_are_private() -> TestResult {
+        use std::os::unix::fs::PermissionsExt as _;
+        let temp = TempDir::new()?;
+        let state = StateDir::open(temp.path()).map_err(|error| format!("{error:?}"))?;
+        let transfer = state.transfer(&[1; 16]);
+        create_transfer_dir(&transfer)?;
+        write_atomic(&transfer.join("journal"), b"x")?;
+        let layout = SegmentLayout::new(1)?;
+        Slots::open(&transfer.join("s1"), &layout, true)?;
+        for (path, mode) in [
+            (state.transfers(), 0o700),
+            (transfer.clone(), 0o700),
+            (temp.path().join("lock"), 0o600),
+            (transfer.join("journal"), 0o600),
+            (transfer.join("s1"), 0o600),
+        ] {
+            let actual = std::fs::metadata(&path)?.permissions().mode() & 0o777;
+            assert_eq!(actual & 0o077, 0, "{actual:o}");
+            assert_eq!(actual & !mode, 0, "{actual:o}");
+        }
+        Ok(())
     }
 }
