@@ -46,13 +46,18 @@ todoke-proto.workspace = true
 # Bao 0.13.1 combined slice encoding for verified segments (PROTOCOL §7.4,
 # docs/adr/0003-bao.md).
 bao = "=0.13.1"
-blake3.workspace = true
+# `traits-preview`: the digest traits HMAC-BLAKE3 needs (discovery tokens,
+# PROTOCOL §1, §9).
+blake3 = { workspace = true, features = ["traits-preview"] }
 # Canonical Ed25519 point-encoding check required alongside strict dalek verification (§1).
 curve25519-dalek = "=5.0.0"
 ed25519-dalek.workspace = true
 # Async I/O traits only (no runtime) for the session adapter.
 futures-io.workspace = true
 getrandom.workspace = true
+# RFC 2104 HMAC over BLAKE3 for discovery tokens (§9); libcrux has no
+# HMAC-BLAKE3.
+hmac.workspace = true
 # AES-256-GCM for content suite 1 (PROTOCOL §8, docs/adr/0004-content-aead.md).
 libcrux-aes = "=0.0.10"
 libcrux-chacha20poly1305.workspace = true

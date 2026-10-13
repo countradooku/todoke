@@ -24,6 +24,9 @@ todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
 # The receiver's name mapping, quarantine record codecs, and content-type
 # detection (no gate feature; its fuzzing module touches no filesystem).
 todoke-fs = { path = "../crates/todoke-fs", version = "0.1.0" }
+# The mDNS sighting check (no gate feature; no socket is opened).
+todoke-discovery = { path = "../crates/todoke-discovery", version = "0.1.0" }
+todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0" }
 
 [[bin]]
 name = "proto_device_binding"
@@ -105,6 +108,20 @@ bench = false
 [[bin]]
 name = "crypto_session_record_stream"
 path = "fuzz_targets/crypto_session_record_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_discovery_record"
+path = "fuzz_targets/proto_discovery_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "discovery_sighting"
+path = "fuzz_targets/discovery_sighting.rs"
 test = false
 doc = false
 bench = false

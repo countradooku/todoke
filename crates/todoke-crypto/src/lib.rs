@@ -32,7 +32,10 @@
 //! non-default `insecure-content-without-accept` feature aside). The
 //! [`consent`] module holds the canonical manifest and its hash, and issues
 //! and verifies the signed `Accept` and `DeliveryReceipt` against the
-//! session they belong to (§7.1–§7.3, §7.7). The transfer state machines
+//! session they belong to (§7.1–§7.3, §7.7). The [`discovery`] module
+//! derives each available contact's rotating discovery tokens and Hello
+//! locators (§4.4, §9) into a table that holds no key material. The
+//! transfer state machines
 //! are in the `todoke-transfer` crate.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
@@ -40,6 +43,7 @@
 
 pub mod consent;
 pub mod content;
+pub mod discovery;
 pub mod identity;
 pub mod pairing;
 mod rng;

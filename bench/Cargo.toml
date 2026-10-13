@@ -36,11 +36,17 @@ broken_intra_doc_links = "deny"
 [dev-dependencies]
 # The benchmarks seal and open content without a signed Accept, which only
 # this feature allows (never in a shipped graph; see todoke-crypto's manifest).
-todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
+# The LAN benchmark runs suite 0x0001 sessions, which only
+# `unaudited-suite-0001` allows (PROTOCOL §16; never in a shipped graph).
+todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept", "unaudited-suite-0001"] }
 zeroize = "=1.9.1"
 
 [[bench]]
 name = "content"
+harness = false
+
+[[bench]]
+name = "lan"
 harness = false
 
 # Default features off: no plotting or rayon; reports are text only. Not on
@@ -48,3 +54,9 @@ harness = false
 # dependency would need a C compiler for that target.
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
+# The LAN benchmark: TCP links, sessions, and their runtime.
+futures-io = { version = "=0.3.34", default-features = false, features = ["std"] }
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
+todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0" }
+tokio = { version = "=1.53.2", default-features = false, features = ["net", "time", "rt"] }

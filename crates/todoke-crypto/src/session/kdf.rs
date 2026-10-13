@@ -84,16 +84,12 @@ pub(crate) fn psk_next(
     hkdf_sha256(handshake_hash, psk, RATCHET_INFO)
 }
 
-/// Discovery (§9) is not implemented; it will derive its state from the
-/// committed PSK with these two functions, which the fixtures pin now.
+/// Discovery (§9, [`crate::discovery`]) derives its state from the
+/// committed PSK with these two functions.
 ///
 /// `pair_secret = HKDF(empty, psk_next, "todoke/v1/pair-secret\0", 32)`; an
 /// empty salt means 32 zero bytes (RFC 5869). Derived only from committed
 /// state, so it changes on every committed session (§4.4).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by discovery (§9), not built yet")
-)]
 pub(crate) fn pair_secret(
     committed_psk: &[u8; KEY_LEN],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
@@ -102,10 +98,6 @@ pub(crate) fn pair_secret(
 }
 
 /// `pair_key = HKDF(empty, pair_secret, "todoke/v1/discovery-key\0", 32)`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed by discovery (§9), not built yet")
-)]
 pub(crate) fn discovery_key(
     pair_secret: &[u8; KEY_LEN],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {

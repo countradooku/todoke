@@ -152,10 +152,20 @@ version = "1.19.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.fastrand]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (random query delays); imported audits cover only 2.3.0; replace with an audit or imported audit."
+
 [[exemptions.find-msvc-tools]]
 version = "0.1.14"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.flume]]
+version = "0.12.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (channels to its daemon thread); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
 [[exemptions.futures-io]]
 version = "0.3.34"
@@ -226,6 +236,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13: new in the fuzz graph with th
 version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.if-addrs]]
+version = "0.15.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (interface enumeration); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
 [[exemptions.itertools]]
 version = "0.13.0"
@@ -342,10 +357,20 @@ version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (Linux system call definitions used by rustix); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
 
+[[exemptions.lock_api]]
+version = "0.4.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for spin (flume); isrg, mozilla, and bytecode-alliance trust its publisher (Amanieu) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.log]]
 version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.mdns-sd]]
+version = "0.21.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-discovery (mDNS responder and browser, PROTOCOL §9; logging feature off); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
 [[exemptions.memchr]]
 version = "2.8.3"
@@ -356,6 +381,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.mio]]
+version = "1.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-transport (tokio's I/O event loop: epoll, kqueue, IOCP); mozilla and bytecode-alliance trust its publisher (Thomasdezeeuw) instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.num-bigint]]
 version = "0.4.8"
@@ -447,6 +477,11 @@ version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.scopeguard]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for lock_api (flume); isrg, mozilla, and bytecode-alliance trust its publisher (Amanieu) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.serde]]
 version = "1.0.229"
 criteria = "safe-to-deploy"
@@ -487,6 +522,21 @@ version = "0.10.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.socket-pktinfo]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (receiving interface of each packet); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.socket2]]
+version = "0.6.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-transport (dual-stack LAN listener: IPV6_V6ONLY off, SO_REUSEADDR on Unix); mozilla and bytecode-alliance trust its publisher (Thomasdezeeuw) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.spin]]
+version = "0.9.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for flume; no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -502,6 +552,11 @@ version = "1.13.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (dependency of unicode-normalization, the PROTOCOL §7.1 NFC check on manifest names); imported audits cover only 1.9.0; replace with an audit or imported audit."
 
+[[exemptions.tokio]]
+version = "1.53.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-transport (LAN TCP and timers; features net, time, rt); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.typenum]]
 version = "1.20.1"
 criteria = "safe-to-deploy"
@@ -516,6 +571,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.wasi]]
+version = "0.11.1+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for mio on WASI targets, which todoke does not ship; isrg, mozilla, and bytecode-alliance trust its publisher (alexcrichton) instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.wasm-bindgen]]
 version = "0.2.129"

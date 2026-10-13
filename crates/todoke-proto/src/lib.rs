@@ -21,12 +21,14 @@
 //! (§6, §7): `ManifestStart`/`ManifestPart` and the canonical manifest,
 //! `Accept`/`Reject`, `ChunkRequest`/`Chunk`, `ResumeQuery`/`ResumeStatus`,
 //! `Cancel`/`CancelAck`, `Complete`, and `DeliveryReceipt` (the secret
-//! `FileKey` body is in `todoke-crypto`). Discovery records are not
-//! implemented yet.
+//! `FileKey` body is in `todoke-crypto`). The [`discovery`] records
+//! (§9): `DiscoveryRecord`, its mDNS TXT string, and the mDNS instance
+//! label.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
 #![forbid(unsafe_code)]
 
+pub mod discovery;
 pub mod identity;
 pub mod pairing;
 pub mod session;
