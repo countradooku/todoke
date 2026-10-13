@@ -2,9 +2,11 @@
 
 #[cfg(any(unix, windows))]
 mod dest;
+#[cfg(any(unix, windows))]
+mod lifecycle;
 mod plan;
 #[cfg(any(unix, windows))]
-mod sink;
+pub(crate) mod sink;
 #[cfg(any(unix, windows))]
 pub(crate) mod support;
 
