@@ -89,7 +89,14 @@ impl Device {
 }
 
 /// Alice scans Bob's QR code; both end up with each other as contacts.
+/// Bounded: a stalled pairing fails the test instead of hanging it.
 pub(crate) async fn paired() -> AnyResult<(Device, Device)> {
+    tokio::time::timeout(core::time::Duration::from_secs(60), pair())
+        .await
+        .map_err(|_| "pairing over loopback stalled")?
+}
+
+async fn pair() -> AnyResult<(Device, Device)> {
     let mut alice = Device::new(0x41)?;
     let mut bob = Device::new(0x42)?;
     let offers = PairingOffers::new();

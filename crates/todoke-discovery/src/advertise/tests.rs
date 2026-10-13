@@ -54,6 +54,9 @@ async fn the_contact_record_is_advertised_under_an_epoch_label() -> TestResult {
     assert_eq!(Some(next.record), next_table.advertisement(&bob.key()));
     assert_ne!(next.record, paired.record);
     assert_eq!(plan.labels(), vec![paired.label]);
+    // R1: the old table is not used past its epoch.
+    let stale = advertiser.plan(&table, None, time(boundary)?, SECOND * 901, &mut random);
+    assert_eq!(stale.paired, None);
     Ok(())
 }
 

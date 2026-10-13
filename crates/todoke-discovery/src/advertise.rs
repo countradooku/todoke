@@ -128,8 +128,9 @@ impl Advertiser {
         self.stranger.is_some()
     }
 
-    /// What to advertise at `wall` / `mono`, given the contacts in `table`
-    /// (which must be current). `priority`, if it is in the table, gets
+    /// What to advertise at `wall` / `mono`, given the contacts in `table`.
+    /// A table built for another epoch than `wall`'s advertises nothing
+    /// paired; rebuild it at each epoch and after each committed session. `priority`, if it is in the table, gets
     /// every other slot: a device the user is about to send to or expects
     /// a file from.
     pub fn plan(
@@ -154,6 +155,10 @@ impl Advertiser {
         mono: Duration,
         random: &mut impl Random,
     ) -> Option<Advertisement> {
+        // A table for another epoch would advertise an old token (§9).
+        if table.is_stale(wall) {
+            return None;
+        }
         let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
         if contacts.is_empty() {
             return None;

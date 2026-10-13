@@ -2,14 +2,21 @@
 //!
 //! Each [`Sighting`] is matched against the current [`DiscoveryTable`]
 //! when it arrives: a paired-mode record that matches no available contact
-//! is dropped at once and never stored, so a flood of fake instances cannot
-//! push real peers out. A matching sighting is kept per contact (at most
-//! [`MAX_INSTANCES_PER_CONTACT`], least recently seen first out), and a
-//! stranger-mode sighting only while stranger browsing is on, in a pool of
-//! [`MAX_STRANGERS`]. Every entry expires [`CACHE_LIFETIME`] after it was
-//! last seen (§9: cached data MUST expire within 120 seconds), and
-//! sightings beyond [`MAX_SIGHTINGS_PER_SECOND`] are dropped unmatched
-//! (§9: matching is rate-limited).
+//! is dropped at once and never stored, so random fake instances cannot
+//! push real peers out. A matching sighting is kept per contact, at most
+//! [`MAX_INSTANCES_PER_CONTACT`]: the longest-known live instances stay and
+//! a newcomer is dropped while they are full, and candidates come out
+//! longest-known first. A pair token is public within its epoch, so anyone
+//! can copy a contact's record under other addresses; an instance that was
+//! there first is not displaced by copies that come later, and the
+//! authenticated session rejects whatever answers at a copied address.
+//! Stranger-mode sightings are kept only while stranger browsing is on, in
+//! a pool of [`MAX_STRANGERS`] (newest first: a device that just started
+//! pairing is new). Every entry expires [`CACHE_LIFETIME`] after it was last
+//! seen (§9: cached data MUST expire within 120 seconds). At most
+//! [`MAX_SIGHTINGS_PER_SECOND`] matching sightings are stored or refreshed
+//! each second (§9: matching is rate-limited); records that match nothing
+//! cost one table lookup and use none of that budget.
 //!
 //! A match is a candidate filter, not authentication (§9): every candidate
 //! goes through a full authenticated session.
@@ -29,7 +36,7 @@ pub const CACHE_LIFETIME: Duration = Duration::from_secs(120);
 pub const MAX_INSTANCES_PER_CONTACT: usize = 4;
 /// Stranger-mode instances kept while stranger browsing is on.
 pub const MAX_STRANGERS: usize = 32;
-/// Sightings matched per second; the rest are dropped.
+/// Matching sightings stored or refreshed per second; the rest are dropped.
 pub const MAX_SIGHTINGS_PER_SECOND: u32 = 64;
 
 /// What happened to a sighting.
@@ -38,6 +45,8 @@ pub enum Observed {
     /// It matches a contact (or, for a stranger record, stranger browsing
     /// is on) and was stored or refreshed.
     Kept,
+    /// It matches a contact whose instances are full of longer-known ones.
+    Full,
     /// It is one of this device's own advertisements.
     Own,
     /// A paired record that matches no available contact, or a stranger
@@ -47,14 +56,17 @@ pub enum Observed {
     RateLimited,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 struct Entry {
     sighting: Sighting,
+    /// When this label was first seen (it stays while it is refreshed).
+    first: Duration,
+    /// When it was last seen.
     seen: Duration,
 }
 
 /// A candidate peer: a contact or stranger token with its untrusted
-/// addresses, most recently seen first.
+/// addresses, longest known first.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Reachable {
     addresses: Vec<std::net::SocketAddr>,
@@ -90,7 +102,7 @@ impl core::fmt::Debug for Reachable {
 
 /// Recent sightings, bounded (see the module notes). Times are a monotonic
 /// clock the caller keeps.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Directory {
     contacts: BTreeMap<Ed25519PublicKey, VecDeque<Entry>>,
     strangers: VecDeque<Entry>,
@@ -98,6 +110,17 @@ pub struct Directory {
     own: Vec<InstanceLabel>,
     window: Duration,
     in_window: u32,
+}
+
+/// Devices, labels, and addresses are left out (§14.2).
+impl core::fmt::Debug for Directory {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Directory")
+            .field("contacts", &self.contacts.len())
+            .field("strangers", &self.strangers.len())
+            .field("stranger_browsing", &self.stranger_browsing)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Directory {
@@ -149,30 +172,33 @@ impl Directory {
         if self.own.contains(sighting.label()) {
             return Observed::Own;
         }
-        if !self.admit(now) {
-            return Observed::RateLimited;
-        }
-        let entry = |sighting| Entry {
-            sighting,
-            seen: now,
-        };
         match sighting.record().mode() {
             DiscoveryMode::Paired => {
                 let devices = table.candidates(sighting.record());
                 if devices.is_empty() {
                     return Observed::Unmatched;
                 }
+                if !self.admit(now) {
+                    return Observed::RateLimited;
+                }
+                let mut outcome = Observed::Full;
                 for device in devices {
                     let entries = self.contacts.entry(device).or_default();
-                    replace(entries, entry(sighting.clone()), MAX_INSTANCES_PER_CONTACT);
+                    if keep_oldest(entries, &sighting, now) {
+                        outcome = Observed::Kept;
+                    }
                 }
-                Observed::Kept
+                self.contacts.retain(|_, entries| !entries.is_empty());
+                outcome
             }
             DiscoveryMode::Stranger => {
                 if !self.stranger_browsing {
                     return Observed::Unmatched;
                 }
-                replace(&mut self.strangers, entry(sighting), MAX_STRANGERS);
+                if !self.admit(now) {
+                    return Observed::RateLimited;
+                }
+                keep_newest(&mut self.strangers, sighting, now, MAX_STRANGERS);
                 Observed::Kept
             }
         }
@@ -234,21 +260,53 @@ impl Directory {
     }
 }
 
-/// Inserts `entry`, replacing an entry with the same label, evicting the
-/// least recently seen beyond `max`.
-fn replace(entries: &mut VecDeque<Entry>, entry: Entry, max: usize) {
-    entries.retain(|existing| existing.sighting.label() != entry.sighting.label());
-    entries.push_front(entry);
+/// Refreshes `sighting`'s entry if its label is known; otherwise adds it
+/// if there is room after dropping expired entries. Returns whether it is
+/// stored. Live entries are never displaced by a newcomer.
+fn keep_oldest(entries: &mut VecDeque<Entry>, sighting: &Sighting, now: Duration) -> bool {
+    entries.retain(|entry| now.saturating_sub(entry.seen) < CACHE_LIFETIME);
+    if let Some(entry) = entries
+        .iter_mut()
+        .find(|entry| entry.sighting.label() == sighting.label())
+    {
+        entry.sighting = sighting.clone();
+        entry.seen = now;
+        return true;
+    }
+    if entries.len() >= MAX_INSTANCES_PER_CONTACT {
+        return false;
+    }
+    entries.push_back(Entry {
+        sighting: sighting.clone(),
+        first: now,
+        seen: now,
+    });
+    true
+}
+
+/// Inserts `sighting`, replacing an entry with the same label (keeping when
+/// it was first seen), evicting the least recently seen beyond `max`.
+fn keep_newest(entries: &mut VecDeque<Entry>, sighting: Sighting, now: Duration, max: usize) {
+    let first = entries
+        .iter()
+        .find(|entry| entry.sighting.label() == sighting.label())
+        .map_or(now, |entry| entry.first);
+    entries.retain(|existing| existing.sighting.label() != sighting.label());
+    entries.push_front(Entry {
+        sighting,
+        first,
+        seen: now,
+    });
     entries.truncate(max);
 }
 
-/// The addresses of the live entries, most recently seen first, without
+/// The addresses of the live entries, longest known first, without
 /// duplicates.
 fn reachable<'a>(entries: impl Iterator<Item = &'a Entry>, now: Duration) -> Option<Reachable> {
     let mut live: Vec<&Entry> = entries
         .filter(|entry| now.saturating_sub(entry.seen) < CACHE_LIFETIME)
         .collect();
-    live.sort_by_key(|entry| core::cmp::Reverse(entry.seen));
+    live.sort_by_key(|entry| entry.first);
     let mut addresses = Vec::new();
     for entry in live {
         for address in entry.sighting.addresses() {

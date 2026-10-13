@@ -76,7 +76,7 @@ impl Sighting {
         if port == 0 {
             return Err(Dropped::Port);
         }
-        let mut kept: Vec<SocketAddr> = Vec::with_capacity(MAX_ADDRESSES);
+        let mut kept: Vec<SocketAddr> = Vec::new();
         for (ip, interface) in addresses {
             let address = match ip {
                 IpAddr::V4(v4) => SocketAddr::from((v4, port)),
@@ -91,16 +91,16 @@ impl Sighting {
             };
             if policy.check_peer(address).is_ok() && !kept.contains(&address) {
                 kept.push(address);
-                if kept.len() == MAX_ADDRESSES {
-                    break;
-                }
             }
         }
         if kept.is_empty() {
             return Err(Dropped::NoAddress);
         }
-        // Stable order: the same answer always gives the same candidates.
-        kept.sort();
+        // Whatever order the answer listed them in: private IPv4 first, then
+        // unique-local IPv6, then link-local, each in address order. The
+        // same set of addresses always gives the same candidates.
+        kept.sort_by_key(|address| (preference(address), *address));
+        kept.truncate(MAX_ADDRESSES);
         Ok(Self {
             label,
             record,
@@ -134,6 +134,17 @@ impl fmt::Debug for Sighting {
             .field("record", &self.record)
             .field("addresses", &self.addresses.len())
             .finish_non_exhaustive()
+    }
+}
+
+/// Lower is tried first: addresses on a routed private network before
+/// link-local ones, which work only on the interface they were seen on.
+fn preference(address: &SocketAddr) -> u8 {
+    match address {
+        SocketAddr::V4(v4) if v4.ip().is_link_local() => 2,
+        SocketAddr::V4(_) => 0,
+        SocketAddr::V6(v6) if v6.ip().is_unicast_link_local() => 3,
+        SocketAddr::V6(_) => 1,
     }
 }
 

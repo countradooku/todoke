@@ -181,6 +181,42 @@ fn addresses_are_bounded_deduplicated_and_ordered() -> TestResult {
     sorted.sort();
     sorted.dedup();
     assert_eq!(sorted, sighting.addresses());
+    // The lowest four of all forty, not the first four listed.
+    assert_eq!(
+        sighting.addresses().first(),
+        Some(&SocketAddr::from(([192, 168, 1, 1], PORT)))
+    );
+    Ok(())
+}
+
+/// R1: the order of the answer's addresses does not decide which are kept;
+/// private IPv4 comes before unique-local and link-local IPv6.
+#[test]
+fn addresses_are_chosen_by_kind_not_by_answer_order() -> TestResult {
+    let value = record()?.txt_value();
+    let good: &[(&str, Option<&[u8]>)] = &[("v1", Some(value.as_bytes()))];
+    let mut addresses: Vec<(IpAddr, u32)> = (1..=4)
+        .map(|n| (IpAddr::from(Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, n)), 3))
+        .collect();
+    addresses.push((IpAddr::from(Ipv4Addr::new(10, 1, 2, 3)), 1));
+    addresses.push(("fd00::7".parse::<IpAddr>()?, 1));
+    let forwards = check(&fullname(LABEL), PORT, addresses.clone(), good)?;
+    addresses.reverse();
+    let backwards = check(&fullname(LABEL), PORT, addresses, good)?;
+    assert_eq!(forwards.addresses(), backwards.addresses());
+    assert_eq!(
+        forwards.addresses().first(),
+        Some(&SocketAddr::from(([10, 1, 2, 3], PORT)))
+    );
+    assert_eq!(
+        forwards.addresses().get(1),
+        Some(&SocketAddr::V6(SocketAddrV6::new(
+            "fd00::7".parse()?,
+            PORT,
+            0,
+            0
+        )))
+    );
     Ok(())
 }
 

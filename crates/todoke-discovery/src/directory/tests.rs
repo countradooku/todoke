@@ -116,10 +116,11 @@ async fn entries_expire_and_say_goodbye() -> TestResult {
     Ok(())
 }
 
-/// Many instances claiming one contact: only the most recent few are kept,
-/// most recent first; the same label refreshes rather than adds.
+/// R1: copies of a contact's (public) record under other labels and
+/// addresses cannot displace the instance that was there first; it stays
+/// first among the candidates, and the copies beyond the bound are dropped.
 #[tokio::test]
-async fn instances_per_contact_are_bounded() -> TestResult {
+async fn copies_of_a_record_never_displace_the_first_instance() -> TestResult {
     let (alice, bob) = paired().await?;
     let table = alice.table(WALL)?;
     let record = bob
@@ -127,20 +128,77 @@ async fn instances_per_contact_are_bounded() -> TestResult {
         .advertisement(&alice.key())
         .ok_or("record")?;
     let mut directory = Directory::new();
-    for n in 0..10_u8 {
-        let now = Duration::from_secs(100 + u64::from(n) * 2);
-        directory.observe(sighting(&label(n.into())?, &record, 10 + n)?, &table, now);
+    assert_eq!(
+        directory.observe(sighting(&label(0)?, &record, 10)?, &table, SECOND * 100),
+        Observed::Kept
+    );
+    let mut outcomes = Vec::new();
+    for n in 1..10_u8 {
+        let now = Duration::from_secs(100 + u64::from(n));
+        outcomes.push(directory.observe(
+            sighting(&label(n.into())?, &record, 10 + n)?,
+            &table,
+            now,
+        ));
     }
-    let found = directory.contact(&bob.key(), SECOND * 200).ok_or("bob")?;
+    assert_eq!(
+        outcomes.iter().filter(|o| **o == Observed::Kept).count(),
+        MAX_INSTANCES_PER_CONTACT - 1
+    );
+    assert_eq!(
+        outcomes.iter().filter(|o| **o == Observed::Full).count(),
+        10 - MAX_INSTANCES_PER_CONTACT
+    );
+    let found = directory.contact(&bob.key(), SECOND * 110).ok_or("bob")?;
     assert_eq!(
         found.addresses(),
-        &[address(19), address(18), address(17), address(16)]
+        &[address(10), address(11), address(12), address(13)]
     );
-    // The same label seen again from a new address replaces its entry.
-    directory.observe(sighting(&label(9)?, &record, 99)?, &table, SECOND * 201);
-    let found = directory.contact(&bob.key(), SECOND * 201).ok_or("bob")?;
+    // The first instance refreshed from a new address keeps its place.
+    directory.observe(sighting(&label(0)?, &record, 99)?, &table, SECOND * 111);
+    let found = directory.contact(&bob.key(), SECOND * 111).ok_or("bob")?;
     assert_eq!(found.addresses().first(), Some(&address(99)));
-    assert_eq!(found.addresses().len(), MAX_INSTANCES_PER_CONTACT);
+    // Once the copies expire, a newcomer finds room again.
+    for _ in 0..3 {
+        directory.observe(sighting(&label(0)?, &record, 99)?, &table, SECOND * 230);
+    }
+    assert_eq!(
+        directory.observe(sighting(&label(50)?, &record, 50)?, &table, SECOND * 231),
+        Observed::Kept
+    );
+    assert_eq!(
+        directory
+            .contact(&bob.key(), SECOND * 231)
+            .map(|r| r.addresses().to_vec()),
+        Some(vec![address(99), address(50)])
+    );
+    Ok(())
+}
+
+/// R1: records that match no contact cost no matching budget, so a flood
+/// of them cannot rate-limit a real contact's record.
+#[tokio::test]
+async fn unmatched_floods_do_not_starve_contacts() -> TestResult {
+    let (alice, bob) = paired().await?;
+    let table = alice.table(WALL)?;
+    let mut directory = Directory::new();
+    let now = SECOND * 300;
+    for n in 0..500_u64 {
+        let token = (n + 1).to_be_bytes();
+        let junk = DiscoveryRecord::new(DiscoveryMode::Paired, table.epoch(), token)?;
+        assert_eq!(
+            directory.observe(sighting(&label(n)?, &junk, 7)?, &table, now),
+            Observed::Unmatched
+        );
+    }
+    let record = bob
+        .table(WALL)?
+        .advertisement(&alice.key())
+        .ok_or("record")?;
+    assert_eq!(
+        directory.observe(sighting(&label(999)?, &record, 5)?, &table, now),
+        Observed::Kept
+    );
     Ok(())
 }
 
