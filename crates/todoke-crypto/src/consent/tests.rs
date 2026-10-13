@@ -817,3 +817,500 @@ fn random_ids_are_nonzero_and_fresh() -> TestResult {
     assert_ne!(a, b);
     Ok(())
 }
+
+/// Every field of `accept-signature.json` with a runtime counterpart is
+/// checked against it: the version, session, transfer, and selection the
+/// runtime signs come from the vector, the runtime signing domain is the
+/// vector's, and the vector's signing message (domain and payload) is what
+/// the receiver's key signed.
+#[test]
+fn accept_fixture_fields_match_the_runtime() -> TestResult {
+    let vector = fixture("accept-signature.json")?;
+    let fixture = Fixture::load()?;
+    let verified = fixture.accept()?;
+    let body = verified.record().body();
+    assert_eq!(
+        verified.session_id().as_slice(),
+        hex_field(&vector, "/session_id_hex")?
+    );
+    assert_eq!(
+        SESSION_ID.as_slice(),
+        hex_field(&vector, "/session_id_hex")?
+    );
+    assert_eq!(
+        verified.transfer_id().as_slice(),
+        hex_field(&vector, "/transfer_id_hex")?
+    );
+    assert_eq!(
+        verified.manifest_hash().as_slice(),
+        hex_field(&vector, "/manifest_hash_hex")?
+    );
+    assert_eq!(
+        fixture.manifest.hash().as_slice(),
+        hex_field(&vector, "/manifest_hash_hex")?
+    );
+    assert_eq!(
+        fixture.receiver.public()?.as_bytes().as_slice(),
+        hex_field(&vector, "/receiver_ed25519_public_key_hex")?
+    );
+    assert_eq!(
+        body.receiver_public().as_slice(),
+        hex_field(&vector, "/receiver_ed25519_public_key_hex")?
+    );
+    let selected: Vec<u32> = vector
+        .pointer("/selected_ids")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("selected_ids")?
+        .iter()
+        .map(|id| id.as_u64().and_then(|id| u32::try_from(id).ok()))
+        .collect::<Option<_>>()
+        .ok_or("selected id")?;
+    assert_eq!(verified.selection(), selected.as_slice());
+    let version = vector
+        .pointer("/version")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or("version")?;
+    assert_eq!(
+        u64::from(u16::from_be_bytes(array(&fixture.record[..2])?)),
+        version
+    );
+    assert_eq!(
+        body.encode().as_slice(),
+        hex_field(&vector, "/signed_payload_hex")?
+    );
+    // The runtime signing domain and message.
+    assert_eq!(
+        SigningDomain::Accept.bytes(),
+        hex_field(&vector, "/signing_domain_hex")?.as_slice()
+    );
+    let message = hex_field(&vector, "/signing_message_hex")?;
+    let mut expected = SigningDomain::Accept.bytes().to_vec();
+    expected.extend_from_slice(&body.encode());
+    assert_eq!(message, expected);
+    let signature = ed25519_dalek::Signature::from_bytes(&array(&fixture_signature()?)?);
+    fixture
+        .receiver
+        .0
+        .verifying_key()
+        .verify_strict(&message, &signature)?;
+    assert_eq!(
+        crate::identity::SigningDomain::Accept.bytes(),
+        todoke_proto::transfer::ACCEPT_DOMAIN
+    );
+    Ok(())
+}
+
+/// Every field of `manifest-hash.json` with a runtime counterpart matches
+/// what `CanonicalManifest` decodes: header, flags, version, and the
+/// entry's ID, parent, kind, name, and MIME label.
+#[test]
+fn manifest_fixture_fields_match_the_runtime() -> TestResult {
+    let vector = fixture("manifest-hash.json")?;
+    let manifest =
+        CanonicalManifest::parse(hex_field(&vector, "/canonical_hex")?, &ManifestLimits::SPEC)?;
+    let number = |pointer: &str| {
+        vector
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("number")
+    };
+    let text = |pointer: &str| {
+        vector
+            .pointer(pointer)
+            .and_then(serde_json::Value::as_str)
+            .ok_or("text")
+    };
+    let bytes = manifest.bytes();
+    assert_eq!(
+        u64::from(u16::from_be_bytes(array(&bytes[4..6])?)),
+        number("/version")?
+    );
+    assert_eq!(
+        u64::from(u16::from_be_bytes(array(&bytes[106..108])?)),
+        number("/flags")?
+    );
+    assert_eq!(
+        manifest.transfer_id().as_slice(),
+        hex_field(&vector, "/transfer_id_hex")?
+    );
+    assert_eq!(
+        manifest.sender().as_bytes().as_slice(),
+        hex_field(&vector, "/sender_ed25519_public_key_hex")?
+    );
+    assert_eq!(
+        manifest.recipient().as_bytes().as_slice(),
+        hex_field(&vector, "/recipient_ed25519_public_key_hex")?
+    );
+    assert_eq!(manifest.created_at().seconds(), number("/created_at")?);
+    assert_eq!(manifest.expires_at().seconds(), number("/expires_at")?);
+    let id = u32::try_from(number("/entries/0/id")?)?;
+    let entry = manifest.manifest().entry(id).ok_or("entry")?;
+    assert_eq!(u64::from(entry.parent()), number("/entries/0/parent")?);
+    assert_eq!(
+        number("/entries/0/kind")?,
+        if entry.is_file() { 1 } else { 2 }
+    );
+    assert_eq!(entry.name(), text("/entries/0/name")?);
+    assert_eq!(entry.mime(), text("/entries/0/mime")?);
+    let binding = manifest.file(id).ok_or("binding")?;
+    assert_eq!(binding.file_id(), id);
+    assert_eq!(
+        u64::from(binding.suite().id()),
+        number("/entries/0/content_suite")?
+    );
+    assert_eq!(binding.layout().size(), number("/entries/0/size")?);
+    assert_eq!(
+        todoke_proto::transfer::MANIFEST_HASH_DOMAIN,
+        hex_field(&vector, "/hash_domain_hex")?.as_slice()
+    );
+    Ok(())
+}
+
+/// A body signed with the fixture receiver's key, as a receiver device
+/// could sign anything.
+fn signed_accept(
+    fixture: &Fixture,
+    session_id: [u8; 32],
+    manifest: &CanonicalManifest,
+    sender: [u8; 32],
+    receiver: [u8; 32],
+    expires_at: UnixTime,
+    selection: Vec<u32>,
+) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let body = AcceptBody::new(
+        session_id,
+        *manifest.transfer_id(),
+        *manifest.hash(),
+        sender,
+        receiver,
+        [0x5a; 16],
+        expires_at,
+        selection,
+    )?;
+    let signature =
+        fixture
+            .receiver
+            .sign(&FixedKeys::id()?, SigningDomain::Accept, &body.encode())?;
+    Ok(Accept::new(body, signature.to_bytes()).encode())
+}
+
+/// The sender and receiver must be both the session's and the manifest's
+/// (§7.3): a correctly signed Accept for a manifest that names a third
+/// device as its sender or recipient is refused even when the record
+/// itself names the session's devices, and the receiver refuses to sign
+/// one.
+#[test]
+fn accept_parties_must_match_the_manifest_too() -> TestResult {
+    let fixture = Fixture::load()?;
+    let session = fixture.sender_session()?;
+    let now = time(T0 + 10)?;
+    let expires = time(T0 + 3600)?;
+    let sender = *fixture.sender.public()?.as_bytes();
+    let receiver = *fixture.receiver.public()?.as_bytes();
+    let stranger = *FixedKeys::new(0x33).public()?.as_bytes();
+    let manifests = |sender, recipient| Manifests { sender, recipient };
+    // The manifest's sender is a third device.
+    let foreign_sender = manifests(stranger, receiver).build([0x71; 16], &[("a", 6)])?;
+    let record = signed_accept(
+        &fixture,
+        SESSION_ID,
+        &foreign_sender,
+        sender,
+        receiver,
+        expires,
+        vec![1],
+    )?;
+    assert_eq!(
+        verify_accept(&record, &session, &foreign_sender, now).err(),
+        Some(AcceptError::Sender)
+    );
+    // The manifest's recipient is a third device.
+    let foreign_recipient = manifests(sender, stranger).build([0x72; 16], &[("a", 6)])?;
+    let record = signed_accept(
+        &fixture,
+        SESSION_ID,
+        &foreign_recipient,
+        sender,
+        receiver,
+        expires,
+        vec![1],
+    )?;
+    assert_eq!(
+        verify_accept(&record, &session, &foreign_recipient, now).err(),
+        Some(AcceptError::Receiver)
+    );
+    // The receiver signs only manifests addressed to itself.
+    assert_eq!(
+        sign_accept(
+            &fixture.receiver,
+            &FixedKeys::id()?,
+            &fixture.receiver_session()?,
+            &foreign_recipient,
+            vec![1],
+            expires,
+            now,
+        )
+        .err(),
+        Some(AcceptError::Role)
+    );
+    // The same records against a manifest between the session's devices
+    // verify, so only the manifest's parties made the difference.
+    let own = manifests(sender, receiver).build([0x73; 16], &[("a", 6)])?;
+    let record = signed_accept(
+        &fixture,
+        SESSION_ID,
+        &own,
+        sender,
+        receiver,
+        expires,
+        vec![1],
+    )?;
+    assert!(verify_accept(&record, &session, &own, now).is_ok());
+    Ok(())
+}
+
+/// An Accept may not outlive its manifest (§7.3): one second past the
+/// manifest's expiry is refused even well within 24 hours of now, on both
+/// the signing and the verifying side; exactly the manifest's expiry is
+/// allowed.
+#[test]
+fn accept_expiry_is_bounded_by_the_manifest() -> TestResult {
+    let fixture = Fixture::load()?;
+    let manifest = Manifests::new(&fixture)?.build([0x74; 16], &[("a", 6)])?;
+    let manifest_expiry = manifest.expires_at().seconds();
+    // Ten minutes before the manifest expires: 24 hours is far away.
+    let now = time(manifest_expiry - 600)?;
+    let id = FixedKeys::id()?;
+    let receiver_session = fixture.receiver_session()?;
+    let sign_until = |expires_at| {
+        sign_accept(
+            &fixture.receiver,
+            &id,
+            &receiver_session,
+            &manifest,
+            vec![1],
+            expires_at,
+            now,
+        )
+    };
+    assert!(sign_until(time(manifest_expiry)?).is_ok());
+    assert_eq!(
+        sign_until(time(manifest_expiry + 1)?).err(),
+        Some(AcceptError::Expiry)
+    );
+    let session = fixture.sender_session()?;
+    let (sender, receiver) = (
+        *fixture.sender.public()?.as_bytes(),
+        *fixture.receiver.public()?.as_bytes(),
+    );
+    for (expires, ok) in [(manifest_expiry, true), (manifest_expiry + 1, false)] {
+        let record = signed_accept(
+            &fixture,
+            SESSION_ID,
+            &manifest,
+            sender,
+            receiver,
+            time(expires)?,
+            vec![1],
+        )?;
+        let result = verify_accept(&record, &session, &manifest, now);
+        assert_eq!(result.is_ok(), ok, "expires {expires}");
+        if !ok {
+            assert_eq!(result.err(), Some(AcceptError::Expiry));
+        }
+    }
+    Ok(())
+}
+
+/// The bound fields of a receipt.
+#[derive(Clone, Copy)]
+struct Fields {
+    session: [u8; 32],
+    transfer: [u8; 16],
+    manifest: [u8; 32],
+    accept: [u8; 32],
+    sender: [u8; 32],
+    receiver: [u8; 32],
+}
+
+/// A receipt the receiver really signed, but for another transfer,
+/// manifest, Accept, session, or with the wrong parties, is refused by its
+/// binding (§7.7), not merely by a signature failure; and a receipt whose
+/// binding is wrong is reported as such even when its signature is also
+/// forged (identity is checked before the signature).
+#[test]
+#[expect(clippy::too_many_lines, reason = "one table of receipt bindings")]
+fn receipt_bindings_are_checked_field_by_field() -> TestResult {
+    let fixture = Fixture::load()?;
+    let (_, sender_session, _, sender_accept) = receipt_parts(&fixture)?;
+    let id = FixedKeys::id()?;
+    let now = time(T0 + 20)?;
+    let sender = *sender_session.local_device().as_bytes();
+    let receiver = *sender_session.peer_device().as_bytes();
+    let stranger = *FixedKeys::new(0x33).public()?.as_bytes();
+    let honest = Fields {
+        session: SESSION_ID,
+        transfer: *sender_accept.transfer_id(),
+        manifest: *sender_accept.manifest_hash(),
+        accept: *sender_accept.accept_hash(),
+        sender,
+        receiver,
+    };
+    let make =
+        |fields: Fields, signer: &FixedKeys| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+            let body = ReceiptBody::new(
+                fields.session,
+                fields.transfer,
+                fields.manifest,
+                fields.accept,
+                fields.sender,
+                fields.receiver,
+                [9; 16],
+                time(T0 + 15)?,
+                1,
+                6,
+            )?;
+            let signature = signer.sign(&id, SigningDomain::DeliveryReceipt, &body.encode())?;
+            Ok(DeliveryReceipt::new(body, signature.to_bytes())
+                .encode()
+                .to_vec())
+        };
+    assert!(
+        verify_receipt(
+            &make(honest, &fixture.receiver)?,
+            &sender_session,
+            &sender_accept,
+            now
+        )
+        .is_ok()
+    );
+    let stranger_keys = FixedKeys::new(0x33);
+    for (fields, error) in [
+        (
+            Fields {
+                session: [0xa5; 32],
+                ..honest
+            },
+            ReceiptError::Binding,
+        ),
+        (
+            Fields {
+                transfer: [0xa6; 16],
+                ..honest
+            },
+            ReceiptError::Binding,
+        ),
+        (
+            Fields {
+                manifest: [0x01; 32],
+                ..honest
+            },
+            ReceiptError::Binding,
+        ),
+        (
+            Fields {
+                accept: [0x02; 32],
+                ..honest
+            },
+            ReceiptError::Binding,
+        ),
+        (
+            Fields {
+                sender: stranger,
+                ..honest
+            },
+            ReceiptError::Parties,
+        ),
+        (
+            Fields {
+                receiver: stranger,
+                ..honest
+            },
+            ReceiptError::Parties,
+        ),
+        (
+            Fields {
+                sender: receiver,
+                receiver: sender,
+                ..honest
+            },
+            ReceiptError::Parties,
+        ),
+    ] {
+        // Genuinely signed by the receiver, and with a forged signature:
+        // the binding is reported either way.
+        for signer in [&fixture.receiver, &stranger_keys] {
+            assert_eq!(
+                verify_receipt(&make(fields, signer)?, &sender_session, &sender_accept, now).err(),
+                Some(error)
+            );
+        }
+    }
+    // An Accept verified in another session cannot confirm a receipt of
+    // this one, even if every other field matches this session.
+    let other_session = SessionBinding::new(
+        [0xa5; 32],
+        *sender_session.local_device(),
+        *sender_session.peer_device(),
+        time(T0)?,
+    );
+    let receipt = make(
+        Fields {
+            session: [0xa5; 32],
+            ..honest
+        },
+        &fixture.receiver,
+    )?;
+    assert_eq!(
+        verify_receipt(&receipt, &other_session, &sender_accept, now).err(),
+        Some(ReceiptError::Binding)
+    );
+    Ok(())
+}
+
+/// The error messages are distinct, fixed English text with no peer data.
+#[test]
+fn consent_error_messages() {
+    let accept = [
+        AcceptError::Malformed(todoke_proto::transfer::DecodeError::Length),
+        AcceptError::Session,
+        AcceptError::Transfer,
+        AcceptError::ManifestHash,
+        AcceptError::Sender,
+        AcceptError::Receiver,
+        AcceptError::Expiry,
+        AcceptError::Selection,
+        AcceptError::Signature,
+        AcceptError::Role,
+        AcceptError::KeyStore(KeyStoreError::UnknownKey),
+        AcceptError::Random,
+    ]
+    .map(|error| error.to_string());
+    let receipt = [
+        ReceiptError::Malformed(todoke_proto::transfer::DecodeError::Length),
+        ReceiptError::Binding,
+        ReceiptError::Parties,
+        ReceiptError::Totals,
+        ReceiptError::Time,
+        ReceiptError::Signature,
+        ReceiptError::Role,
+        ReceiptError::KeyStore(KeyStoreError::UnknownKey),
+        ReceiptError::Random,
+    ]
+    .map(|error| error.to_string());
+    let manifest = [
+        ManifestCheckError::Manifest(todoke_proto::transfer::ManifestError::Name),
+        ManifestCheckError::SenderKey,
+        ManifestCheckError::RecipientKey,
+        ManifestCheckError::EmptyFileRoot,
+        ManifestCheckError::Content(crate::content::ContentError::SegmentOutOfRange),
+    ]
+    .map(|error| error.to_string());
+    for messages in [&accept[..], &receipt[..], &manifest[..]] {
+        let distinct: std::collections::BTreeSet<&String> = messages.iter().collect();
+        assert_eq!(distinct.len(), messages.len());
+        assert!(messages.iter().all(|message| !message.is_empty()));
+    }
+    assert_eq!(Side::Sender.to_string(), "sender");
+    assert_eq!(Side::Receiver.to_string(), "receiver");
+}
