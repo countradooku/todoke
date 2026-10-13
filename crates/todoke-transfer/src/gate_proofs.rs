@@ -227,11 +227,15 @@ mod kani_harnesses {
         }
     }
 
-    /// Bounded sequences of every gate operation.
+    /// Every sequence of up to four gate operations. Five steps exhausted
+    /// the 16 GB CI runner's memory while CBMC built the formula; every
+    /// choice here comes from a small finite domain, so the five-step case
+    /// is checked exhaustively instead by
+    /// `tests::consent_gate_invariant_exhaustive_five_steps` (CI, release).
     #[kani::proof]
     #[kani::unwind(34)]
     fn consent_gate_invariant() {
-        super::consent_invariant(&mut Any, 5);
+        super::consent_invariant(&mut Any, 4);
     }
 
     #[kani::proof]
@@ -312,6 +316,18 @@ mod tests {
         // Every sequence of four operations: 810000 runs.
         let runs = exhaust(|n| super::consent_invariant(n, 4));
         assert_eq!(runs, 30_usize.pow(4));
+    }
+
+    /// Every sequence of five operations: 24,300,000 runs. Each step has 30
+    /// choices (open with any of 16 proofs, close, a key or content for any
+    /// of 3 files under either of 2 hashes, query), so this covers the same
+    /// space a five-step Kani proof would. Too slow for debug test runs; the
+    /// CI `kani` job runs it in release mode.
+    #[test]
+    #[ignore = "24.3 million runs; CI runs it with --release --ignored"]
+    fn consent_gate_invariant_exhaustive_five_steps() {
+        let runs = exhaust(|n| super::consent_invariant(n, 5));
+        assert_eq!(runs, 30_usize.pow(5));
     }
 
     #[test]

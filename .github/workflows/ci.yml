@@ -157,9 +157,21 @@ jobs:
           for harness in "${harnesses[@]}"; do
             filters+=(--harness "$harness")
           done
-          cargo kani -p todoke-transfer --exact "${filters[@]}" 2>&1 | tee "$RUNNER_TEMP/kani.log"
+          # GNU time, when present, reports peak memory (CBMC can exhaust the
+          # runner; see gate_proofs.rs).
+          timer=()
+          if [[ -x /usr/bin/time ]]; then
+            timer=(/usr/bin/time -v)
+          fi
+          ${timer[@]+"${timer[@]}"} cargo kani -p todoke-transfer --exact "${filters[@]}" 2>&1 | tee "$RUNNER_TEMP/kani.log"
           count=${#harnesses[@]}
           grep -Fx "Complete - $count successfully verified harnesses, 0 failures, $count total." "$RUNNER_TEMP/kani.log"
+      # The five-step consent sequences, exhaustively: a bounded model check of
+      # five steps does not fit in the runner's memory.
+      - name: Check every five-step consent-gate sequence
+        run: >-
+          cargo test --release --locked -p todoke-transfer --lib --
+          --ignored --exact gate_proofs::tests::consent_gate_invariant_exhaustive_five_steps
 
   cross:
     name: Check ${{ matrix.target }}
