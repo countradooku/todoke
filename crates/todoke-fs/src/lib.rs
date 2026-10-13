@@ -52,8 +52,9 @@
 //!    engine under the new session's key; cancel, revocation, and expiry
 //!    delete the quarantine (the sealed masters with it, which leaves any
 //!    remnant on flash unreadable; physical erasure is not promised, §7.6)
-//!    and keep a tombstone. Start-up removes expired and damaged state and
-//!    temporary files a crash left.
+//!    and keep a tombstone. Start-up removes expired and positively damaged
+//!    state and temporary files a crash left; state it cannot read now (an
+//!    I/O or permission error) is kept, unused, for a later start.
 //!
 //! # Guarantees and limits
 //!

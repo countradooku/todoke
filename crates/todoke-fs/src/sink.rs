@@ -108,6 +108,31 @@ impl fmt::Display for OpenError {
 
 impl std::error::Error for OpenError {}
 
+/// Why a retained transfer could not be loaded at start-up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoadError {
+    /// Its records are positively damaged or missing: it is deleted.
+    Corrupt,
+    /// Reading them failed (permissions, an I/O error, too many open
+    /// files, a lock): it is kept on disk for a later start, unused now.
+    Io,
+}
+
+impl From<Corrupt> for LoadError {
+    fn from(Corrupt: Corrupt) -> Self {
+        Self::Corrupt
+    }
+}
+
+/// Reads a whole state record: missing or oversized counts as damage, any
+/// other failure as a transient I/O error.
+fn read_record(path: &Path) -> Result<Vec<u8>, LoadError> {
+    read_bounded(path).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidData => LoadError::Corrupt,
+        _ => LoadError::Io,
+    })
+}
+
 /// Plans kept for offers that have not been accepted yet.
 const OFFER_PLANS: usize = 16;
 /// Bytes reserved per transfer besides its slots (journal, manifest).
@@ -152,6 +177,9 @@ pub struct FsSink<D: Destination, S: Sealer> {
     /// The tombstone list on disk is behind memory (a write failed).
     tombstones_dirty: bool,
     offers: VecDeque<(TransferId, DestinationPlan)>,
+    /// Transfers whose records could not be read at start-up: kept on
+    /// disk, unused, and never replaced by a new Accept this run.
+    unreadable: BTreeSet<TransferId>,
     reports: BTreeMap<(TransferId, u32), ContentReport>,
     unsynced: u64,
 }
@@ -229,6 +257,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             tombstones,
             tombstones_dirty: false,
             offers: VecDeque::new(),
+            unreadable: BTreeSet::new(),
             reports: BTreeMap::new(),
             unsynced: 0,
         };
@@ -236,41 +265,48 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         Ok(sink)
     }
 
-    /// Loads every retained transfer, deleting expired and damaged ones.
+    /// Loads every retained transfer, deleting expired and positively
+    /// damaged ones. A transfer whose records cannot be read now is kept
+    /// on disk (and unused) rather than deleted.
     fn load(&mut self, now: UnixTime) -> Result<(), OpenError> {
         let entries = std::fs::read_dir(self.state.transfers())
             .map_err(|error| OpenError::Io(error.kind()))?;
         for entry in entries {
             let entry = entry.map_err(|error| OpenError::Io(error.kind()))?;
             let path = entry.path();
-            let id = entry.file_name().to_str().and_then(unhex16);
-            let loaded = id.and_then(|id| self.load_transfer(&id, &path).ok().map(|t| (id, t)));
-            match loaded {
-                Some((id, transfer))
-                    if transfer.header.transfer_id == id
-                        && now.seconds() < transfer.header.expires_at
+            // Not a transfer directory of this crate: nothing to keep.
+            let Some(id) = entry.file_name().to_str().and_then(unhex16) else {
+                let _ = remove_tree(&path);
+                continue;
+            };
+            match self.load_transfer(&id, &path) {
+                Ok(transfer)
+                    if now.seconds() < transfer.header.expires_at
                         && !self.tombstones.contains_key(&id) =>
                 {
                     self.transfers.insert(id, transfer);
                     self.clean_temporaries(&id);
                 }
-                Some((id, transfer)) => {
+                Ok(transfer) => {
                     self.transfers.insert(id, transfer);
                     self.discard_transfer(&id);
                 }
-                None => {
+                Err(LoadError::Corrupt) => {
                     let _ = remove_tree(&path);
+                }
+                Err(LoadError::Io) => {
+                    self.unreadable.insert(id);
                 }
             }
         }
         Ok(())
     }
 
-    fn load_transfer(&self, id: &[u8; 16], path: &Path) -> Result<Transfer, Corrupt> {
-        let bytes = read_bounded(&path.join("journal")).map_err(|_| Corrupt)?;
+    fn load_transfer(&self, id: &[u8; 16], path: &Path) -> Result<Transfer, LoadError> {
+        let bytes = read_record(&path.join("journal"))?;
         let (header, entries, valid) = decode_journal(&bytes)?;
         if header.transfer_id != *id {
-            return Err(Corrupt);
+            return Err(LoadError::Corrupt);
         }
         let mut transfer = Transfer {
             journal_len: valid as u64,
@@ -322,14 +358,14 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
 
     /// The canonical manifest stored with a transfer, checked against its
     /// journal.
-    fn stored_manifest(&self, header: &JournalHeader) -> Result<CanonicalManifest, Corrupt> {
+    fn stored_manifest(&self, header: &JournalHeader) -> Result<CanonicalManifest, LoadError> {
         let path = self.state.transfer(&header.transfer_id).join("manifest");
-        let bytes = read_bounded(&path).map_err(|_| Corrupt)?;
+        let bytes = read_record(&path)?;
         let manifest =
             CanonicalManifest::parse(bytes, &todoke_proto::transfer::ManifestLimits::SPEC)
-                .map_err(|_| Corrupt)?;
+                .map_err(|_| LoadError::Corrupt)?;
         if *manifest.hash() != header.manifest_hash {
-            return Err(Corrupt);
+            return Err(LoadError::Corrupt);
         }
         Ok(manifest)
     }
@@ -587,6 +623,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
     fn discard_transfer(&mut self, transfer_id: &TransferId) {
         self.clean_temporaries(transfer_id);
         self.transfers.remove(transfer_id);
+        self.unreadable.remove(transfer_id);
         self.reports.retain(|(id, _), _| id != transfer_id);
         let _ = remove_tree(&self.state.transfer(transfer_id));
     }
@@ -926,7 +963,12 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
         accept: &VerifiedAccept,
     ) -> Result<(), SinkError> {
         let transfer_id = *accept.transfer_id();
-        if *manifest.transfer_id() != transfer_id || *accept.manifest_hash() != *manifest.hash() {
+        if *manifest.transfer_id() != transfer_id
+            || *accept.manifest_hash() != *manifest.hash()
+            || self.unreadable.contains(&transfer_id)
+        {
+            // An unreadable retained transfer is never replaced: it may
+            // become readable again at the next start.
             return Err(SinkError::Storage);
         }
         if let Some(transfer) = self.transfers.get_mut(&transfer_id)

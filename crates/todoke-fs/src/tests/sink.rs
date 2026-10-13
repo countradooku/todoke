@@ -690,3 +690,48 @@ fn debug_output_contains_no_names_or_paths() -> TestResult {
     assert!(!rendered.contains("photos"));
     Ok(())
 }
+
+/// Start-up clean-up deletes retained state only when it is positively
+/// damaged or expired. A journal or manifest it cannot read now
+/// (permissions here; also I/O errors, too many open files, a lock) is
+/// kept for a later start, and no new Accept may replace it meanwhile.
+#[cfg(unix)]
+#[test]
+fn unreadable_state_is_kept_not_deleted() -> TestResult {
+    use std::os::unix::fs::PermissionsExt as _;
+    for record in ["journal", "manifest"] {
+        let (mut harness, consented) = setup(15)?;
+        let transfer_id = *consented.manifest.transfer_id();
+        receive_all(harness.sink()?, &consented, &FILES)?;
+        harness.sink = None;
+        let path = harness.transfer_dir(&transfer_id).join(record);
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o000))?;
+        if std::fs::read(&path).is_ok() {
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+            eprintln!("skipping: this account reads files without permission (root)");
+            return Ok(());
+        }
+        harness.reopen(WALL)?;
+        assert!(path.exists(), "the {record} was deleted");
+        assert!(harness.transfer_dir(&transfer_id).join("s6").exists());
+        let sink = harness.sink()?;
+        assert!(sink.retained(&transfer_id, time(WALL)?).is_none());
+        sink.check_offer(&consented.manifest)
+            .map_err(|r| format!("{r:?}"))?;
+        assert_eq!(
+            sink.record_accept(&consented.manifest, &consented.accept),
+            Err(SinkError::Storage)
+        );
+        assert!(path.exists());
+        // Readable again: the transfer is back, with its segments.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        harness.reopen(WALL)?;
+        let sink = harness.sink()?;
+        assert!(sink.retained(&transfer_id, time(WALL)?).is_some());
+        assert_eq!(
+            sink.retained_segment(&transfer_id, 6, 0)?,
+            Some(consented.ciphertext(6, 0)?)
+        );
+    }
+    Ok(())
+}

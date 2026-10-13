@@ -144,7 +144,10 @@ temporary file, and checks length and whole-file BLAKE3.
 The journal (`TDKJ`, versioned, BLAKE3 check values) records the accepted
 selection and expiry, a secret salt from which temporary names are derived,
 top-level directories created, and files published; a torn tail is cut, a
-damaged header discards the transfer. Tombstones (`TDKT`) are a sorted,
+damaged header discards the transfer. Start-up deletes a transfer only when
+its records are positively damaged (or missing) or expired: a journal or
+manifest that cannot be read now (permissions, an I/O error, too many open
+files) is kept on disk, unused, and no new Accept may replace it that run. Tombstones (`TDKT`) are a sorted,
 checked list replaced atomically; a damaged list fails closed at start-up.
 Cancel, revocation, expiry, and start-up clean-up delete the
 quarantine and leftover temporary files; deleting the sealed master leaves any
