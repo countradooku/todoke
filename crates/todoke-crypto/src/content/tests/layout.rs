@@ -152,6 +152,38 @@ fn a_suite_set_without_xchacha_is_rejected() {
     }
 }
 
+/// ADR 0004: AES is advertised only where libcrux-aes runs its hardware
+/// path. Checked with the standard library's CPU detection, not
+/// libcrux-platform's: an advertising device has the instructions that
+/// path needs, and targets where libcrux-platform cannot detect them
+/// (aarch64 outside Linux and macOS, other architectures) never advertise.
+#[test]
+fn aes_is_advertised_only_with_hardware_aes() {
+    let advertised = ContentSuites::local().contains(ContentSuite::Aes256GcmStream);
+    #[cfg(target_arch = "x86_64")]
+    if advertised {
+        assert!(std::arch::is_x86_feature_detected!("aes"));
+        assert!(std::arch::is_x86_feature_detected!("pclmulqdq"));
+        assert!(std::arch::is_x86_feature_detected!("avx"));
+        assert!(std::arch::is_x86_feature_detected!("avx2"));
+        assert!(std::arch::is_x86_feature_detected!("movbe"));
+    }
+    #[cfg(target_arch = "aarch64")]
+    if advertised {
+        assert!(std::arch::is_aarch64_feature_detected!("neon"));
+        assert!(std::arch::is_aarch64_feature_detected!("aes"));
+        assert!(std::arch::is_aarch64_feature_detected!("pmull"));
+    }
+    #[cfg(any(
+        all(
+            target_arch = "aarch64",
+            not(any(target_os = "linux", target_os = "macos"))
+        ),
+        not(any(target_arch = "x86_64", target_arch = "aarch64"))
+    ))]
+    assert!(!advertised);
+}
+
 #[test]
 fn file_binding_validation() -> TestResult {
     let suite = ContentSuite::XChaCha20Poly1305Stream;

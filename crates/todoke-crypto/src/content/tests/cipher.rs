@@ -8,8 +8,9 @@ use super::{
     local_suites, master,
 };
 use crate::content::{
-    AcceptedFile, ContentError, ContentOpener, ContentSealer, ContentSuite, EPOCH_SEGMENTS,
-    FileBinding, FileMaster, MAX_CIPHERTEXT_LEN, MIN_CIPHERTEXT_LEN, SEGMENT_LEN, TAG_LEN,
+    AcceptedFile, ContentError, ContentOpener, ContentSealer, ContentSuite, ContentSuites,
+    EPOCH_SEGMENTS, FileBinding, FileMaster, MAX_CIPHERTEXT_LEN, MIN_CIPHERTEXT_LEN, SEGMENT_LEN,
+    TAG_LEN,
 };
 
 const SIZES: [usize; 7] = [0, 1, 1024, 16_383, 16_384, 16_385, 3 * 16_384 + 1000];
@@ -476,6 +477,40 @@ fn suite_availability_is_enforced() -> TestResult {
         assert_eq!(
             ContentOpener::new(&aes, &master()).err(),
             Some(ContentError::SuiteUnavailable)
+        );
+    }
+    Ok(())
+}
+
+/// The same refusal, on every host: a device that advertises `XChaCha`
+/// only refuses AES files on both sides (§6, ADR 0004) and accepts
+/// `XChaCha` files, while one that advertises both accepts both.
+#[test]
+fn a_device_without_aes_refuses_aes_files() -> TestResult {
+    let xchacha_only = ContentSuites::from_bits(0b10).ok_or("bits")?;
+    let both = ContentSuites::from_bits(0b11).ok_or("bits")?;
+    for suite in [
+        ContentSuite::Aes256GcmStream,
+        ContentSuite::XChaCha20Poly1305Stream,
+    ] {
+        let source = Source::new(counter_input(100)?, suite)?;
+        let file = source.accepted();
+        let refused =
+            (suite == ContentSuite::Aes256GcmStream).then_some(ContentError::SuiteUnavailable);
+        assert_eq!(
+            ContentSealer::on_device(&file, &master(), xchacha_only).err(),
+            refused
+        );
+        assert_eq!(
+            ContentOpener::on_device(&file, &master(), xchacha_only).err(),
+            refused
+        );
+        let sealer = ContentSealer::on_device(&file, &master(), both)?;
+        let opener = ContentOpener::on_device(&file, &master(), both)?;
+        let ciphertext = source.seal(&sealer, 0)?;
+        assert_eq!(
+            opener.open_segment(0, &ciphertext)?.data(),
+            source.segment_bytes(0)?
         );
     }
     Ok(())

@@ -20,8 +20,18 @@ struct FileCipher {
 
 impl FileCipher {
     fn new(file: &AcceptedFile, master: &FileMaster) -> Result<Self, ContentError> {
+        Self::on_device(file, master, ContentSuites::local())
+    }
+
+    /// [`Self::new`] on a device that advertises `local`; tests use it to
+    /// check the refusal on every host.
+    fn on_device(
+        file: &AcceptedFile,
+        master: &FileMaster,
+        local: ContentSuites,
+    ) -> Result<Self, ContentError> {
         let binding = *file.binding();
-        if !ContentSuites::local().contains(binding.suite()) {
+        if !local.contains(binding.suite()) {
             return Err(ContentError::SuiteUnavailable);
         }
         let schedule = KeySchedule::new(&binding, master)?;
@@ -125,6 +135,18 @@ impl ContentSealer {
         self.cipher.seal_slice(&segment, &slice)
     }
 
+    /// [`Self::new`] on a device that advertises `local`.
+    #[cfg(test)]
+    pub(crate) fn on_device(
+        file: &AcceptedFile,
+        master: &FileMaster,
+        local: ContentSuites,
+    ) -> Result<Self, ContentError> {
+        Ok(Self {
+            cipher: FileCipher::on_device(file, master, local)?,
+        })
+    }
+
     /// Seals an arbitrary slice for `segment`, bypassing extraction; tests
     /// use it to build forgeries the sender would never produce.
     #[cfg(test)]
@@ -200,6 +222,18 @@ impl ContentOpener {
             file_id: binding.file_id(),
             segment,
             data,
+        })
+    }
+
+    /// [`Self::new`] on a device that advertises `local`.
+    #[cfg(test)]
+    pub(crate) fn on_device(
+        file: &AcceptedFile,
+        master: &FileMaster,
+        local: ContentSuites,
+    ) -> Result<Self, ContentError> {
+        Ok(Self {
+            cipher: FileCipher::on_device(file, master, local)?,
         })
     }
 
