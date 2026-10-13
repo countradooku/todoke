@@ -130,3 +130,24 @@ path = "fuzz_targets/crypto_human_code.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "crypto_content_bao_slice"
+path = "fuzz_targets/crypto_content_bao_slice.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_content_segment"
+path = "fuzz_targets/crypto_content_segment.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_content_file_key"
+path = "fuzz_targets/crypto_content_file_key.rs"
+test = false
+doc = false
+bench = false

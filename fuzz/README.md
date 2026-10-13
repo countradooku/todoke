@@ -22,10 +22,15 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_human_code` | `HumanCode::parse_and_wipe` and `HumanCode::parse` on typed code input: exactly ten ASCII digits, both agree, and the buffer is wiped (PROTOCOL §3.2) |
 | `crypto_code_pairing` | Human-code pairing handshake driver (responder and initiator, right or wrong code): the `CodeShareA`/`CodeShareB` exchange through `CPace` and then the `XXpsk3` messages, with fixed public inputs and scripted randomness (PROTOCOL §3.2, §4.2) |
 | `proto_code_pairing` | `todoke_proto::pairing` bodies: `CodeOfferRequest`, `CodeOffer` (alone and as the echoing reply to a request), and `CodeShareA`/`CodeShareB` (PROTOCOL §3.2, §4.1) |
+| `crypto_content_bao_slice` | Strict Bao 0.13.1 slice verification (the receiver's parser for decrypted content): fuzzer bytes as the slice of a chosen segment of a known file of up to five and a half segments; an accepted slice must yield exactly that segment's bytes (PROTOCOL §7.4) |
+| `crypto_content_segment` | `ContentOpener::open_segment`: ciphertext length, AEAD authentication (either suite), then Bao verification, for a chosen segment of a known file; only the honest ciphertext may open (PROTOCOL §7.4, §8) |
+| `crypto_content_file_key` | `FileKeyBody::decode`: exactly 86 bytes, nonzero transfer and file IDs, suite 1 or 2; accepted bodies re-encode to the input (PROTOCOL §8) |
 
 The `crypto_*` targets call `todoke_crypto::identity::fuzzing`,
-`todoke_crypto::pairing::fuzzing`, or `todoke_crypto::session::fuzzing`, which exist only under `--cfg fuzzing` (set
-by cargo-fuzz). Each of their functions wraps the same decoder or state machine
+`todoke_crypto::pairing::fuzzing`, `todoke_crypto::session::fuzzing`, or
+`todoke_crypto::content::fuzzing`, which exist only under `--cfg fuzzing` (set
+by cargo-fuzz). The content harnesses stand in for a verified Accept
+through a fuzzing-only constructor; they use fixed public keys and files. Each of their functions wraps the same decoder or state machine
 that production code uses. Under `--cfg fuzzing` the session engine may use
 scripted (fixture) randomness, as in unit tests; release builds cannot. The
 session harnesses need the suite 0x0001 acknowledgement and the code-pairing
