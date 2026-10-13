@@ -23,7 +23,7 @@ test = true
 # property tests for the runtime codecs.
 [dev-dependencies]
 proptest.workspace = true
-base45 = "=3.2.0"
+base45.workspace = true
 blake3 = { workspace = true, features = ["traits-preview"] }
 ed25519-dalek.workspace = true
 hex.workspace = true

@@ -171,7 +171,8 @@ pub(crate) fn noise_static_is_valid(noise_static: &[u8; 32]) -> bool {
     !SMALL_ORDER_X25519.contains(&masked)
 }
 
-fn kem_static_is_valid(kem_static: &[u8; KEM_STATIC_LEN]) -> bool {
+/// FIPS 203 input check of an ML-KEM-768 public credential (§1, §2).
+pub(crate) fn kem_static_is_valid(kem_static: &[u8; KEM_STATIC_LEN]) -> bool {
     mlkem768::validate_public_key(&MlKem768PublicKey::from(kem_static))
 }
 

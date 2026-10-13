@@ -82,6 +82,11 @@ version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.const-oid]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
@@ -202,10 +207,15 @@ version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.hkdf]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
 [[exemptions.hmac]]
 version = "0.13.0"
-criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; raised from safe-to-run to safe-to-deploy on 2026-10-13 because pakery-crypto (code pairing, non-default unaudited-code-pairing feature) uses it at runtime; replace with an audit or imported audit."
 
 [[exemptions.hybrid-array]]
 version = "0.4.15"
@@ -342,6 +352,21 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.pakery-core]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
+[[exemptions.pakery-cpace]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
+[[exemptions.pakery-crypto]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
@@ -428,9 +453,9 @@ criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
 [[exemptions.sha2]]
-version = "0.11.0"
+version = "0.11.1"
 criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+notes = "Not yet reviewed. Version 0.11.0 was exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; upgraded to the latest release 0.11.1 on 2026-10-13 (riscv-zknh and AArch64 constant-loading changes, MSRV 1.88); replace with an audit or imported audit."
 
 [[exemptions.signature]]
 version = "3.0.0"
@@ -496,6 +521,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.zeroize_derive]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
 [[exemptions.zmij]]
 version = "1.0.23"

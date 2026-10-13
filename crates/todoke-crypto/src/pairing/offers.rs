@@ -1,0 +1,675 @@
+//! The displayer's pairing offers and the unauthenticated-attempt budgets
+//! (PROTOCOL §3.1, §3.2, §13).
+//!
+//! Offers live only in memory: a restart destroys every offer that was not
+//! burned, which is equivalent to burning it (§3.1: "generate a new one").
+//! Burning an offer that reached a journal is also durable, through the
+//! contact store's ledger.
+//!
+//! | Rule | Where |
+//! | --- | --- |
+//! | One authenticated attempt per offer at a time; unauthenticated failures do not consume a QR offer | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer), [`OfferReservation`] |
+//! | A code offer: at most 5 failed attempts, at least 2 s between attempts, one `CPace` at a time, only after the stream's offer exchange | [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer) |
+//! | Offers expire after 300 s, measured on both the wall and the monotonic clock | every operation |
+//! | At most 4 unauthenticated attempts at once and 20 starts per minute, counted from the moment a stream is accepted | [`IncomingSession::accept_any`](crate::session::IncomingSession::accept_any), then the reservation |
+//!
+//! The §13 budget here covers every stream accepted with
+//! [`IncomingSession::accept_any`](crate::session::IncomingSession::accept_any),
+//! including contact Hellos that arrive that way. Contact sessions accepted
+//! with [`IncomingSession::accept`](crate::session::IncomingSession::accept)
+//! share the same §13 limits; applying them there is the caller's job
+//! until the core has a single admission point.
+
+use core::fmt;
+use core::time::Duration;
+use std::collections::{BTreeMap, VecDeque};
+use std::sync::{Arc, Mutex, MutexGuard};
+
+use todoke_proto::pairing::{CodeOffer, CodeOfferRequest, STRANGER_TOKEN_LEN};
+use todoke_proto::session::{Hello, SessionMode};
+use todoke_proto::time::UnixTime;
+use zeroize::Zeroizing;
+
+use super::code::HumanCode;
+use super::qr::{OFFER_LIFETIME_SECONDS, QrPayload};
+use super::{PairingError, UnauditedCodePairing};
+use crate::identity::KeyStore;
+use crate::rng;
+use crate::session::LocalIdentity;
+
+/// Local quota: live offers at once.
+pub const MAX_OFFERS: usize = 4;
+/// §3.2: failed attempts a code offer allows in total.
+pub const MAX_CODE_FAILURES: u8 = 5;
+/// §3.2: minimum time between two attempts on one code offer.
+pub const CODE_ATTEMPT_SPACING: Duration = Duration::from_secs(2);
+/// §13: unauthenticated attempts in progress at once.
+pub const MAX_CONCURRENT_ATTEMPTS: usize = 4;
+/// §13: attempt starts per minute.
+pub const MAX_ATTEMPT_STARTS_PER_MINUTE: usize = 20;
+const MINUTE: Duration = Duration::from_secs(60);
+const OFFER_LIFETIME: Duration = Duration::from_secs(OFFER_LIFETIME_SECONDS);
+
+/// The secret behind an offer.
+#[derive(Clone)]
+pub(crate) enum OfferSecret {
+    /// The QR one-time PSK.
+    Qr(Zeroizing<[u8; 32]>),
+    /// The human code.
+    Code(HumanCode),
+}
+
+impl OfferSecret {
+    fn mode(&self) -> SessionMode {
+        match self {
+            Self::Qr(_) => SessionMode::Qr,
+            Self::Code(_) => SessionMode::Code,
+        }
+    }
+}
+
+struct Slot {
+    secret: OfferSecret,
+    expires_at: UnixTime,
+    /// Monotonic expiry.
+    deadline: Duration,
+    /// The token of the reservation holding this offer, if any.
+    holder: Option<u64>,
+    failures: u8,
+    last_attempt: Option<Duration>,
+}
+
+impl Slot {
+    fn live(&self, now: UnixTime, mono: Duration) -> bool {
+        now < self.expires_at && mono < self.deadline && self.failures < MAX_CODE_FAILURES
+    }
+}
+
+/// §13: unauthenticated attempts in progress and recent starts.
+#[derive(Debug, Default)]
+struct Budget {
+    active: usize,
+    starts: VecDeque<Duration>,
+}
+
+impl Budget {
+    fn try_start(&mut self, mono: Duration) -> Result<(), PairingError> {
+        while self
+            .starts
+            .front()
+            .is_some_and(|&start| mono.saturating_sub(start) >= MINUTE)
+        {
+            self.starts.pop_front();
+        }
+        if self.active >= MAX_CONCURRENT_ATTEMPTS
+            || self.starts.len() >= MAX_ATTEMPT_STARTS_PER_MINUTE
+        {
+            return Err(PairingError::RateLimited);
+        }
+        self.active += 1;
+        self.starts.push_back(mono);
+        Ok(())
+    }
+
+    fn finish(&mut self) {
+        self.active = self.active.saturating_sub(1);
+    }
+}
+
+#[derive(Default)]
+struct Table {
+    budget: Budget,
+    offers: BTreeMap<[u8; 16], Slot>,
+    /// The last reservation token handed out.
+    last_token: u64,
+}
+
+impl Table {
+    fn prune(&mut self, now: UnixTime, mono: Duration) {
+        // A reserved offer stays until its reservation ends.
+        self.offers
+            .retain(|_, slot| slot.holder.is_some() || slot.live(now, mono));
+    }
+}
+
+/// The displayer's live offers, shared by every incoming attempt. Cloning
+/// shares the same offers.
+///
+/// Every method takes the trusted wall-clock time (`now`) and the
+/// monotonic time (`mono`) of one clock the caller keeps for all calls.
+#[derive(Clone, Default)]
+pub struct PairingOffers {
+    table: Arc<Mutex<Table>>,
+}
+
+/// Which way an offer is shown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OfferKind {
+    /// A QR code (§3.1).
+    Qr,
+    /// A human code (§3.2).
+    Code,
+}
+
+impl PairingOffers {
+    /// An empty set of offers.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, Table>, PairingError> {
+        // A poisoned table fails closed: no offer is usable any more.
+        self.table.lock().map_err(|_| PairingError::Unavailable)
+    }
+
+    fn expiry(now: UnixTime) -> Result<UnixTime, PairingError> {
+        UnixTime::new(now.seconds().saturating_add(OFFER_LIFETIME_SECONDS))
+            .ok_or(PairingError::LocalIdentity)
+    }
+
+    fn insert(
+        table: &mut Table,
+        secret: OfferSecret,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<([u8; 16], UnixTime), PairingError> {
+        table.prune(now, mono);
+        if table.offers.len() >= MAX_OFFERS {
+            return Err(PairingError::TooManyOffers);
+        }
+        let pairing_id = rng::nonzero_id().map_err(|_| PairingError::Random)?;
+        let expires_at = Self::expiry(now)?;
+        table.offers.insert(
+            pairing_id,
+            Slot {
+                secret,
+                expires_at,
+                deadline: mono.saturating_add(OFFER_LIFETIME),
+                holder: None,
+                failures: 0,
+                last_attempt: None,
+            },
+        );
+        Ok((pairing_id, expires_at))
+    }
+
+    /// Creates a QR offer for `local`: a fresh pairing ID and one-time PSK,
+    /// valid for 300 seconds. Show it with [`QrPayload::to_text`]; it is
+    /// sensitive (§3.1).
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::LocalIdentity`] if the local binding is not valid at
+    /// `now`, [`PairingError::TooManyOffers`], or [`PairingError::Random`].
+    pub fn create_qr<K: KeyStore>(
+        &self,
+        local: &LocalIdentity<'_, K>,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<QrPayload, PairingError> {
+        local
+            .check_valid_at(now)
+            .map_err(|_| PairingError::LocalIdentity)?;
+        let mut psk = Zeroizing::new([0; 32]);
+        rng::fill(psk.as_mut_slice()).map_err(|_| PairingError::Random)?;
+        let mut table = self.lock()?;
+        let (pairing_id, expires_at) =
+            Self::insert(&mut table, OfferSecret::Qr(psk.clone()), now, mono)?;
+        let binding = local.binding();
+        Ok(QrPayload::new(
+            pairing_id,
+            expires_at,
+            *binding.device_public(),
+            *binding.noise_static(),
+            Box::new(*binding.kem_static()),
+            psk,
+        ))
+    }
+
+    /// Creates a human-code offer, valid for 300 seconds, and returns the
+    /// code to show. It replaces any earlier code offer: a new code is the
+    /// local action §3.2 requires after an offer is exhausted. While an
+    /// attempt holds the current code it is refused instead; withdraw the
+    /// code first with [`Self::cancel_all`], which stops that attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::OfferBusy`] while an attempt holds the current code,
+    /// [`PairingError::TooManyOffers`], or [`PairingError::Random`].
+    ///
+    /// Human-code pairing is disabled for production (PROTOCOL §16, O2), so
+    /// this needs the [`UnauditedCodePairing`] acknowledgement: a build
+    /// without the `unaudited-code-pairing` feature cannot create a code
+    /// that no path there could honour.
+    ///
+    #[cfg_attr(not(feature = "unaudited-code-pairing"), doc = "```compile_fail")]
+    #[cfg_attr(feature = "unaudited-code-pairing", doc = "```")]
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use core::time::Duration;
+    /// use todoke_crypto::pairing::{PairingOffers, UnauditedCodePairing};
+    /// let offers = PairingOffers::new();
+    /// let now = todoke_proto::time::UnixTime::new(1_800_000_000).ok_or("time")?;
+    /// let gate = UnauditedCodePairing::acknowledge_not_production_ready();
+    /// let code = offers.create_code(gate, now, Duration::ZERO)?;
+    /// assert_eq!(code.as_str().len(), 10);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn create_code(
+        &self,
+        _gate: UnauditedCodePairing,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<HumanCode, PairingError> {
+        let code = HumanCode::generate().map_err(|_| PairingError::Random)?;
+        let mut table = self.lock()?;
+        if table
+            .offers
+            .values()
+            .any(|slot| matches!(slot.secret, OfferSecret::Code(_)) && slot.holder.is_some())
+        {
+            return Err(PairingError::OfferBusy);
+        }
+        table
+            .offers
+            .retain(|_, slot| !matches!(slot.secret, OfferSecret::Code(_)));
+        Self::insert(&mut table, OfferSecret::Code(code.clone()), now, mono)?;
+        Ok(code)
+    }
+
+    /// Withdraws every offer (the user closed the pairing screen). Attempts
+    /// in progress fail at their next authority step (the peer's identity
+    /// confirmation or the journal), before anything is journaled.
+    pub fn cancel_all(&self) {
+        if let Ok(mut table) = self.lock() {
+            table.offers.clear();
+        }
+    }
+
+    /// The number of live offers of `kind`.
+    #[must_use]
+    pub fn live(&self, kind: OfferKind, now: UnixTime, mono: Duration) -> usize {
+        self.lock().map_or(0, |table| {
+            table
+                .offers
+                .values()
+                .filter(|slot| {
+                    slot.live(now, mono)
+                        && matches!(
+                            (&slot.secret, kind),
+                            (OfferSecret::Qr(_), OfferKind::Qr)
+                                | (OfferSecret::Code(_), OfferKind::Code)
+                        )
+                })
+                .count()
+        })
+    }
+
+    /// Answers a `CodeOfferRequest` (§3.2) with the live code offer, if the
+    /// request names the stranger token this device currently advertises
+    /// (`advertised`, from the discovery layer). The offer is public; any
+    /// number of requests may receive it, and none reserves it.
+    ///
+    /// Needs the [`UnauditedCodePairing`] acknowledgement, like every
+    /// code-pairing entry point:
+    ///
+    #[cfg_attr(not(feature = "unaudited-code-pairing"), doc = "```compile_fail")]
+    #[cfg_attr(feature = "unaudited-code-pairing", doc = "```")]
+    /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// use core::time::Duration;
+    /// use todoke_crypto::pairing::{PairingError, PairingOffers, UnauditedCodePairing};
+    /// let offers = PairingOffers::new();
+    /// let now = todoke_proto::time::UnixTime::new(1_800_000_000).ok_or("time")?;
+    /// let request = todoke_proto::pairing::CodeOfferRequest::new([7; 8])?;
+    /// let gate = UnauditedCodePairing::acknowledge_not_production_ready();
+    /// let answer = offers.answer_code_request(gate, &request, &[7; 8], now, Duration::ZERO);
+    /// assert_eq!(answer.err(), Some(PairingError::UnknownOffer));
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::UnknownOffer`] for a stale or unknown token or when
+    /// no code offer is live: close the stream silently.
+    pub fn answer_code_request(
+        &self,
+        _gate: UnauditedCodePairing,
+        request: &CodeOfferRequest,
+        advertised: &[u8; STRANGER_TOKEN_LEN],
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<CodeOffer, PairingError> {
+        if request.stranger_token() != advertised {
+            return Err(PairingError::UnknownOffer);
+        }
+        let table = self.lock()?;
+        let (pairing_id, slot) = table
+            .offers
+            .iter()
+            .find(|(_, slot)| matches!(slot.secret, OfferSecret::Code(_)) && slot.live(now, mono))
+            .ok_or(PairingError::UnknownOffer)?;
+        CodeOffer::new(request, *pairing_id, slot.expires_at)
+            .map_err(|_| PairingError::UnknownOffer)
+    }
+
+    /// Reserves the offer named by `hello`'s locator for one attempt, as
+    /// [`IncomingSession::reserve_offer`](crate::session::IncomingSession::reserve_offer)
+    /// does for a stream that exchanged the code offer records (tests).
+    #[cfg(test)]
+    pub(crate) fn reserve(
+        &self,
+        hello: &Hello,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<OfferReservation, PairingError> {
+        self.reserve_attempt(hello, true, &mut None, now, mono)
+    }
+
+    /// Admits a newly accepted stream into the §13 unauthenticated-attempt
+    /// budget, before anything is read from it. The permit holds one of the
+    /// concurrent attempts until it is dropped or passed on to the
+    /// stream's reservation.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::RateLimited`]: close the stream silently (§12).
+    pub(crate) fn admit(&self, mono: Duration) -> Result<AttemptPermit, PairingError> {
+        self.lock()?.budget.try_start(mono)?;
+        Ok(AttemptPermit {
+            table: Arc::clone(&self.table),
+            held: true,
+        })
+    }
+
+    /// Reserves the offer named by `hello`'s locator for this attempt.
+    /// `exchanged` says whether the stream began with the
+    /// `CodeOfferRequest`/`CodeOffer` exchange; only such a stream may
+    /// attempt a code offer (§3.2). A stream admitted with [`Self::admit`]
+    /// passes its `permit` on to the reservation, which then counts as the
+    /// same attempt; without one the reservation starts a new attempt in
+    /// the §13 budget.
+    ///
+    /// The `ClientHello` is untrusted: this only decides whether an attempt
+    /// may start. The reservation ends when it is burned (the attempt
+    /// reached the §4.4 journal) or dropped; a dropped QR reservation frees
+    /// the offer again, while a dropped code reservation counts as a failed
+    /// attempt.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::NoOfferExchange`] for a code-mode Hello on a stream
+    /// without the offer exchange, before anything else is checked or
+    /// counted, [`PairingError::UnknownOffer`] (unknown, withdrawn,
+    /// burned, or exhausted), [`PairingError::Expired`],
+    /// [`PairingError::Mode`] for a Hello of the other pairing mode,
+    /// [`PairingError::OfferBusy`] while another attempt holds it,
+    /// [`PairingError::TooSoon`] within 2 s of the previous code attempt,
+    /// or [`PairingError::RateLimited`].
+    pub(crate) fn reserve_attempt(
+        &self,
+        hello: &Hello,
+        exchanged: bool,
+        permit: &mut Option<AttemptPermit>,
+        now: UnixTime,
+        mono: Duration,
+    ) -> Result<OfferReservation, PairingError> {
+        if hello.mode() == SessionMode::Code && !exchanged {
+            return Err(PairingError::NoOfferExchange);
+        }
+        let mut guard = self.lock()?;
+        let table = &mut *guard;
+        let pairing_id = *hello.locator();
+        let slot = table
+            .offers
+            .get_mut(&pairing_id)
+            .ok_or(PairingError::UnknownOffer)?;
+        if slot.secret.mode() != hello.mode() {
+            return Err(PairingError::Mode);
+        }
+        if slot.holder.is_some() {
+            return Err(PairingError::OfferBusy);
+        }
+        if !slot.live(now, mono) {
+            table.offers.remove(&pairing_id);
+            return Err(PairingError::Expired);
+        }
+        if let OfferSecret::Code(_) = slot.secret
+            && slot
+                .last_attempt
+                .is_some_and(|last| mono < last.saturating_add(CODE_ATTEMPT_SPACING))
+        {
+            return Err(PairingError::TooSoon);
+        }
+        match permit.take() {
+            // The stream's admitted attempt becomes the reservation's.
+            Some(mut admitted) if Arc::ptr_eq(&admitted.table, &self.table) => {
+                admitted.held = false;
+            }
+            other => {
+                *permit = other;
+                table.budget.try_start(mono)?;
+            }
+        }
+        table.last_token = table.last_token.wrapping_add(1);
+        let token = table.last_token;
+        slot.holder = Some(token);
+        slot.last_attempt = Some(mono);
+        Ok(OfferReservation {
+            table: Arc::clone(&self.table),
+            pairing_id,
+            token,
+            expires_at: slot.expires_at,
+            secret: slot.secret.clone(),
+            state: ReservationState::Unauthenticated,
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn active_attempts(&self) -> usize {
+        self.lock().map_or(usize::MAX, |table| table.budget.active)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failures(&self, pairing_id: &[u8; 16]) -> Option<u8> {
+        self.lock()
+            .ok()?
+            .offers
+            .get(pairing_id)
+            .map(|slot| slot.failures)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn code_pairing_id(&self) -> Option<[u8; 16]> {
+        self.lock()
+            .ok()?
+            .offers
+            .iter()
+            .find_map(|(id, slot)| matches!(slot.secret, OfferSecret::Code(_)).then_some(*id))
+    }
+}
+
+impl fmt::Debug for PairingOffers {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (offers, active) = self
+            .lock()
+            .map_or((0, 0), |table| (table.offers.len(), table.budget.active));
+        f.debug_struct("PairingOffers")
+            .field("offers", &offers)
+            .field("active_attempts", &active)
+            .finish()
+    }
+}
+
+/// One accepted stream's place in the §13 unauthenticated-attempt budget
+/// ([`PairingOffers::admit`]). Dropping it frees the place; a reservation
+/// made for the stream takes it over.
+pub(crate) struct AttemptPermit {
+    table: Arc<Mutex<Table>>,
+    held: bool,
+}
+
+impl Drop for AttemptPermit {
+    fn drop(&mut self) {
+        if self.held
+            && let Ok(mut table) = self.table.lock()
+        {
+            table.budget.finish();
+        }
+    }
+}
+
+impl fmt::Debug for AttemptPermit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AttemptPermit")
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReservationState {
+    /// Counts against the §13 budget.
+    Unauthenticated,
+    /// The peer's `Identity` verified; no longer counts against §13.
+    Authenticated,
+    /// The offer is burned.
+    Burned,
+}
+
+/// One attempt's hold on an offer. Dropping it without burning frees the
+/// offer (QR) or records a failed attempt (code).
+///
+/// If the offer is withdrawn while the attempt runs, the attempt fails at
+/// its next authority step and the offer cannot be burned.
+pub struct OfferReservation {
+    table: Arc<Mutex<Table>>,
+    pairing_id: [u8; 16],
+    /// Identifies this reservation in the slot it holds.
+    token: u64,
+    expires_at: UnixTime,
+    secret: OfferSecret,
+    state: ReservationState,
+}
+
+impl OfferReservation {
+    /// The reserved offer's pairing ID.
+    #[must_use]
+    pub fn pairing_id(&self) -> &[u8; 16] {
+        &self.pairing_id
+    }
+
+    /// The offer's expiry.
+    #[must_use]
+    pub fn expires_at(&self) -> UnixTime {
+        self.expires_at
+    }
+
+    /// The pairing mode of the offer.
+    #[must_use]
+    pub fn kind(&self) -> OfferKind {
+        match self.secret {
+            OfferSecret::Qr(_) => OfferKind::Qr,
+            OfferSecret::Code(_) => OfferKind::Code,
+        }
+    }
+
+    pub(crate) fn secret(&self) -> &OfferSecret {
+        &self.secret
+    }
+
+    /// Whether this reservation still holds its slot in `table`.
+    fn holds(&self, table: &Table) -> bool {
+        table
+            .offers
+            .get(&self.pairing_id)
+            .is_some_and(|slot| slot.holder == Some(self.token))
+    }
+
+    /// Whether the offer is still offered and held by this attempt: not
+    /// withdrawn, replaced, or burned.
+    pub(crate) fn still_offered(&self) -> bool {
+        self.state != ReservationState::Burned
+            && self.table.lock().is_ok_and(|table| self.holds(&table))
+    }
+
+    /// The peer authenticated (§4.3): the attempt leaves the §13
+    /// unauthenticated budget.
+    pub(crate) fn authenticated(&mut self) {
+        if self.state == ReservationState::Unauthenticated {
+            if let Ok(mut table) = self.table.lock() {
+                table.budget.finish();
+            }
+            self.state = ReservationState::Authenticated;
+        }
+    }
+
+    /// Burns the offer: it can never be reserved again (§3.1, §3.2).
+    /// Burning twice is a no-op.
+    ///
+    /// # Errors
+    ///
+    /// [`PairingError::UnknownOffer`] if the offer was withdrawn or is no
+    /// longer held by this reservation, and [`PairingError::Unavailable`]
+    /// if the table is unusable. Nothing changes then.
+    pub(crate) fn burn(&mut self) -> Result<(), PairingError> {
+        if self.state == ReservationState::Burned {
+            return Ok(());
+        }
+        let mut table = self.table.lock().map_err(|_| PairingError::Unavailable)?;
+        if !self.holds(&table) {
+            return Err(PairingError::UnknownOffer);
+        }
+        if self.state == ReservationState::Unauthenticated {
+            table.budget.finish();
+        }
+        table.offers.remove(&self.pairing_id);
+        self.state = ReservationState::Burned;
+        Ok(())
+    }
+}
+
+impl Drop for OfferReservation {
+    fn drop(&mut self) {
+        if self.state == ReservationState::Burned {
+            return;
+        }
+        // A poisoned table stays as it is: the offer remains reserved and
+        // so unusable (fail closed).
+        let Ok(mut guard) = self.table.lock() else {
+            return;
+        };
+        let table = &mut *guard;
+        if self.state == ReservationState::Unauthenticated {
+            table.budget.finish();
+        }
+        let exhausted = match table.offers.get_mut(&self.pairing_id) {
+            // A withdrawn offer is gone; nothing to release or count.
+            Some(slot) if slot.holder == Some(self.token) => {
+                slot.holder = None;
+                if let OfferSecret::Code(_) = slot.secret {
+                    slot.failures = slot.failures.saturating_add(1);
+                }
+                slot.failures >= MAX_CODE_FAILURES
+            }
+            _ => false,
+        };
+        if exhausted {
+            table.offers.remove(&self.pairing_id);
+        }
+    }
+}
+
+impl fmt::Debug for OfferReservation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OfferReservation")
+            .field("kind", &self.kind())
+            .field("expires_at", &self.expires_at)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(test)]
+mod tests;

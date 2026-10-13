@@ -9,10 +9,8 @@
 //! session. Cryptographic checks and state-machine ordering live in
 //! `todoke-crypto::session`.
 //!
-//! Not implemented here: `CodeOfferRequest`, `CodeOffer`, `CodeShareA`, and
-//! `CodeShareB` bodies (§3.2, kinds 0x03/0x04/0x06/0x07). Their kinds are
-//! recognized so a receiver can name them, but no body codec exists until
-//! the code-pairing work (O2).
+//! The `CodeOfferRequest`, `CodeOffer`, `CodeShareA`, and `CodeShareB`
+//! bodies (§3.2, kinds 0x03/0x04/0x06/0x07) are in [`crate::pairing`].
 
 use core::fmt;
 
@@ -121,15 +119,15 @@ pub enum PreludeKind {
     ClientHello = 0x01,
     /// `ServerHello`.
     ServerHello = 0x02,
-    /// `CodeShareA` (§3.2; no body codec yet).
+    /// `CodeShareA` (§3.2; body in [`crate::pairing::CodeShare`]).
     CodeShareA = 0x03,
-    /// `CodeShareB` (§3.2; no body codec yet).
+    /// `CodeShareB` (§3.2; body in [`crate::pairing::CodeShare`]).
     CodeShareB = 0x04,
     /// `NoiseHandshake`.
     NoiseHandshake = 0x05,
-    /// `CodeOfferRequest` (§3.2; no body codec yet).
+    /// `CodeOfferRequest` (§3.2; body in [`crate::pairing::CodeOfferRequest`]).
     CodeOfferRequest = 0x06,
-    /// `CodeOffer` (§3.2; no body codec yet).
+    /// `CodeOffer` (§3.2; body in [`crate::pairing::CodeOffer`]).
     CodeOffer = 0x07,
 }
 

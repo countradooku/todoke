@@ -32,16 +32,18 @@ pub(crate) fn session_id(handshake_hash: &[u8; KEY_LEN]) -> [u8; 32] {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct KdfError;
 
-fn hkdf_sha256(
+/// `HKDF(salt, ikm, info, 32)`: RFC 5869 HKDF-SHA-256 Extract then Expand
+/// (§1). An empty salt means 32 zero bytes.
+pub(crate) fn hkdf_sha256(
     salt: &[u8],
-    ikm: &[u8; KEY_LEN],
+    ikm: &[u8],
     info: &[u8],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
     let mut prk = Zeroizing::new([0; KEY_LEN]);
     Hkdf::<Sha2_256>::extract(
         prk.as_mut_slice().classify_ref_mut(),
         salt.classify_ref(),
-        ikm.as_slice().classify_ref(),
+        ikm.classify_ref(),
     )
     .map_err(|_| KdfError)?;
     let mut okm = Zeroizing::new([0; KEY_LEN]);

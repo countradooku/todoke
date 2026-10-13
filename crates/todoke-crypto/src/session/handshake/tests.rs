@@ -181,7 +181,7 @@ fn code_pair(
     let psk = || PairingPsk::from_bytes(Zeroizing::new([0x44; 32]));
     let (initiator, client_hello) = HandshakeDriver::initiator(
         GATE,
-        InitiatorPlan::code([0x21; 16], psk(), transcript()),
+        InitiatorPlan::code_with_psk([0x21; 16], psk(), transcript()),
         &init_static,
         [0x22; 16],
         Entropy::Os,
@@ -191,7 +191,7 @@ fn code_pair(
     let (responder, server_hello) = HandshakeDriver::responder(
         GATE,
         hello,
-        ResponderPlan::code(psk(), responder_transcript),
+        ResponderPlan::code_with_psk(psk(), responder_transcript),
         &resp_static,
         [0x23; 16],
         Entropy::Os,
@@ -272,7 +272,7 @@ fn plan_and_hello_must_agree() -> TestResult {
         HandshakeDriver::responder(GATE, hello, plan, &key, [3; 16], Entropy::Os, T).map(|_| ())
     };
     assert_eq!(
-        mismatch(qr, ResponderPlan::code(psk(), transcript())),
+        mismatch(qr, ResponderPlan::code_with_psk(psk(), transcript())),
         Err(SessionError::Usage)
     );
     assert_eq!(
@@ -283,7 +283,7 @@ fn plan_and_hello_must_agree() -> TestResult {
         mismatch(contact, ResponderPlan::qr(psk())),
         Err(SessionError::Usage)
     );
-    assert!(mismatch(code, ResponderPlan::code(psk(), transcript())).is_ok());
+    assert!(mismatch(code, ResponderPlan::code_with_psk(psk(), transcript())).is_ok());
     assert!(mismatch(qr, ResponderPlan::qr(psk())).is_ok());
     // A zero locator cannot start a session.
     assert_eq!(
@@ -428,7 +428,10 @@ fn plans_do_not_print_locators_or_keys() {
     };
     let debug = [
         format!("{:?}", InitiatorPlan::qr([0xa7; 16], [0xb8; 32], psk())),
-        format!("{:?}", InitiatorPlan::code([0xa7; 16], psk(), transcript())),
+        format!(
+            "{:?}",
+            InitiatorPlan::code_with_psk([0xa7; 16], psk(), transcript())
+        ),
         format!(
             "{:?}",
             InitiatorPlan::contact(9, [0xa7; 16], Zeroizing::new([0x44; 32]), [0xb8; 32])
@@ -445,4 +448,254 @@ fn plans_do_not_print_locators_or_keys() {
         }
         assert!(debug.contains("Plan"), "{debug}");
     }
+}
+
+/// The public inputs of one real code-pairing attempt (§3.2).
+struct CodeInputs {
+    code_offer: [u8; CODE_OFFER_LEN],
+    pairing_id: [u8; 16],
+    client_nonce: [u8; 16],
+    server_nonce: [u8; 16],
+}
+
+impl CodeInputs {
+    fn new() -> AnyResult<Self> {
+        let pairing_id = [0xa1; 16];
+        let request = todoke_proto::pairing::CodeOfferRequest::new([0x5e; 8])?;
+        let offer = todoke_proto::pairing::CodeOffer::new(
+            &request,
+            pairing_id,
+            todoke_proto::time::UnixTime::new(1_760_000_300).ok_or("time")?,
+        )?;
+        let mut code_offer = [0; CODE_OFFER_LEN];
+        code_offer[..10].copy_from_slice(&request.encode());
+        code_offer[10..].copy_from_slice(&offer.encode());
+        Ok(Self {
+            code_offer,
+            pairing_id,
+            client_nonce: [0xc1; 16],
+            server_nonce: [0x5c; 16],
+        })
+    }
+
+    /// Both drivers of a real code-pairing attempt with the code
+    /// `0123456789`, each drawing its `CPace` scalar from `seed_a` /
+    /// `seed_b` (the initiator also gets its two Noise draws), and the
+    /// `ServerHello` record.
+    fn drivers(
+        &self,
+        seed_a: [u8; 64],
+        seed_b: [u8; 64],
+    ) -> AnyResult<(HandshakeDriver, HandshakeDriver, Vec<u8>)> {
+        let gate = crate::pairing::UnauditedCodePairing::acknowledge_not_production_ready();
+        let code = HumanCode::parse("0123456789")?;
+        let (initiator, client_record) = HandshakeDriver::initiator(
+            GATE,
+            InitiatorPlan::code_pairing(gate, self.pairing_id, code.clone(), self.code_offer),
+            &NoiseStaticKey::generate()?,
+            self.client_nonce,
+            Entropy::scripted(vec![seed_a.to_vec(), vec![0x61; 32], vec![0x63; 64]]),
+            T,
+        )?;
+        let client = read_client_hello(body(&client_record)?)?;
+        let mut plan = ResponderPlan::code_pairing(gate, code);
+        plan.bind_code_offer(self.code_offer)?;
+        let (responder, server_record) = HandshakeDriver::responder(
+            GATE,
+            client,
+            plan,
+            &NoiseStaticKey::generate()?,
+            self.server_nonce,
+            Entropy::scripted(vec![seed_b.to_vec()]),
+            T,
+        )?;
+        Ok((initiator, responder, server_record))
+    }
+}
+
+/// HKDF-SHA-256 with one output block, written out with `RustCrypto`'s
+/// HMAC (RFC 5869), independently of the crate's KDF.
+fn hkdf_one_block(salt: &[u8], ikm: &[u8], info: &[u8]) -> AnyResult<[u8; 32]> {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut extract = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(salt)?;
+    extract.update(ikm);
+    let prk = extract.finalize().into_bytes();
+    let mut expand = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(&prk)?;
+    expand.update(info);
+    expand.update(&[1]);
+    Ok(expand.finalize().into_bytes().into())
+}
+
+/// §3.2 through the drivers: both sides give `CPace` exactly the spec's
+/// inputs and derive exactly the spec's PSK. Everything expected here is
+/// written out from the spec, not taken from `pairing::transcript`: `CI =
+/// "todoke/v1/cpace-ci\0" || code_offer || ClientHello || ServerHello`,
+/// `sid = client_nonce || server_nonce`, `ADa`/`ADb`, the 49-byte share
+/// layouts, and `psk = HKDF(B3(pre_noise), ISK, "todoke/v1/cpace-psk\0",
+/// 32)`. The `CPace` computation itself is pinned to the draft's vectors
+/// in `pairing::cpace::tests`; this pins what the session feeds it.
+#[test]
+fn code_pairing_feeds_cpace_exactly_the_spec_inputs() -> TestResult {
+    let inputs = CodeInputs::new()?;
+    let (seed_a, seed_b) = ([0x0a; 64], [0x0b; 64]);
+    let (mut initiator, mut responder, server_record) = inputs.drivers(seed_a, seed_b)?;
+    let server = Hello::decode_server(&body(&server_record)?[1..], &initiator.client)?;
+    let share_a = initiator.receive(body(&server_record)?, T)?;
+    let [share_a] = share_a.as_slice() else {
+        return Err("one CodeShareA record".into());
+    };
+    let share_b = responder.receive(body(share_a)?, T)?;
+    let [share_b] = share_b.as_slice() else {
+        return Err("one CodeShareB record".into());
+    };
+
+    let mut ci = b"todoke/v1/cpace-ci\x00".to_vec();
+    ci.extend_from_slice(&inputs.code_offer);
+    ci.extend_from_slice(&initiator.client.encode());
+    ci.extend_from_slice(&server.encode());
+    assert_eq!(ci.len(), 19 + 44 + 66 + 66);
+    let mut sid = inputs.client_nonce.to_vec();
+    sid.extend_from_slice(&inputs.server_nonce);
+    let (ad_a, ad_b) = (b"todoke/v1/cpace-a\x00", b"todoke/v1/cpace-b\x00");
+    let password = b"0123456789";
+    let (ya, _) = crate::pairing::cpace::start(
+        password,
+        &ci,
+        &sid,
+        ad_a,
+        &Entropy::scripted(vec![seed_a.to_vec()]),
+    )?;
+    let (yb, isk) = crate::pairing::cpace::respond(
+        &ya,
+        password,
+        &ci,
+        &sid,
+        ad_a,
+        ad_b,
+        &Entropy::scripted(vec![seed_b.to_vec()]),
+    )?;
+    // length (2) || kind || pairing_id || role || element
+    let mut expected_a = vec![0, 50, 0x03];
+    expected_a.extend_from_slice(&inputs.pairing_id);
+    expected_a.push(0);
+    expected_a.extend_from_slice(&ya);
+    assert_eq!(share_a, &expected_a);
+    let mut expected_b = vec![0, 50, 0x04];
+    expected_b.extend_from_slice(&inputs.pairing_id);
+    expected_b.push(1);
+    expected_b.extend_from_slice(&yb);
+    assert_eq!(share_b, &expected_b);
+
+    let mut pre_noise = inputs.code_offer.to_vec();
+    pre_noise.extend_from_slice(&initiator.client.encode());
+    pre_noise.extend_from_slice(&server.encode());
+    pre_noise.extend_from_slice(&expected_a[3..]);
+    pre_noise.extend_from_slice(&expected_b[3..]);
+    assert_eq!(pre_noise.len(), 44 + 66 + 66 + 49 + 49);
+    let psk = hkdf_one_block(
+        blake3::hash(&pre_noise).as_bytes(),
+        isk.as_bytes(),
+        b"todoke/v1/cpace-psk\x00",
+    )?;
+    assert_eq!(responder.psk.as_deref(), Some(&psk));
+    // The initiator derives the same PSK from share B and starts Noise.
+    let first = initiator.receive(body(share_b)?, T)?;
+    assert_eq!(first.len(), 1);
+    assert_eq!(initiator.psk.as_deref(), Some(&psk));
+    let mut prologue = b"todoke/v1/noise-prologue\x00".to_vec();
+    prologue.extend_from_slice(&pre_noise);
+    assert_eq!(initiator.prologue(&server)?, prologue);
+    assert_eq!(responder.prologue(&server)?, prologue);
+    Ok(())
+}
+
+/// §3.2: a share whose role byte does not match its record kind aborts,
+/// on either side, even with a valid element for the right offer.
+#[test]
+fn a_share_with_the_wrong_role_byte_aborts() -> TestResult {
+    let inputs = CodeInputs::new()?;
+    // The Ristretto255 basepoint, a valid element (RFC 9496 §4.4).
+    let element: [u8; 32] =
+        hex::decode("e2f2ae0a6abc4e71a884a961c500515f58e30b6aa582dd8db6a65945e08d2d76")?
+            .try_into()
+            .map_err(|_| "element")?;
+    let share = |kind: PreludeKind, role: CodeRole| -> AnyResult<Vec<u8>> {
+        let body = CodeShare::new(inputs.pairing_id, role, element)?.encode();
+        let mut record = vec![kind.to_u8()];
+        record.extend_from_slice(&body);
+        Ok(record)
+    };
+    // The responder: kind CodeShareA, role B.
+    let (_, mut responder, _) = inputs.drivers([0x0a; 64], [0x0b; 64])?;
+    assert_eq!(
+        responder.receive(&share(PreludeKind::CodeShareA, CodeRole::B)?, T),
+        Err(state())
+    );
+    assert!(responder.psk.is_none());
+    // The initiator, after sending share A: kind CodeShareB, role A.
+    let (mut initiator, _, server_record) = inputs.drivers([0x0a; 64], [0x0b; 64])?;
+    initiator.receive(body(&server_record)?, T)?;
+    assert_eq!(
+        initiator.receive(&share(PreludeKind::CodeShareB, CodeRole::A)?, T),
+        Err(state())
+    );
+    assert!(initiator.psk.is_none());
+    // The matching role byte is accepted on both sides.
+    let (mut initiator, mut responder, server_record) = inputs.drivers([0x0a; 64], [0x0b; 64])?;
+    initiator.receive(body(&server_record)?, T)?;
+    let reply = responder.receive(&share(PreludeKind::CodeShareA, CodeRole::A)?, T)?;
+    assert_eq!(reply.len(), 1);
+    assert_eq!(
+        initiator
+            .receive(&share(PreludeKind::CodeShareB, CodeRole::B)?, T)
+            .map(|records| records.len()),
+        Ok(1)
+    );
+    Ok(())
+}
+
+/// Randomness that fails while `CPace` draws its scalar ends the attempt
+/// with a local randomness error on either side, before any share or PSK.
+#[test]
+fn cpace_randomness_failure_fails_closed() -> TestResult {
+    let inputs = CodeInputs::new()?;
+    let gate = crate::pairing::UnauditedCodePairing::acknowledge_not_production_ready();
+    let code = HumanCode::parse("0123456789")?;
+    let (mut initiator, client_record) = HandshakeDriver::initiator(
+        GATE,
+        InitiatorPlan::code_pairing(gate, inputs.pairing_id, code.clone(), inputs.code_offer),
+        &NoiseStaticKey::generate()?,
+        inputs.client_nonce,
+        Entropy::scripted(Vec::new()),
+        T,
+    )?;
+    let client = read_client_hello(body(&client_record)?)?;
+    let mut plan = ResponderPlan::code_pairing(gate, code);
+    plan.bind_code_offer(inputs.code_offer)?;
+    let (mut responder, server_record) = HandshakeDriver::responder(
+        GATE,
+        client,
+        plan,
+        &NoiseStaticKey::generate()?,
+        inputs.server_nonce,
+        Entropy::scripted(Vec::new()),
+        T,
+    )?;
+    assert_eq!(
+        initiator.receive(body(&server_record)?, T),
+        Err(SessionError::Random)
+    );
+    assert!(initiator.psk.is_none());
+    // A valid share A for the responder, from a working initiator.
+    let (mut working, _, server_record) = inputs.drivers([0x0a; 64], [0x0b; 64])?;
+    let share_a = working.receive(body(&server_record)?, T)?;
+    let [share_a] = share_a.as_slice() else {
+        return Err("one CodeShareA record".into());
+    };
+    assert_eq!(
+        responder.receive(body(share_a)?, T),
+        Err(SessionError::Random)
+    );
+    assert!(responder.psk.is_none());
+    Ok(())
 }

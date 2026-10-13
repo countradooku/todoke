@@ -18,6 +18,12 @@ use super::revocation::{ApplyOutcome, RevocationError, RevocationRecord, Revocat
 use super::sealing::{Sealer, SoftwareSealer};
 use super::storage::{BlobStorage, StorageError};
 
+mod pairing;
+
+pub use pairing::MAX_BURNED_PAIRINGS;
+pub(crate) use pairing::PairingJournal;
+use pairing::PairingState;
+
 /// Local quota: stored contacts.
 pub const MAX_CONTACTS: usize = 1024;
 /// Local quota: history events kept per contact; the oldest are dropped first.
@@ -41,22 +47,23 @@ const MAX_BLOB_LEN: usize = 6
     + MAX_CONTACTS * (CONTACT_FIXED_LEN + MAX_HISTORY * HISTORY_LEN)
     + 4
     + super::revocation::MAX_ROOTS * (32 + 1 + 2 + 2)
-    + super::revocation::MAX_TOTAL_RECORDS * todoke_proto::identity::REVOKE_LEN;
+    + super::revocation::MAX_TOTAL_RECORDS * todoke_proto::identity::REVOKE_LEN
+    + pairing::MAX_SECTION_LEN;
 
 /// Version 2 added retained conflicting revocation records to the revocation
-/// set layout; version 3 added the per-contact §4.4 ratchet journal. Older
+/// set layout; version 3 added the per-contact §4.4 ratchet journal; version
+/// 4 added the pending-pairing journal and the burned pairing ledger. Older
 /// blobs are rejected; those formats never shipped.
 const ENVELOPE: Envelope = Envelope {
     magic: *b"TDKC",
-    version: 3,
+    version: 4,
     context: b"todoke/local/contacts\0",
 };
 const KEYSET_DOMAIN: &[u8] = b"todoke/local/keyset\0";
 
 /// The current pair PSK. Zeroized on drop; `Debug` is redacted; it has no
 /// public constructor or accessor and never leaves this crate. It is produced
-/// by pairing (not implemented yet) and by the §4.4 ratchet in
-/// [`crate::session`].
+/// by pairing and by the §4.4 ratchet in [`crate::session`].
 pub struct PairPsk(Zeroizing<[u8; PSK_LEN]>);
 
 impl PairPsk {
@@ -556,6 +563,7 @@ pub struct ContactStore<S: Sealer, B: BlobStorage> {
     storage: B,
     contacts: BTreeMap<Ed25519PublicKey, Contact>,
     revocations: RevocationSet,
+    pairing: PairingState,
 }
 
 impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
@@ -569,10 +577,17 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// interrupted by a crash or shutdown. Its contact is blocked as
     /// [`VerificationState::RatchetUncertain`] and the journal is dropped
     /// (zeroizing its PSK): neither generation is restored or tried (§4.4).
-    /// The block is persisted with the next mutation.
+    /// A journaled new pairing is dropped the same way; it never becomes a
+    /// contact, an existing contact for its device is blocked, and its
+    /// pairing ID stays burned. The block is persisted with the next
+    /// mutation.
     pub fn open(sealer: S, storage: B) -> Result<Self, ContactError> {
-        let (mut contacts, revocations) = match storage.load(MAX_BLOB_LEN)? {
-            None => (BTreeMap::new(), RevocationSet::new()),
+        let (mut contacts, revocations, pairing) = match storage.load(MAX_BLOB_LEN)? {
+            None => (
+                BTreeMap::new(),
+                RevocationSet::new(),
+                PairingState::default(),
+            ),
             Some(blob) => {
                 let plaintext = ENVELOPE.open(&sealer, &blob).map_err(map_format)?;
                 decode(&plaintext).map_err(map_format)?
@@ -583,12 +598,15 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
                 contact.state = VerificationState::RatchetUncertain;
             }
         }
-        Ok(Self {
+        let mut store = Self {
             sealer,
             storage,
             contacts,
             revocations,
-        })
+            pairing,
+        };
+        store.discard_interrupted_pairing();
+        Ok(store)
     }
 
     /// The contact pinning `device`, if any.
@@ -646,7 +664,7 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     }
 
     fn check_available(&self, contact: &Contact) -> Result<(), Unavailable> {
-        if contact.pending.is_some() {
+        if contact.pending.is_some() || self.pairing_pending_for(&contact.pinned.device_public) {
             return Err(Unavailable::RatchetUncertain);
         }
         match contact.state {
@@ -691,6 +709,32 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
         generation: u64,
         now: UnixTime,
     ) -> Result<PairOutcome, ContactError> {
+        let device = *binding.device_public();
+        let (outcome, previous) =
+            self.insert_paired(binding, origin, psk, generation, now, None)?;
+        if let Err(error) = self.persist() {
+            match previous {
+                Some(previous) => self.contacts.insert(device, previous),
+                None => self.contacts.remove(&device),
+            };
+            return Err(error);
+        }
+        Ok(outcome)
+    }
+
+    /// The in-memory part of [`Self::pair`]: checks the binding against
+    /// retained revocations and the quota, then inserts the contact with
+    /// `pending` as its ratchet marker. Returns the replaced contact, if
+    /// any, so the caller can roll back; nothing is persisted.
+    fn insert_paired(
+        &mut self,
+        binding: &VerifiedDeviceBinding,
+        origin: TrustOrigin,
+        psk: PairPsk,
+        generation: u64,
+        now: UnixTime,
+        pending: Option<PendingJournal>,
+    ) -> Result<(PairOutcome, Option<Contact>), ContactError> {
         let root = binding.person_root();
         if self.revocations.is_root_disabled(root) {
             return Err(ContactError::Binding(BindingError::RootDisabled));
@@ -712,7 +756,7 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
             generation,
             psk,
             history: VecDeque::new(),
-            pending: None,
+            pending,
         };
         let outcome = if let Some(previous) = self.contacts.get(&device) {
             contact.history.clone_from(&previous.history);
@@ -738,14 +782,7 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
             PairOutcome::New
         };
         let previous = self.contacts.insert(device, contact);
-        if let Err(error) = self.persist() {
-            match previous {
-                Some(previous) => self.contacts.insert(device, previous),
-                None => self.contacts.remove(&device),
-            };
-            return Err(error);
-        }
-        Ok(outcome)
+        Ok((outcome, previous))
     }
 
     /// Checks a binding presented in a session's `Identity` message against
@@ -1085,7 +1122,7 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     }
 
     fn persist(&mut self) -> Result<(), ContactError> {
-        let plaintext = encode(&self.contacts, &self.revocations);
+        let plaintext = encode_all(&self.contacts, &self.revocations, &self.pairing);
         let blob = ENVELOPE
             .seal(&self.sealer, &plaintext)
             .map_err(map_format)?;
@@ -1099,6 +1136,8 @@ impl<S: Sealer, B: BlobStorage> fmt::Debug for ContactStore<S, B> {
         f.debug_struct("ContactStore")
             .field("contacts", &self.contacts.len())
             .field("revocations", &self.revocations.len())
+            .field("pairing_pending", &self.pairing.pending.is_some())
+            .field("burned_pairings", &self.pairing.burned.len())
             .finish_non_exhaustive()
     }
 }
@@ -1110,13 +1149,25 @@ fn map_format(error: LocalFormatError) -> ContactError {
     }
 }
 
-/// Local format v2 plaintext:
-/// `count:u32 || count × contact || revocation set`, contacts in strictly
-/// increasing device-key order. See [`CONTACT_FIXED_LEN`] and
-/// [`HISTORY_LEN`] for the record layouts.
+/// Local format v4 plaintext with an empty pairing section, for tests of
+/// the contact and revocation layouts.
+#[cfg(test)]
 fn encode(
     contacts: &BTreeMap<Ed25519PublicKey, Contact>,
     revocations: &RevocationSet,
+) -> Zeroizing<Vec<u8>> {
+    encode_all(contacts, revocations, &PairingState::default())
+}
+
+/// Local format v4 plaintext:
+/// `count:u32 || count × contact || revocation set || pairing section`,
+/// contacts in strictly increasing device-key order. See
+/// [`CONTACT_FIXED_LEN`] and [`HISTORY_LEN`] for the record layouts and
+/// [`PairingState`] for the pairing section.
+fn encode_all(
+    contacts: &BTreeMap<Ed25519PublicKey, Contact>,
+    revocations: &RevocationSet,
+    pairing: &PairingState,
 ) -> Zeroizing<Vec<u8>> {
     let mut out = Zeroizing::new(Vec::new());
     // Bounded by MAX_CONTACTS and MAX_HISTORY on every insertion and decode.
@@ -1140,6 +1191,7 @@ fn encode(
         encode_pending(contact.pending.as_ref(), &mut out);
     }
     revocations.encode_into(&mut out);
+    pairing.encode_into(&mut out);
     out
 }
 
@@ -1253,7 +1305,11 @@ fn decode_event(reader: &mut Reader<'_>) -> Result<HistoryEvent, LocalFormatErro
     })
 }
 
-type Decoded = (BTreeMap<Ed25519PublicKey, Contact>, RevocationSet);
+type Decoded = (
+    BTreeMap<Ed25519PublicKey, Contact>,
+    RevocationSet,
+    PairingState,
+);
 
 /// Decodes blob plaintext. Exposed to the fuzz harness via
 /// [`crate::identity::fuzzing`].
@@ -1315,6 +1371,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, LocalFormatError> {
         );
     }
     let revocations = RevocationSet::decode(&mut reader)?;
+    let pairing = PairingState::decode(&mut reader)?;
     reader.finish()?;
     // Retained roots must be trusted, i.e. pinned by some contact.
     let all_trusted = revocations.roots().all(|root| {
@@ -1325,13 +1382,21 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<Decoded, LocalFormatError> {
     if !all_trusted {
         return Err(LocalFormatError::Malformed);
     }
-    Ok((contacts, revocations))
+    // A device cannot be both mid-ratchet as a contact and mid-pairing.
+    if pairing.pending.as_ref().is_some_and(|pending| {
+        contacts
+            .get(&pending.device)
+            .is_some_and(|contact| contact.pending.is_some())
+    }) {
+        return Err(LocalFormatError::Malformed);
+    }
+    Ok((contacts, revocations, pairing))
 }
 
 /// Re-encodes decoded plaintext, for the fuzz harness's canonicality check.
 #[cfg(fuzzing)]
 pub(crate) fn reencode(decoded: &Decoded) -> Zeroizing<Vec<u8>> {
-    encode(&decoded.0, &decoded.1)
+    encode_all(&decoded.0, &decoded.1, &decoded.2)
 }
 
 #[cfg(test)]
@@ -2607,7 +2672,7 @@ mod tests {
         }
         assert_eq!(
             format!("{store:?}"),
-            "ContactStore { contacts: 1, revocations: 0, .. }"
+            "ContactStore { contacts: 1, revocations: 0, pairing_pending: false, burned_pairings: 0, .. }"
         );
         Ok(())
     }
@@ -2801,7 +2866,25 @@ mod tests {
             revocations.len(),
             super::super::revocation::MAX_TOTAL_RECORDS
         );
-        let plaintext = encode(&contacts, &revocations);
+        // A pending pairing for one of the devices and a full ledger.
+        let mut pairing = PairingState::default();
+        for index in 0..MAX_BURNED_PAIRINGS {
+            let mut pairing_id = [0xb0; 16];
+            pairing_id[15] = u8::try_from(index)?;
+            pairing.burned.insert(pairing_id, time(T0)?);
+        }
+        let pending_id = *pairing.burned.keys().next().ok_or("ledger")?;
+        let pending_device = *devices.first().ok_or("no devices")?;
+        pairing.pending = Some(pairing::PendingPairing {
+            pairing_id: pending_id,
+            expires_at: time(T0)?,
+            origin: TrustOrigin::CodePairing,
+            device: pending_device,
+            keyset: KeysetDigest([1; 32]),
+            handshake_hash: [2; 32],
+            psk_next: PairPsk::new([3; 32]),
+        });
+        let plaintext = encode_all(&contacts, &revocations, &pairing);
         let blob = ENVELOPE.seal(&sealer(9), &plaintext).map_err(|_| "seal")?;
         assert_eq!(blob.len(), MAX_BLOB_LEN);
         let mut storage = MemoryStorage::new();
@@ -2931,7 +3014,10 @@ mod tests {
         let mut contacts = BTreeMap::new();
         contacts.insert(device, fixed_contact(indexed_key(0)?, device, 1)?);
         let valid = encode(&contacts, &RevocationSet::new()).to_vec();
-        assert_eq!(valid.len(), 4 + CONTACT_FIXED_LEN + HISTORY_LEN + 4);
+        assert_eq!(
+            valid.len(),
+            4 + CONTACT_FIXED_LEN + HISTORY_LEN + 4 + pairing::PENDING_PAIRING_LEN + 1
+        );
         assert_eq!(valid[KIND], 2);
         let with = |changes: &[(usize, &[u8])]| {
             let mut bytes = valid.clone();

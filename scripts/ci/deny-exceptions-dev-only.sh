@@ -13,9 +13,10 @@
 #   "Build-time only" may not be linked into a target binary.
 # - Every target checked by the CI cross job must be in the target list below.
 # - No target's non-dev graph may enable a feature in forbidden_features:
-#   todoke-crypto's `unaudited-suite-0001` (the PROTOCOL §16 production gate)
-#   or Snow's `risky-raw-split` (traffic-key export, used only by the offline
-#   fixture generator). Under resolver 2/3, dev-dependency features are only
+#   todoke-crypto's `unaudited-suite-0001` and `unaudited-code-pairing` (the
+#   PROTOCOL §16 production gates for suite 0x0001 and, through O2, human-code
+#   pairing) or Snow's `risky-raw-split` (traffic-key export, used only by the
+#   offline fixture generator). Under resolver 2/3, dev-dependency features are only
 #   unified into builds of targets that need them (Cargo book, "Feature
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
@@ -57,7 +58,11 @@ targets=(
 build_time_only=("syn@2.0.119")
 
 # Features no shipped graph may enable, as package:feature.
-forbidden_features=("todoke-crypto:unaudited-suite-0001" "snow:risky-raw-split")
+forbidden_features=(
+    "todoke-crypto:unaudited-suite-0001"
+    "todoke-crypto:unaudited-code-pairing"
+    "snow:risky-raw-split"
+)
 
 # Skipped duplicate versions, read from deny.toml as name@version.
 # A read loop rather than mapfile keeps this runnable on macOS's bash 3.2.
