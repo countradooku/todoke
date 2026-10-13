@@ -45,6 +45,9 @@ proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 # The RNG trait of pakery's API (code pairing only).
 rand_core = { version = "=0.10.1", default-features = false }
 serde_json = "=1.0.154"
+# Unicode normalization tables: the §7.1 NFC check (todoke-proto) and the
+# receiver's collision keys (todoke-fs).
+unicode-normalization = { version = "=0.1.25", default-features = false }
 # Runtime Noise engine (todoke-crypto) and the offline fixture generator
 # (todoke-proto). Only `hfs` here; see docs/adr/0001-noise-crate.md.
 snow = { version = "=0.10.0", default-features = false, features = ["hfs"] }

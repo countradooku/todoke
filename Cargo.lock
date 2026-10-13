@@ -1137,6 +1137,15 @@ version = "0.1.0"
 [[package]]
 name = "todoke-fs"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+ "proptest",
+ "todoke-crypto",
+ "todoke-proto",
+ "todoke-transfer",
+ "unicode-normalization",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-preview"

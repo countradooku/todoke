@@ -2,12 +2,29 @@
 //!
 //! # Trust boundary
 //!
-//! Remote filenames, paths, metadata, and local filesystem races are untrusted.
-//! File operations must enforce the core's consent and verified-chunk decisions.
+//! Remote filenames, paths, MIME labels, and content are untrusted, and so
+//! is the local filesystem, which other processes can change at any time.
+//! Nothing here follows a link, overwrites an entry, opens or executes a
+//! received file, or logs a path or peer file name (PROTOCOL §14.2).
 //!
-//! # Status
+//! # Pieces
 //!
-//! Empty scaffold: no protocol behavior or security guarantees are implemented.
-//! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
+//! | Piece | What it does | Spec |
+//! | --- | --- | --- |
+//! | [`sanitize_component`] | Rewrites one manifest name for local use, visibly and deterministically ([`name`] lists every rule) | §7.1 |
+//! | [`DestinationPlan`] | Before consent: every entry's exact local name, renames, warnings, and rejections, including filesystem collisions (case, Unicode normalization) and per-OS length limits | §7.1 |
 
 #![forbid(unsafe_code)]
+
+pub mod name;
+mod plan;
+
+#[cfg(test)]
+mod tests;
+
+pub use name::extension::{ExtensionRisk, Platforms, RiskKind, extension_risk};
+pub use name::{Change, Kind, MAX_COMPONENT_BYTES, NameRules, sanitize_component};
+pub use plan::{
+    DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection,
+    UntrustedName, Warning,
+};
