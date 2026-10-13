@@ -44,6 +44,16 @@ impl Path {
             retransmit: Duration::from_millis(200),
         }
     }
+
+    pub(crate) const fn with_bandwidth(mut self, bytes_per_second: u64) -> Self {
+        self.bandwidth = Some(bytes_per_second);
+        self
+    }
+
+    pub(crate) const fn with_loss(mut self, loss: f64) -> Self {
+        self.loss = loss;
+        self
+    }
 }
 
 /// A small deterministic generator (xorshift64*); test scheduling only.
@@ -72,6 +82,8 @@ struct Direction {
     writer: Option<Waker>,
     closed: bool,
     rng: Rng,
+    /// Every byte ever written in this direction.
+    carried: u64,
 }
 
 impl Direction {
@@ -84,6 +96,7 @@ impl Direction {
             writer: None,
             closed: false,
             rng: Rng(seed | 1),
+            carried: 0,
         }
     }
 }
@@ -231,6 +244,7 @@ impl AsyncWrite for SimLink {
         direction.last = departs.max(direction.last);
         direction.queue.push_back((arrives, buf[..count].to_vec()));
         direction.queued += count;
+        direction.carried += count as u64;
         if let Some(reader) = direction.reader.take() {
             reader.wake();
         }
@@ -285,6 +299,8 @@ pub(crate) enum Answer {
 pub(crate) struct SimConnector {
     answers: Arc<Mutex<BTreeMap<SocketAddr, Answer>>>,
     accepted: Arc<Mutex<Vec<(SocketAddr, SimLink)>>>,
+    /// The directions of every link opened, near to far first.
+    opened: Arc<Mutex<Vec<(SocketAddr, Shared, Shared)>>>,
     attempts: Arc<Mutex<Vec<(SocketAddr, Instant)>>>,
 }
 
@@ -301,6 +317,20 @@ impl SimConnector {
             .lock()
             .map(|mut accepted| accepted.drain(..).collect())
             .unwrap_or_default()
+    }
+
+    /// Bytes carried so far by the links opened to `address`, in each
+    /// direction (from the connecting side, to it).
+    pub(crate) fn carried(&self, address: SocketAddr) -> (u64, u64) {
+        let total = |shared: &Shared| lock(shared).map_or(0, |direction| direction.carried);
+        self.opened.lock().map_or((0, 0), |opened| {
+            opened
+                .iter()
+                .filter(|(to, _, _)| *to == address)
+                .fold((0, 0), |(out, back), (_, near, far)| {
+                    (out + total(near), back + total(far))
+                })
+        })
     }
 
     /// Every attempt started, with its address and start time.
@@ -333,6 +363,13 @@ impl Connector for SimConnector {
                 let seed = u64::from(address.port()) ^ 0x9e37_79b9_7f4a_7c15;
                 let (mut near, far) = link(path, local, address, seed);
                 near.info = near.info.with_latency(setup);
+                if let Ok(mut opened) = self.opened.lock() {
+                    opened.push((
+                        address,
+                        Arc::clone(&near.outgoing),
+                        Arc::clone(&near.incoming),
+                    ));
+                }
                 if let Ok(mut accepted) = self.accepted.lock() {
                     accepted.push((address, far));
                 }

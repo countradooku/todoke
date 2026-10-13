@@ -13,6 +13,7 @@
 //! | [`LanPolicy`] | Which addresses may be contacted or accepted: private and link-local only, no privileged ports | §9, §10 |
 //! | [`race`](race::race) | Races connections (never sessions) to a peer's candidates, RFC 8305 style, within §10's bounds | §4, §10 |
 //! | [`TcpConnector`], [`LanListener`] | TCP links on the local network, dual-stack, `TCP_NODELAY` | §9 |
+//! | [`TransportManager`] | One attempt and one session per device pair, simultaneous-open resolution, the contact handshake on the winning link, the §13 unauthenticated-attempt budget, and the migration policy | §4, §5, §13 |
 //! | [`capabilities`] | Which link kinds this build can use | §16 O7 |
 //!
 //! # What is not here
@@ -23,11 +24,16 @@
 //!   disabled. So there is no QUIC (and no UDP GSO/GRO tuning) yet.
 //! - **Relay** (§10): a later step.
 //! - **Sessions racing:** only connections race; see [`race`].
+//!
+//! Sessions are suite 0x0001, which is not production-enabled (§16 O6,
+//! O10): [`TransportManager`] needs the `UnauditedSuite0001` gate.
 
 #![forbid(unsafe_code)]
 
 pub mod capabilities;
 pub mod link;
+#[cfg(not(target_family = "wasm"))]
+pub mod manager;
 pub mod policy;
 #[cfg(not(target_family = "wasm"))]
 pub mod race;
@@ -38,8 +44,15 @@ pub mod timer;
 
 #[cfg(all(test, not(target_family = "wasm")))]
 mod sim;
+#[cfg(all(test, not(target_family = "wasm")))]
+mod tests;
 
 pub use link::{Link, LinkInfo, LinkKind};
+#[cfg(not(target_family = "wasm"))]
+pub use manager::{
+    ClaimedIncoming, ConnectError, Connected, Established, Incoming, IncomingContact,
+    MigrationPolicy, OutgoingClaim, SlotGuard, TransportManager,
+};
 pub use policy::{LanPolicy, Refusal};
 #[cfg(not(target_family = "wasm"))]
 pub use race::{Candidate, Connector, RaceConfig, RaceError};
