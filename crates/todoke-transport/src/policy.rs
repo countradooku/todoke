@@ -8,6 +8,13 @@
 //! link-local addresses on unprivileged ports are allowed (§10: loopback,
 //! unspecified, multicast, broadcast, and privileged or administrative
 //! service endpoints MUST NOT be contacted).
+//!
+//! What it cannot stop: a hostile record naming another private address
+//! and unprivileged port on the same network (a printer, a database, this
+//! device's own LAN address) makes this device send one `ClientHello` there.
+//! Anyone who can send that record can already reach those services
+//! directly, so this gives them nothing new except this device's source
+//! address.
 
 use core::fmt;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -109,10 +116,15 @@ impl LanPolicy {
                 Err(Refusal::NotLocal)
             };
         }
+        let octets = ip.octets();
         // 169.254.169.254 and its neighbours are cloud metadata services,
         // not peers.
-        let metadata = ip.octets()[..3] == [169, 254, 169];
-        if (ip.is_private() || ip.is_link_local()) && !metadata && !ip.is_broadcast() {
+        let metadata = octets[..3] == [169, 254, 169];
+        // A last octet of 255 (or 0) is the broadcast (or network) address of
+        // every /24 and wider subnet, which home networks use; §10 forbids
+        // broadcast. A host so numbered in a wider subnet is not reachable.
+        let edge = octets[3] == 255 || octets[3] == 0;
+        if (ip.is_private() || ip.is_link_local()) && !metadata && !edge {
             Ok(())
         } else {
             Err(Refusal::NotLocal)
@@ -127,7 +139,10 @@ impl LanPolicy {
                 Err(Refusal::NotLocal)
             };
         }
-        if ip.is_unicast_link_local() || ip.is_unique_local() {
+        // fd00:ec2::/32 holds a cloud metadata service (the IPv6 twin of
+        // 169.254.169.254).
+        let metadata = ip.segments()[..2] == [0xfd00, 0x0ec2];
+        if (ip.is_unicast_link_local() || ip.is_unique_local()) && !metadata {
             Ok(())
         } else {
             Err(Refusal::NotLocal)

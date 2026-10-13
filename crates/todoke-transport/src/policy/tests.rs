@@ -63,6 +63,12 @@ fn everything_else_is_refused() -> TestResult {
         // Cloud metadata services.
         v4("169.254.169.254", 45_000)?,
         v4("169.254.169.123", 45_000)?,
+        v6("fd00:ec2::254", 45_000, 0)?,
+        // Directed broadcast and network addresses.
+        v4("192.168.1.255", 45_000)?,
+        v4("10.0.0.255", 45_000)?,
+        v4("169.254.255.255", 45_000)?,
+        v4("192.168.1.0", 45_000)?,
         // Reserved and documentation ranges.
         v4("240.0.0.1", 45_000)?,
         v4("192.0.2.1", 45_000)?,
@@ -136,6 +142,7 @@ proptest! {
         if LanPolicy::new().check_peer(address).is_ok() {
             prop_assert!(ip.is_private() || ip.is_link_local());
             prop_assert!(!ip.is_loopback());
+            prop_assert!(octets[3] != 255 && octets[3] != 0);
             prop_assert!(port >= MIN_PEER_PORT);
             prop_assert_eq!(LanPolicy::new().check_source(address), Ok(()));
         }

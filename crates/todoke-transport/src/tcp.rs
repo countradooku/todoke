@@ -168,7 +168,8 @@ impl LanListener {
     }
 
     /// The next connection from an address the policy allows; connections
-    /// from anywhere else are closed unread.
+    /// from anywhere else, and connections that fail while they are set up,
+    /// are closed unread.
     ///
     /// # Errors
     ///
@@ -177,10 +178,15 @@ impl LanListener {
     pub async fn accept(&self) -> io::Result<TcpLink> {
         loop {
             let (stream, source) = self.listener.accept().await?;
-            if self.policy.check_source(source).is_ok() {
-                return TcpLink::new(stream, None);
+            if self.policy.check_source(source).is_err() {
+                continue;
             }
-            drop(stream);
+            // A connection reset before it was set up (some systems then fail
+            // `TCP_NODELAY` or the address queries) is that connection's
+            // problem, not the listener's: drop it and keep accepting.
+            if let Ok(link) = TcpLink::new(stream, None) {
+                return Ok(link);
+            }
         }
     }
 }
