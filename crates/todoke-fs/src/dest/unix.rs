@@ -112,10 +112,17 @@ pub(super) fn remove_file(dir: &Handle, _: &Path, name: &str) -> Result<(), Dest
 /// Errors meaning "this filesystem or kernel cannot do that", after which
 /// the next, weaker method is tried.
 fn unsupported(errno: Errno) -> bool {
-    matches!(
-        errno,
-        Errno::INVAL | Errno::NOSYS | Errno::NOTSUP | Errno::OPNOTSUPP | Errno::PERM | Errno::MLINK
-    )
+    // ENOTSUP and EOPNOTSUPP are the same value on Linux, distinct on Apple
+    // platforms, so they are compared rather than matched.
+    not_supported(errno)
+        || matches!(
+            errno,
+            Errno::INVAL | Errno::NOSYS | Errno::PERM | Errno::MLINK
+        )
+}
+
+fn not_supported(errno: Errno) -> bool {
+    errno == Errno::NOTSUP || errno == Errno::OPNOTSUPP
 }
 
 pub(super) fn publish(
@@ -167,7 +174,8 @@ pub(super) fn sync_dir(dir: &Handle) -> Result<(), DestError> {
     match synced {
         // Some filesystems cannot sync a directory; nothing more is
         // possible there.
-        Ok(()) | Err(Errno::INVAL | Errno::NOTSUP | Errno::OPNOTSUPP | Errno::BADF) => Ok(()),
+        Ok(()) | Err(Errno::INVAL | Errno::BADF) => Ok(()),
+        Err(errno) if not_supported(errno) => Ok(()),
         Err(other) => Err(error(other)),
     }
 }
