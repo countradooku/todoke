@@ -837,3 +837,144 @@ proptest! {
         if let Ok(record) = Manifest::decode(&bytes, &ManifestLimits::SPEC) { prop_assert_eq!(record.encode(), bytes.clone()); }
     }
 }
+
+/// Zero identifiers are refused by the decoders themselves, not only by
+/// the constructors (§1: transfer and cancel IDs are random and nonzero).
+#[test]
+fn decoders_refuse_zero_identifiers() -> TestResult {
+    let reject = Reject::new([1; 16], [2; 32], RejectReason::Declined)?.encode();
+    let mut zero = reject;
+    zero[..16].fill(0);
+    assert_eq!(Reject::decode(&zero), Err(DecodeError::ZeroIdentifier));
+    let cancel = Cancel::new([1; 16], [2; 32], [3; 16], CancelReason::User)?.encode();
+    for range in [0..16, 48..64] {
+        let mut zero = cancel;
+        zero[range].fill(0);
+        assert_eq!(Cancel::decode(&zero), Err(DecodeError::ZeroIdentifier));
+    }
+    Ok(())
+}
+
+/// The record constructors refuse what their decoders refuse: request and
+/// file ID 0 in a `Chunk`, file ID 0 in a `ResumeStatus`, a part offset
+/// at or past the 4 MiB manifest maximum, a zero session ID in a receipt,
+/// and undefined content-suite bits.
+#[test]
+fn constructors_check_every_range() -> TestResult {
+    let content = [5; MIN_CONTENT_LEN];
+    assert_eq!(
+        Chunk::new([1; 16], [2; 32], 0, 3, 9, &content),
+        Err(DecodeError::Range)
+    );
+    assert_eq!(
+        Chunk::new([1; 16], [2; 32], 7, 0, 9, &content),
+        Err(DecodeError::Range)
+    );
+    let mut zero_request = Chunk::new([1; 16], [2; 32], 7, 3, 9, &content)?.encode();
+    zero_request[48..52].fill(0);
+    assert_eq!(Chunk::decode(&zero_request), Err(DecodeError::Range));
+    let mut zero_file = Chunk::new([1; 16], [2; 32], 7, 3, 9, &content)?.encode();
+    zero_file[52..56].fill(0);
+    assert_eq!(Chunk::decode(&zero_file), Err(DecodeError::Range));
+
+    assert_eq!(
+        ResumeStatus::new([1; 16], [2; 32], 0, 0, 1, vec![]),
+        Err(DecodeError::Range)
+    );
+
+    let data = [9; 10];
+    assert!(ManifestPart::new([1; 16], MAX_MANIFEST_BYTES - 1, &data).is_ok());
+    assert_eq!(
+        ManifestPart::new([1; 16], MAX_MANIFEST_BYTES, &data),
+        Err(DecodeError::Range)
+    );
+
+    let receipt = |session_id| {
+        ReceiptBody::new(
+            session_id,
+            [1; 16],
+            [2; 32],
+            [3; 32],
+            [5; 32],
+            [6; 32],
+            [7; 16],
+            time(T0)?,
+            2,
+            100,
+        )
+        .map_err(Box::<dyn std::error::Error>::from)
+    };
+    assert!(receipt([4; 32]).is_ok());
+    assert_eq!(
+        receipt([0; 32])
+            .err()
+            .and_then(|error| error.downcast_ref::<DecodeError>().copied()),
+        Some(DecodeError::ZeroIdentifier)
+    );
+
+    for bits in [0b01, 0b10, 0b11] {
+        assert_eq!(
+            Capabilities::PROTOCOL_MAXIMUMS
+                .with_content_suites(bits)?
+                .content_suites(),
+            bits
+        );
+    }
+    for bits in [0b100, 0x8000] {
+        assert_eq!(
+            Capabilities::PROTOCOL_MAXIMUMS.with_content_suites(bits),
+            Err(DecodeError::Reserved)
+        );
+    }
+    Ok(())
+}
+
+/// The 4 MiB manifest bound (§7.1) holds when building and when decoding,
+/// and a zero `entry_count` is refused by the decoder.
+#[test]
+fn manifest_size_bound_and_zero_count() -> TestResult {
+    // 10000 files with 255-byte names and 127-byte MIME labels encode to
+    // more than 4 MiB although every field is within its own limit.
+    let mime = format!("a/{}", "b".repeat(125));
+    let entries: Vec<ManifestEntry> = (1..=MAX_ENTRIES)
+        .map(|id| {
+            ManifestEntry::file(
+                id,
+                0,
+                format!("{id:05}{}", "n".repeat(250)),
+                mime.clone(),
+                1,
+                [0x11; 32],
+                2,
+            )
+        })
+        .collect();
+    assert_eq!(build(entries), Err(ManifestError::Length));
+    // Decoding refuses more than 4 MiB before reading anything.
+    let oversized = vec![0; MAX_MANIFEST_BYTES as usize + 1];
+    assert_eq!(
+        Manifest::decode(&oversized, &ManifestLimits::SPEC),
+        Err(ManifestError::Length)
+    );
+    let mut zero_count = build(vec![file(1, 0, "a", 1)])?.encode();
+    zero_count[102..106].fill(0);
+    assert_eq!(
+        Manifest::decode(&zero_count, &ManifestLimits::SPEC),
+        Err(ManifestError::EntryCount)
+    );
+    Ok(())
+}
+
+/// Digits are allowed in MIME labels (§7.1: `a-z`, `0-9`, and
+/// `!#$&^_.+-`), for example `video/mp4`.
+#[test]
+fn mime_labels_may_contain_digits() {
+    for good in [
+        "video/mp4",
+        "audio/3gpp",
+        "application/x-7z-compressed",
+        "0/9",
+    ] {
+        assert_eq!(validate_mime(good.as_bytes()), Ok(good), "{good}");
+    }
+}
