@@ -280,6 +280,8 @@ fn info() -> AnyResult<SessionInfo> {
         session_id: [2; 32],
         peer_static: [3; 32],
         peer_binding: enrolled.bind(1)?,
+        local_device: *enrolled.bind(2)?.device_public(),
+        established_at: crate::identity::test_support::time(crate::identity::test_support::T0)?,
     })
 }
 

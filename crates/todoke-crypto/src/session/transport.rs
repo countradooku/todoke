@@ -18,8 +18,9 @@ use zeroize::Zeroizing;
 
 use super::engine::{Entropy, NoiseTransport};
 use super::{Role, SessionError};
-use crate::identity::VerifiedDeviceBinding;
+use crate::identity::{Ed25519PublicKey, VerifiedDeviceBinding};
 use todoke_proto::session::SessionMode;
+use todoke_proto::time::UnixTime;
 
 /// Ordinary ciphertext bytes per directional key before a `KeyUpdate` is
 /// mandatory: 2^30 (§5).
@@ -378,6 +379,11 @@ pub(crate) struct SessionInfo {
     pub(crate) session_id: [u8; 32],
     pub(crate) peer_static: [u8; 32],
     pub(crate) peer_binding: VerifiedDeviceBinding,
+    /// This side's full device key, from its local binding.
+    pub(crate) local_device: Ed25519PublicKey,
+    /// The trusted wall-clock time at which the ratchet gate opened (§7.7:
+    /// a delivery receipt may not predate session establishment).
+    pub(crate) established_at: UnixTime,
 }
 
 /// The established session after the ratchet gate opened (§11 "Ratchet

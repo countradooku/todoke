@@ -154,3 +154,38 @@ path = "fuzz_targets/crypto_content_file_key.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "proto_transfer_records"
+path = "fuzz_targets/proto_transfer_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_transfer_manifest"
+path = "fuzz_targets/proto_transfer_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_consent_manifest"
+path = "fuzz_targets/crypto_consent_manifest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_consent_accept"
+path = "fuzz_targets/crypto_consent_accept.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_consent_receipt"
+path = "fuzz_targets/crypto_consent_receipt.rs"
+test = false
+doc = false
+bench = false

@@ -11,6 +11,11 @@ publish.workspace = true
 [lints]
 workspace = true
 
+# The §7.1 NFC check on manifest names. Normalization tables are Unicode
+# data, not something to reimplement.
+[dependencies]
+unicode-normalization = { version = "=0.1.25", default-features = false }
+
 [[example]]
 name = "generate_vectors"
 test = true

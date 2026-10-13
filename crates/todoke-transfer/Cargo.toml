@@ -10,3 +10,23 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+todoke-proto.workspace = true
+# Never enable a gate feature here (unaudited-suite-0001,
+# unaudited-code-pairing, insecure-content-without-accept): this is a
+# shipped graph, and scripts/ci/deny-exceptions-dev-only.sh checks it.
+todoke-crypto.workspace = true
+# The in-memory sink's whole-file BLAKE3 check before publication (§7.7).
+blake3.workspace = true
+# Trait bounds of the async driver over `todoke_crypto::session::Session`.
+futures-io.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+# Tests run real suite 0x0001 sessions (end-to-end transfers over the
+# session layer); development builds only, like the crate's own tests.
+todoke-crypto = { workspace = true, features = ["unaudited-suite-0001"] }
+# A valid ML-KEM-768 public credential for test device bindings.
+libcrux-ml-kem.workspace = true
+proptest.workspace = true

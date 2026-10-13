@@ -101,15 +101,23 @@ impl fmt::Debug for FileBinding {
 /// opening content require one, so no file key is used and no content is
 /// decrypted or verified before consent.
 ///
-/// The transfer layer's verified-Accept path is the only intended
-/// constructor: it must check the Accept signature, session, expiry, and
-/// that the file is in the selection with exactly this binding, then call
-/// the crate-private `AcceptedFile::from_verified_accept`. That path does
-/// not exist yet. The other constructor,
+/// The only constructor in a shipped build is the verified-Accept path in
+/// [`crate::consent`]: [`verify_accept`](crate::consent::verify_accept)
+/// (sender) and [`sign_accept`](crate::consent::sign_accept) (receiver)
+/// check the Accept's layout, session, transfer, manifest hash, both device
+/// keys, expiry, selection, and signature, and only then hand out, through
+/// [`VerifiedAccept::file`](crate::consent::VerifiedAccept::file), one
+/// `AcceptedFile` per selected regular file with exactly the manifest's
+/// binding. The crate-private `AcceptedFile::from_verified_accept` is not
+/// called anywhere else. The other constructor,
 /// `assume_accepted_without_verification`,
 /// exists only in this crate's unit tests and with the non-default
 /// `insecure-content-without-accept` feature, which
 /// `scripts/ci/deny-exceptions-dev-only.sh` keeps out of every shipped graph.
+///
+/// An `AcceptedFile` does not expire by itself; the transfer engine drops it
+/// when the authorization ends (expiry, cancel, reject, failure, or the end
+/// of the session).
 ///
 /// Without the feature, this does not compile:
 ///
@@ -129,12 +137,9 @@ pub struct AcceptedFile {
 }
 
 impl AcceptedFile {
-    /// The hook for the transfer layer's verified-Accept path (see the
+    /// The verified-Accept path's constructor; only
+    /// `crate::consent` calls it, after verifying the signed Accept (see the
     /// type documentation).
-    #[expect(
-        dead_code,
-        reason = "the signed Accept is verified by the transfer layer, not built yet"
-    )]
     pub(crate) const fn from_verified_accept(binding: FileBinding) -> Self {
         Self { binding }
     }

@@ -29,6 +29,10 @@ fn layout_and_round_trip() -> TestResult {
     expected.extend_from_slice(&MASTER);
     assert_eq!(expected.len(), FILE_KEY_BODY_LEN);
     assert_eq!(encoded.as_slice(), expected.as_slice());
+    assert_eq!(
+        FileKeyBody::peek_transfer_id(encoded.as_slice()),
+        Ok(TRANSFER_ID)
+    );
     let decoded = FileKeyBody::decode(encoded.as_slice())?;
     assert_eq!(decoded.transfer_id(), &TRANSFER_ID);
     assert_eq!(decoded.accept_hash(), &ACCEPT_HASH);
@@ -50,6 +54,10 @@ fn malformed_bodies_are_rejected() -> TestResult {
             FileKeyBody::decode(&bytes).err(),
             Some(FileKeyError::Length)
         );
+        assert_eq!(
+            FileKeyBody::peek_transfer_id(&bytes),
+            Err(FileKeyError::Length)
+        );
     }
     let with = |range: core::ops::Range<usize>, value: &[u8]| {
         let mut bytes = *encoded;
@@ -57,6 +65,17 @@ fn malformed_bodies_are_rejected() -> TestResult {
         FileKeyBody::decode(&bytes).err()
     };
     assert_eq!(with(0..16, &[0; 16]), Some(FileKeyError::TransferId));
+    let mut zero_id = *encoded;
+    zero_id[..16].copy_from_slice(&[0; 16]);
+    assert_eq!(
+        FileKeyBody::peek_transfer_id(&zero_id),
+        Err(FileKeyError::TransferId)
+    );
+    // The peek reads the transfer ID only: bodies that fail to decode for
+    // another reason still peek.
+    let mut bad_suite = *encoded;
+    bad_suite[52..54].copy_from_slice(&[0, 0]);
+    assert_eq!(FileKeyBody::peek_transfer_id(&bad_suite), Ok(TRANSFER_ID));
     assert_eq!(with(48..52, &[0; 4]), Some(FileKeyError::FileId));
     for suite in [0_u16, 3, 0x0100, u16::MAX] {
         assert_eq!(

@@ -590,6 +590,32 @@ impl FrameType {
     pub const PONG: Self = Self(0x0008);
     /// `Error` (§12).
     pub const ERROR: Self = Self(0x0009);
+    /// `ManifestStart` (§7.1).
+    pub const MANIFEST_START: Self = Self(0x0010);
+    /// `ManifestPart` (§7.1).
+    pub const MANIFEST_PART: Self = Self(0x0011);
+    /// `Accept` (`AcceH`, §7.3).
+    pub const ACCEPT: Self = Self(0x0012);
+    /// `Reject` (§7.3).
+    pub const REJECT: Self = Self(0x0013);
+    /// `FileKey` (§8).
+    pub const FILE_KEY: Self = Self(0x0014);
+    /// `ChunkRequest` (§7.4).
+    pub const CHUNK_REQUEST: Self = Self(0x0015);
+    /// `Chunk` (§7.4).
+    pub const CHUNK: Self = Self(0x0016);
+    /// `ResumeQuery` (§7.5).
+    pub const RESUME_QUERY: Self = Self(0x0017);
+    /// `ResumeStatus` (§7.5).
+    pub const RESUME_STATUS: Self = Self(0x0018);
+    /// `Cancel` (§7.6).
+    pub const CANCEL: Self = Self(0x0019);
+    /// `CancelAck` (§7.6).
+    pub const CANCEL_ACK: Self = Self(0x001a);
+    /// `Complete` (§7.7).
+    pub const COMPLETE: Self = Self(0x001b);
+    /// `DeliveryReceipt` (§7.7).
+    pub const DELIVERY_RECEIPT: Self = Self(0x001c);
     /// `Revoke` (§2).
     pub const REVOKE: Self = Self(0x0040);
 
