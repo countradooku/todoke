@@ -2,7 +2,7 @@
 //! wrappers the content layer uses. Provenance: `testdata/wycheproof/README.md`.
 
 use super::{AnyResult, TestResult, testdata};
-use crate::content::{ContentSuite, aead};
+use crate::content::{ContentSuite, TAG_LEN, aead};
 use crate::session::test_vectors::{Vector, hex_at, json_at};
 
 fn array<'a>(value: &'a Vector, pointer: &str) -> AnyResult<&'a Vec<Vector>> {
@@ -68,6 +68,29 @@ fn aes_256_gcm_wycheproof() -> TestResult {
         ContentSuite::Aes256GcmStream,
     )?;
     assert_eq!((ran, skipped), (66, 250));
+    Ok(())
+}
+
+/// The wrappers fail closed on inputs the content layer never passes: an
+/// AES nonce that is not 12 bytes, and sealed input shorter than the tag,
+/// for both suites. Nothing is returned on failure.
+#[test]
+fn wrappers_refuse_wrong_nonces_and_short_input() -> TestResult {
+    let aes = ContentSuite::Aes256GcmStream;
+    for nonce_len in [0, 8, 11, 13, 16, 24] {
+        let nonce = vec![0; nonce_len];
+        assert!(aead::seal(aes, &[0; 32], &nonce, &[], b"data").is_err());
+        assert!(aead::open(aes, &[0; 32], &nonce, &[], &[0; 20]).is_err());
+    }
+    for suite in [aes, ContentSuite::XChaCha20Poly1305Stream] {
+        let nonce = vec![0; suite.nonce_len()];
+        let sealed = aead::seal(suite, &[0; 32], &nonce, &[], &[])?;
+        assert_eq!(sealed.len(), TAG_LEN);
+        assert!(aead::open(suite, &[0; 32], &nonce, &[], &sealed)?.is_empty());
+        for len in [0, 1, TAG_LEN - 1] {
+            assert!(aead::open(suite, &[0; 32], &nonce, &[], &sealed[..len]).is_err());
+        }
+    }
     Ok(())
 }
 

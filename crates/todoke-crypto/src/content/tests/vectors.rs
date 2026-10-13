@@ -70,6 +70,21 @@ fn stream_nonce_layouts_match_every_fixture_case() -> TestResult {
     Ok(())
 }
 
+/// The checked constructor takes prefixes up to the `XChaCha` length (19
+/// bytes, a 24-byte nonce) and refuses longer ones instead of writing past
+/// the nonce buffer.
+#[test]
+fn stream_nonce_refuses_an_overlong_prefix() -> TestResult {
+    let nonce = stream_nonce(&[0x19; 19], 1, false)?;
+    assert_eq!(nonce.as_slice().len(), 24);
+    assert_eq!(&nonce.as_slice()[19..], &[0, 0, 0, 1, 0]);
+    assert_eq!(
+        stream_nonce(&[0x20; 20], 1, false).err(),
+        Some(ContentError::SegmentOutOfRange)
+    );
+    Ok(())
+}
+
 /// A file large enough that epoch 1's first segment exists and is not the
 /// last one.
 fn schedule_binding(schedule: &Vector, suite: ContentSuite) -> AnyResult<FileBinding> {

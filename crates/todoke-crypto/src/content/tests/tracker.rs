@@ -230,6 +230,41 @@ fn can_record_predicts_the_cap_before_storage() -> TestResult {
     Ok(())
 }
 
+/// Errors have distinct messages, and `Debug` shows counts only: no
+/// transfer ID and no segment indices.
+#[test]
+fn errors_and_debug_output() -> TestResult {
+    let messages: BTreeSet<String> = [
+        TrackerError::ForeignSegment,
+        TrackerError::TooFragmented,
+        TrackerError::FromIndexOutOfRange,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    assert_eq!(messages.len(), 3);
+    assert!(messages.iter().all(|message| !message.is_empty()));
+    let file = binding(1000, 7)?;
+    let mut tracker = SegmentTracker::new(&file);
+    for index in [612, 613, 900] {
+        assert_eq!(record(&mut tracker, &file, index)?, Ok(true));
+    }
+    let debug = format!("{tracker:?}");
+    for expected in [
+        "file_id: 7",
+        "segment_count: 1000",
+        "verified: 3",
+        "ranges: 2",
+    ] {
+        assert!(debug.contains(expected), "{debug}");
+    }
+    // TRANSFER_ID is 0xa3 = 163 repeated; the indices are not shown.
+    for hidden in ["163", "a3", "612", "900"] {
+        assert!(!debug.contains(hidden), "{debug}");
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 enum Op {
     Record(u32),

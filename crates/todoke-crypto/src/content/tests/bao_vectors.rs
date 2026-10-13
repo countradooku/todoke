@@ -402,6 +402,71 @@ fn strict_range_rules() -> TestResult {
     Ok(())
 }
 
+/// A source or outboard whose every operation fails with `kind`.
+struct Failing(std::io::ErrorKind);
+
+impl std::io::Read for Failing {
+    fn read(&mut self, _: &mut [u8]) -> std::io::Result<usize> {
+        Err(self.0.into())
+    }
+}
+
+impl std::io::Write for Failing {
+    fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+        Err(self.0.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Err(self.0.into())
+    }
+}
+
+impl std::io::Seek for Failing {
+    fn seek(&mut self, _: std::io::SeekFrom) -> std::io::Result<u64> {
+        Err(self.0.into())
+    }
+}
+
+/// A read failure other than a short file is reported as an I/O error with
+/// its kind, not as a changed source, whether the source or the outboard
+/// fails; the outboard writer passes both sides' errors through.
+#[test]
+fn source_and_outboard_io_errors_are_reported() -> TestResult {
+    use std::io::ErrorKind::{PermissionDenied, StorageFull};
+    let file = sliced(2 * 16384 + 5)?;
+    let (tree, _) = outboard(&file.input);
+    for index in 0..file.layout.count() {
+        let segment = file.layout.segment(index)?;
+        let failing_source = extract_slice(
+            Failing(PermissionDenied),
+            Cursor::new(&tree),
+            &file.layout,
+            &segment,
+            &file.root,
+        );
+        assert_eq!(
+            failing_source.err(),
+            Some(ContentError::SourceIo(PermissionDenied))
+        );
+        let failing_outboard = extract_slice(
+            Cursor::new(&file.input),
+            Failing(PermissionDenied),
+            &file.layout,
+            &segment,
+            &file.root,
+        );
+        assert_eq!(
+            failing_outboard.err(),
+            Some(ContentError::SourceIo(PermissionDenied))
+        );
+    }
+    let unreadable = write_outboard(Failing(PermissionDenied), Cursor::new(Vec::new()));
+    assert_eq!(unreadable.err().map(|e| e.kind()), Some(PermissionDenied));
+    let unwritable = write_outboard(file.input.as_slice(), Failing(StorageFull));
+    assert_eq!(unwritable.err().map(|e| e.kind()), Some(StorageFull));
+    Ok(())
+}
+
 /// The sender detects a source or outboard that no longer matches the
 /// manifest root and size.
 #[test]

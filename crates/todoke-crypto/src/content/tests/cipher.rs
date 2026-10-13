@@ -407,6 +407,41 @@ fn last_flag_forgery_is_rejected() -> TestResult {
     Ok(())
 }
 
+/// The opener applies the same v1 counter rule as the sealer: it never
+/// opens an epoch's last segment with the final flag clear, even for a
+/// ciphertext sealed that way by the primitive.
+#[test]
+fn the_opener_refuses_a_forbidden_counter() -> TestResult {
+    for suite in local_suites() {
+        let (_, opener, binding) = huge(suite, EPOCH_SEGMENTS + 1)?;
+        let epoch_end = binding.layout().segment(EPOCH_SEGMENTS - 1)?;
+        assert_eq!(
+            opener
+                .decrypt_raw(&epoch_end.with_final(false), &[0; 40])
+                .err(),
+            Some(ContentError::SegmentOutOfRange)
+        );
+        // The honest flag reaches the AEAD, which rejects the zeros.
+        assert_eq!(
+            opener.decrypt_raw(&epoch_end, &[0; 40]).err(),
+            Some(ContentError::Authentication)
+        );
+    }
+    Ok(())
+}
+
+/// The sealer and opener report the accepted binding they were built for.
+#[test]
+fn sealer_and_opener_keep_their_binding() -> TestResult {
+    for suite in local_suites() {
+        let source = Source::with_ids(counter_input(10)?, suite, [0x3c; 16], 9)?;
+        assert_eq!(source.sealer()?.binding(), &source.binding);
+        assert_eq!(source.opener()?.binding(), &source.binding);
+        assert_eq!(source.accepted().binding(), &source.binding);
+    }
+    Ok(())
+}
+
 /// Truncating a file by substituting a final segment fails: the last
 /// segment of a shorter or longer version of the file, an epoch-final
 /// segment of a longer file, or another file's final segment never opens
