@@ -263,7 +263,8 @@ fn a_temporary_file_replaced_before_publication_is_never_published() -> TestResu
 
 /// Windows: the staged file is created without `FILE_SHARE_DELETE` and
 /// held until it is released, so its temporary name can be neither
-/// renamed nor deleted (and so not replaced) in the meantime.
+/// renamed nor deleted (and so not replaced) in the meantime. The final
+/// name, a second link, is not pinned: NTFS lets it be deleted.
 #[cfg(windows)]
 #[test]
 fn a_held_staged_file_cannot_be_renamed_or_deleted() -> TestResult {
@@ -285,8 +286,12 @@ fn a_held_staged_file_cannot_be_renamed_or_deleted() -> TestResult {
         destination.publish(&root, &staged, ".t", "final")?,
         Atomicity::Atomic
     );
-    // The final name is a name of the held file too.
-    assert!(std::fs::remove_file(temp.path().join("final")).is_err());
+    // The temporary name stays pinned after the link.
+    assert!(
+        std::fs::remove_file(&path).is_err(),
+        "deleted after the link"
+    );
+    assert!(destination.same_file(&root, ".t", "final")?);
     destination.release(&root, staged, ".t")?;
     assert!(!path.exists());
     assert_eq!(std::fs::read(temp.path().join("final"))?, b"payload");
