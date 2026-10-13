@@ -62,6 +62,12 @@
 //!   every operation is relative to a directory opened from the
 //!   destination root without following links (`openat` with
 //!   `O_NOFOLLOW` on Unix; reparse points opened and refused on Windows).
+//! - **Bound to the verified file:** the staged file stays open from
+//!   creation to publication, and publication requires the final name to
+//!   be that file (same device and inode on Unix; on Windows the handle is
+//!   held without `FILE_SHARE_DELETE`, so the name cannot be replaced), so a
+//!   file substituted under the temporary name is never published,
+//!   journaled, or acknowledged.
 //! - **No overwrite:** files and directories are created exclusively;
 //!   publication uses rename-without-replace, a hard link, or, on
 //!   filesystems with neither (FAT, exFAT, some network shares), an

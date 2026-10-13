@@ -57,6 +57,10 @@ pub enum DestError {
     /// The entry is a link, or not the kind expected (a directory where a
     /// file was expected, a device, a FIFO): refused, never followed.
     WrongKind,
+    /// A name no longer referred to the file this crate staged under it:
+    /// someone replaced it during the operation. Nothing of ours was
+    /// published, and whatever replaced it is left untouched.
+    Replaced,
     /// Any other failure, by kind.
     Io(std::io::ErrorKind),
 }
@@ -67,6 +71,7 @@ impl fmt::Display for DestError {
             Self::Exists => f.write_str("the name is taken"),
             Self::NotFound => f.write_str("the entry does not exist"),
             Self::WrongKind => f.write_str("the entry is a link or of the wrong kind"),
+            Self::Replaced => f.write_str("the entry was replaced during the operation"),
             Self::Io(kind) => write!(f, "destination storage failed: {kind}"),
         }
     }
@@ -184,30 +189,55 @@ pub trait Destination {
 
     /// Creates the temporary file `temp` in `dir`, exclusively (never
     /// opening an existing entry or following a link), without execute
-    /// permission.
+    /// permission. The returned file stays open until
+    /// [`Self::release`]: publication is bound to it, not to the name.
     ///
     /// # Errors
     ///
     /// [`DestError::Exists`]; [`DestError`].
     fn stage(&self, dir: &Self::Dir, temp: &str) -> Result<Self::Staged, DestError>;
 
-    /// Marks the staged file's origin (see [`OriginMarker`]), makes its
-    /// content durable, and closes it.
+    /// Marks the staged file's origin (see [`OriginMarker`]) and makes its
+    /// content durable. The file stays open.
     ///
     /// # Errors
     ///
     /// [`DestError`].
-    fn finish_staged(&self, staged: Self::Staged) -> Result<(), DestError>;
+    fn finish_staged(&self, staged: &Self::Staged) -> Result<(), DestError>;
 
-    /// Publishes the finished temporary file `temp` as `name` in `dir`
-    /// without replacing anything, atomically where the filesystem
-    /// allows. On [`DestError::Exists`] the temporary file is still there,
-    /// so the caller can try another name.
+    /// Publishes `staged`, the finished file created as `temp` in `dir`,
+    /// as `name` without replacing anything, atomically where the
+    /// filesystem allows, and only if `name` then refers to `staged`
+    /// itself: the whole-file check was made over the bytes written through
+    /// that handle, and anyone who can write `dir` can see and replace the
+    /// temporary name. On [`DestError::Exists`] the temporary file is still
+    /// there, so the caller can try another name.
     ///
     /// # Errors
     ///
-    /// [`DestError::Exists`]; [`DestError`].
-    fn publish(&self, dir: &Self::Dir, temp: &str, name: &str) -> Result<Atomicity, DestError>;
+    /// [`DestError::Exists`]; [`DestError::Replaced`] if `temp` or `name`
+    /// referred to something else (nothing of ours was published, and the
+    /// substitute is left untouched); [`DestError`].
+    fn publish(
+        &self,
+        dir: &Self::Dir,
+        staged: &Self::Staged,
+        temp: &str,
+        name: &str,
+    ) -> Result<Atomicity, DestError>;
+
+    /// Closes `staged` and removes its temporary name `temp` from `dir` if
+    /// that name still refers to it (after a hard-link publication it is a
+    /// second link to the published file; after a rename it is gone).
+    /// Whatever else is under the name is left alone. Call it after
+    /// [`Self::publish`], successful or not, and when giving up on a staged
+    /// file.
+    ///
+    /// # Errors
+    ///
+    /// [`DestError`]; the temporary name may then remain, for start-up
+    /// clean-up.
+    fn release(&self, dir: &Self::Dir, staged: Self::Staged, temp: &str) -> Result<(), DestError>;
 
     /// Removes the temporary file `temp` from `dir` if it is there (a
     /// link there is removed, not followed).

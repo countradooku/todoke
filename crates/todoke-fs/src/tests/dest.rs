@@ -23,8 +23,12 @@ fn stage_and_publish(
 ) -> Result<Atomicity, DestError> {
     let mut staged = destination.stage(dir, temp)?;
     staged.write_all(content).map_err(DestError::from)?;
-    destination.finish_staged(staged)?;
-    destination.publish(dir, temp, name)
+    destination.finish_staged(&staged)?;
+    let published = destination.publish(dir, &staged, temp, name);
+    if published.is_ok() {
+        destination.release(dir, staged, temp)?;
+    }
+    published
 }
 
 #[test]
@@ -37,16 +41,20 @@ fn files_are_created_exclusively_and_never_replaced() -> TestResult {
         Atomicity::Atomic
     );
     // A second file under the same name is refused; its temporary stays.
+    let mut second = destination.stage(&root, ".t2")?;
+    second.write_all(b"second")?;
+    destination.finish_staged(&second)?;
     assert_eq!(
-        stage_and_publish(&destination, &root, ".t2", "a.txt", b"second"),
+        destination.publish(&root, &second, ".t2", "a.txt"),
         Err(DestError::Exists)
     );
     assert_eq!(std::fs::read(temp.path().join("a.txt"))?, b"first");
     assert_eq!(names(temp.path())?, [".t2", "a.txt"]);
     assert_eq!(
-        destination.publish(&root, ".t2", "b.txt")?,
+        destination.publish(&root, &second, ".t2", "b.txt")?,
         Atomicity::Atomic
     );
+    destination.release(&root, second, ".t2")?;
     assert_eq!(names(temp.path())?, ["a.txt", "b.txt"]);
     // Staging never opens an existing entry.
     assert!(matches!(

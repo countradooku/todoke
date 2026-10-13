@@ -107,8 +107,8 @@ pub(crate) fn entries() -> Vec<Entry> {
 pub(crate) const FILES: [u32; 4] = [2, 3, 5, 6];
 
 /// Accepts `selection`, keys the files, and stores every segment.
-pub(crate) fn receive_all(
-    sink: &mut Sink,
+pub(crate) fn receive_all<D: crate::dest::Destination>(
+    sink: &mut FsSink<D, SoftwareSealer>,
     consented: &Consented,
     selection: &[u32],
 ) -> AnyResult<()> {

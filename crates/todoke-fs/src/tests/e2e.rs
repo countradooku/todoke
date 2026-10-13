@@ -19,12 +19,12 @@ use todoke_transfer::{
 use super::sink::files_below;
 use super::support::*;
 use super::*;
-use crate::dest::DirDestination;
+use crate::dest::{Destination, DirDestination};
 use crate::detect::{ContentWarning, DetectedType};
 use crate::{FsSink, FsSource, SinkConfig};
 
 type Sink = FsSink<DirDestination, SoftwareSealer>;
-type Engine<'k> = TransferEngine<'k, Keys, FsSource, Sink>;
+type Engine<'k, D = DirDestination> = TransferEngine<'k, Keys, FsSource, FsSink<D, SoftwareSealer>>;
 
 fn config() -> AnyResult<EngineConfig> {
     let maximums = Capabilities::PROTOCOL_MAXIMUMS;
@@ -67,21 +67,21 @@ fn deliver<K: KeyStore, S: SendSource, R: ReceiveSink>(
     };
 }
 
-/// Two engines and their events.
-struct Link<'k> {
+/// Two engines and their events; Bob publishes into a `D`.
+struct Link<'k, D: Destination = DirDestination> {
     alice: Engine<'k>,
-    bob: Engine<'k>,
+    bob: Engine<'k, D>,
     alice_events: Vec<TransferEvent>,
     bob_events: Vec<TransferEvent>,
     chunks: usize,
 }
 
-impl<'k> Link<'k> {
+impl<'k, D: Destination> Link<'k, D> {
     fn new(
         fixture: &'k Fixture,
         bindings: (SessionBinding, SessionBinding),
         source: FsSource,
-        sink: Sink,
+        sink: FsSink<D, SoftwareSealer>,
     ) -> AnyResult<Self> {
         let clock = Clock::new(time(WALL)?, START);
         let alice = TransferEngine::new(
@@ -529,5 +529,63 @@ fn engines_share_one_sink() -> TestResult {
     assert!(shared.lock()?.published_path(&[0x44; 16], 1).is_some());
     two.tombstone(&[0x44; 16], time(WALL + 7200)?);
     assert!(one.is_tombstoned(&[0x44; 16], time(WALL)?));
+    Ok(())
+}
+
+/// The staged temporary file replaced just before publication (finding
+/// F1), through the whole engine: the receiver never sends Complete or a
+/// receipt, the transfer fails with STORAGE, nothing is journaled as
+/// published, and the substitute is left as planted. On Windows the
+/// substitution itself is impossible and the transfer completes.
+#[test]
+fn a_substituted_temporary_file_fails_the_transfer_without_a_receipt() -> TestResult {
+    use super::race::{Plant, Substituting};
+    let fixture = fixture()?;
+    let (sources, state, dest) = (TempDir::new()?, TempDir::new()?, TempDir::new()?);
+    let files = vec![file_entry("report.txt", 0, content(30_000, 9))];
+    let (offer, source) = offer_from_disk(&fixture, sources.path(), &files)?;
+    let transfer_id = *offer.transfer_id();
+    let (destination, substituted) =
+        Substituting::new(DirDestination::open(dest.path())?, Plant::File);
+    let sink = FsSink::open(
+        state.path(),
+        destination,
+        sealer(7),
+        SinkConfig::default(),
+        time(WALL)?,
+    )?;
+    let mut link = Link::new(&fixture, fixture.first, source, sink)?;
+    link.settle(None);
+    link.alice.offer(offer, START)?;
+    link.settle(None);
+    link.bob.accept(&transfer_id, vec![1], START)?;
+    link.settle(None);
+    let completed = has(&link.bob_events, |e| {
+        matches!(e, TransferEvent::Completed { .. })
+    });
+    let confirmed = has(&link.alice_events, |e| {
+        matches!(e, TransferEvent::DeliveryConfirmed { .. })
+    });
+    if substituted.get() != Some(true) {
+        if !cfg!(windows) {
+            return Err("the staged file could not be replaced on this platform".into());
+        }
+        assert!(completed && confirmed);
+        return Ok(());
+    }
+    assert!(!completed, "Complete after a substituted publication");
+    assert!(!confirmed, "a receipt after a substituted publication");
+    assert!(has(&link.bob_events, |e| matches!(
+        e,
+        TransferEvent::Failed { failure, .. } if failure.code == FailureCode::Storage
+    )));
+    assert!(!dest.path().join("report.txt").exists());
+    let (_, sink) = link.bob.into_parts();
+    assert!(sink.published_path(&transfer_id, 1).is_none());
+    let planted: Vec<Vec<u8>> = files_below(dest.path())?
+        .iter()
+        .map(std::fs::read)
+        .collect::<Result<_, _>>()?;
+    assert_eq!(planted, [b"planted".to_vec()]);
     Ok(())
 }

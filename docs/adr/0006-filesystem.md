@@ -39,7 +39,8 @@ component that the destination plan produced:
 | --- | --- | --- |
 | Walk below the root without following links | `openat(O_DIRECTORY \| O_NOFOLLOW)` per component | `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-directory; every handle from the root down held without `FILE_SHARE_DELETE` while the operation runs |
 | Create without touching an existing entry | `mkdirat`; `openat(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode `0666` (umask applies, never execute bits) | `CreateDirectoryW`; `CREATE_NEW` |
-| Publish without replacing | `renameat2(RENAME_NOREPLACE)` on Linux, `renameatx_np(RENAME_EXCL)` on Apple platforms; if the filesystem refuses, `linkat` then `unlinkat`; if hard links are refused too, an exclusive copy | `CreateHardLinkW` then delete the temporary name (`std::fs::rename` always replaces); if hard links are refused (FAT, exFAT, some shares), an exclusive copy |
+| Publish without replacing | `renameat2(RENAME_NOREPLACE)` on Linux, `renameatx_np(RENAME_EXCL)` on Apple platforms; if the filesystem refuses, `linkat` then `unlinkat`; if hard links are refused too, an exclusive copy read from the staged handle | `CreateHardLinkW` then delete the temporary name (`std::fs::rename` always replaces); if hard links are refused (FAT, exFAT, some shares), an exclusive copy read from the staged handle |
+| Bind publication to the hashed file | The staged file stays open from creation to publication; before the rename or link, `fstat` of it and `statat(temp, AT_SYMLINK_NOFOLLOW)` must give the same `(st_dev, st_ino)` with one link, and after it the final name must (one link after a rename, two after a hard link); otherwise nothing is journaled or acknowledged and the substitute is left as it is | The staged file is created without `FILE_SHARE_DELETE` and held until publication is done, so the temporary name (and, after the link, the final one) can be neither renamed, deleted, nor replaced; identity cannot be compared with the standard library (`file_index` is unstable, `GetFileInformationByHandle` is `unsafe` FFI), so the held handle is the protection |
 | Read back for re-verification | `openat(O_NOFOLLOW \| O_NONBLOCK)`, then `fstat` must say regular file (a planted FIFO cannot block) | `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-file |
 | Durability | `fsync` of the file (`F_FULLFSYNC` on Apple) and of the directory | `FlushFileBuffers` of the file; NTFS journals the directory (the standard library has no directory flush) |
 
@@ -61,6 +62,13 @@ does not apply and long paths work.
 - *Exclusive-copy fallback:* nothing is overwritten, but the final name
   exists while the copy runs, and a crash leaves a truncated file there. Only
   filesystems with neither rename-without-replace nor hard links reach it.
+- *Substitution race on Unix:* anyone who can write the destination
+  directory sees the temporary name. The check before the rename refuses a
+  substitute; one planted between that check and the rename is moved to the
+  final name by the rename itself, and the check after it then refuses
+  publication (no journal entry, no `Complete`, no receipt) and leaves the
+  substitute there untouched rather than delete something this crate did
+  not create.
 - *Android:* bionic declares `renameat2` with `__INTRODUCED_IN(30)`, so the
   libc wrapper exists from API level 30 (Android 11), not from Android 14 as
   an earlier draft of this ADR said. Whether the app seccomp filter of every
@@ -237,6 +245,9 @@ slice against the manifest root as well (§8).
 
 - No peer-controlled name reaches a path outside the destination, follows a
   link, or replaces an entry; foreign files are never modified.
+- What is published is the file whose length and whole-file BLAKE3 were
+  checked: a file substituted under the temporary name is never published,
+  journaled, or acknowledged.
 - Nothing but ciphertext and sealed masters is at rest before publication;
   the temporary plaintext file exists in the destination only during
   publication (and after a crash until the next start).

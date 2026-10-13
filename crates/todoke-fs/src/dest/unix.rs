@@ -3,14 +3,18 @@
 //! `O_CREAT | O_EXCL` never opens an existing entry, and publication uses
 //! rename-without-replace (`renameat2(RENAME_NOREPLACE)` on Linux,
 //! `renameatx_np(RENAME_EXCL)` on Apple platforms), else a hard link,
-//! else an exclusive copy.
+//! else an exclusive copy. Publication is bound to the staged file the
+//! sink wrote and hashed: before and after the rename or link, the
+//! temporary and final names must refer to that open file (same device and
+//! inode, and the expected link count), so a file substituted under the
+//! temporary name is never reported as published.
 
 use std::fs::File;
-use std::io;
+use std::io::{self, Seek as _, SeekFrom};
 use std::os::fd::OwnedFd;
 use std::path::Path;
 
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, RawMode};
+use rustix::fs::{AtFlags, FileType, Mode, OFlags, RawMode, Stat};
 use rustix::io::Errno;
 
 use super::{Atomicity, DestError};
@@ -94,10 +98,12 @@ pub(super) fn open_dir(dir: &Handle, _: &Path, name: &str) -> Result<Handle, Des
 }
 
 pub(super) fn create_new_file(dir: &Handle, _: &Path, name: &str) -> Result<File, DestError> {
+    // Readable too: the exclusive-copy fallback copies from the staged
+    // handle itself, never from the name.
     let fd = rustix::fs::openat(
         dir,
         name,
-        OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        OFlags::RDWR | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC,
         mode(FILE_MODE),
     )
     .map_err(error)?;
@@ -144,9 +150,55 @@ fn not_supported(errno: Errno) -> bool {
     errno == Errno::NOTSUP || errno == Errno::OPNOTSUPP
 }
 
+/// A link count as a `u64`, whatever the platform's `nlink_t` is.
+fn count<T: TryInto<u64>>(links: T) -> u64 {
+    links.try_into().unwrap_or(u64::MAX)
+}
+
+/// Whether `name` in `dir` is the file `ours` (same device and inode),
+/// without following a link. A missing name is not.
+fn same(dir: &Handle, name: &str, ours: &Stat) -> Result<bool, DestError> {
+    match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
+        Ok(there) => Ok(there.st_dev == ours.st_dev
+            && there.st_ino == ours.st_ino
+            && FileType::from_raw_mode(there.st_mode) == FileType::RegularFile),
+        Err(Errno::NOENT) => Ok(false),
+        Err(other) => Err(error(other)),
+    }
+}
+
+/// Requires `name` in `dir` to be the open file `file` with exactly
+/// `links` names: another file, a link, or an extra hard link made by
+/// someone else is [`DestError::Replaced`].
+fn verify(dir: &Handle, name: &str, file: &File, links: u64) -> Result<(), DestError> {
+    let ours = rustix::fs::fstat(file).map_err(error)?;
+    if !same(dir, name, &ours)? || count(ours.st_nlink) != links {
+        return Err(DestError::Replaced);
+    }
+    Ok(())
+}
+
 pub(super) fn publish(
     dir: &Handle,
     path: &Path,
+    staged: &File,
+    temp: &str,
+    name: &str,
+) -> Result<Atomicity, DestError> {
+    // The temporary name is visible to anyone who can list the directory:
+    // refuse to move anything but the file that was written and hashed.
+    verify(dir, temp, staged, 1)?;
+    place(dir, path, staged, temp, name)
+}
+
+/// Renames or links `temp` to `name`, or copies the staged file there,
+/// then checks that `name` is the staged file (or the copy). If something
+/// replaced `temp` after the check in [`publish`], it may now be under
+/// `name`: that is reported, and it is left as it is.
+fn place(
+    dir: &Handle,
+    path: &Path,
+    staged: &File,
     temp: &str,
     name: &str,
 ) -> Result<Atomicity, DestError> {
@@ -157,34 +209,60 @@ pub(super) fn publish(
     // on devices (docs/adr/0006-filesystem.md).
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
     match rustix::fs::renameat_with(dir, temp, dir, name, rustix::fs::RenameFlags::NOREPLACE) {
-        Ok(()) => return Ok(Atomicity::Atomic),
-        Err(errno) if unsupported(errno) => {}
-        Err(other) => return Err(error(other)),
-    }
-    match rustix::fs::linkat(dir, temp, dir, name, AtFlags::empty()) {
         Ok(()) => {
-            remove_file(dir, path, temp)?;
+            verify(dir, name, staged, 1)?;
             return Ok(Atomicity::Atomic);
         }
         Err(errno) if unsupported(errno) => {}
         Err(other) => return Err(error(other)),
     }
-    copy_exclusive(dir, path, temp, name)?;
+    match rustix::fs::linkat(dir, temp, dir, name, AtFlags::empty()) {
+        Ok(()) => {
+            // Two names now: the temporary one goes in `release`.
+            verify(dir, name, staged, 2)?;
+            return Ok(Atomicity::Atomic);
+        }
+        Err(errno) if unsupported(errno) => {}
+        Err(other) => return Err(error(other)),
+    }
+    copy_exclusive(dir, path, staged, name)?;
     Ok(Atomicity::Copied)
 }
 
-/// The last resort: an exclusive copy into the final name.
-fn copy_exclusive(dir: &Handle, path: &Path, temp: &str, name: &str) -> Result<(), DestError> {
-    let mut source = open_file(dir, path, temp)?;
+/// The last resort: an exclusive copy of the staged file (read through
+/// its own handle) into the final name.
+fn copy_exclusive(dir: &Handle, path: &Path, staged: &File, name: &str) -> Result<(), DestError> {
+    let mut source = staged;
+    source.seek(SeekFrom::Start(0))?;
     let mut target = create_new_file(dir, path, name)?;
     let copied = io::copy(&mut source, &mut target).and_then(|_| target.sync_all());
     if let Err(failure) = copied {
-        drop(target);
-        // Best effort: the partial copy is ours, created exclusively.
-        let _ = remove_file(dir, path, name);
+        // Best effort: the partial copy is ours (created exclusively)
+        // while the name still refers to it.
+        if let Ok(ours) = rustix::fs::fstat(&target)
+            && same(dir, name, &ours).unwrap_or(false)
+        {
+            let _ = remove_file(dir, path, name);
+        }
         return Err(DestError::from(failure));
     }
-    remove_file(dir, path, temp)
+    verify(dir, name, &target, 1)
+}
+
+pub(super) fn release(
+    dir: &Handle,
+    path: &Path,
+    staged: File,
+    temp: &str,
+) -> Result<(), DestError> {
+    let ours = rustix::fs::fstat(&staged).map_err(error)?;
+    let still_ours = same(dir, temp, &ours)?;
+    // Closed before the name goes, as on Windows.
+    drop(staged);
+    if still_ours {
+        remove_file(dir, path, temp)?;
+    }
+    Ok(())
 }
 
 pub(super) fn sync_dir(dir: &Handle) -> Result<(), DestError> {
@@ -206,22 +284,92 @@ mod tests {
     use super::*;
     use crate::tests::{TempDir, TestResult};
 
+    use std::io::Write as _;
+
+    /// A staged file `.t` holding `payload`.
+    fn staged(dir: &Handle, path: &Path, payload: &[u8]) -> Result<File, DestError> {
+        let mut file = create_new_file(dir, path, ".t")?;
+        file.write_all(payload)?;
+        Ok(file)
+    }
+
     /// The last-resort copy (FAT and similar filesystems) never replaces
-    /// an entry and removes the temporary file once the copy is durable.
+    /// an entry, copies the staged file itself, and leaves the temporary
+    /// name for `release`, which removes it once the copy is durable.
     #[test]
     fn the_exclusive_copy_never_replaces() -> TestResult {
         let temp = TempDir::new()?;
-        std::fs::write(temp.path().join(".t"), b"payload")?;
         std::fs::write(temp.path().join("taken"), b"theirs")?;
         let dir = open_root(temp.path())?;
+        let file = staged(&dir, temp.path(), b"payload")?;
         assert_eq!(
-            copy_exclusive(&dir, temp.path(), ".t", "taken"),
+            copy_exclusive(&dir, temp.path(), &file, "taken"),
             Err(DestError::Exists)
         );
         assert_eq!(std::fs::read(temp.path().join("taken"))?, b"theirs");
-        copy_exclusive(&dir, temp.path(), ".t", "free")?;
+        copy_exclusive(&dir, temp.path(), &file, "free")?;
         assert_eq!(std::fs::read(temp.path().join("free"))?, b"payload");
+        release(&dir, temp.path(), file, ".t")?;
         assert!(!temp.path().join(".t").exists());
+        Ok(())
+    }
+
+    /// The temporary name replaced after the check in `publish` and before
+    /// the rename (the race the check cannot close): the rename moves the
+    /// substitute, the check after it refuses, and the substitute is left
+    /// exactly as it is. `release` then leaves the name alone.
+    #[test]
+    fn a_substitute_renamed_in_a_race_is_reported_and_left_alone() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        // The race: someone replaces the temporary name with a regular
+        // file of their own.
+        std::fs::remove_file(temp.path().join(".t"))?;
+        std::fs::write(temp.path().join(".t"), b"planted")?;
+        assert_eq!(
+            place(&dir, temp.path(), &file, ".t", "final"),
+            Err(DestError::Replaced)
+        );
+        assert_eq!(std::fs::read(temp.path().join("final"))?, b"planted");
+        // A link planted the same way.
+        let outside = TempDir::new()?;
+        std::fs::write(outside.path().join("target"), b"outside")?;
+        std::os::unix::fs::symlink(outside.path().join("target"), temp.path().join(".t"))?;
+        assert_eq!(
+            place(&dir, temp.path(), &file, ".t", "other"),
+            Err(DestError::Replaced)
+        );
+        assert!(
+            std::fs::symlink_metadata(temp.path().join("other"))?
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(outside.path().join("target"))?, b"outside");
+        std::os::unix::fs::symlink(outside.path().join("target"), temp.path().join(".t"))?;
+        release(&dir, temp.path(), file, ".t")?;
+        assert!(
+            std::fs::symlink_metadata(temp.path().join(".t"))?
+                .file_type()
+                .is_symlink()
+        );
+        Ok(())
+    }
+
+    /// A hard link to the staged file made by someone else before
+    /// publication (which would let them keep a name for the received
+    /// file) is refused too.
+    #[test]
+    fn an_extra_hard_link_to_the_staged_file_is_refused() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        std::fs::hard_link(temp.path().join(".t"), temp.path().join("theirs"))?;
+        assert_eq!(
+            publish(&dir, temp.path(), &file, ".t", "final"),
+            Err(DestError::Replaced)
+        );
+        assert!(!temp.path().join("final").exists());
         Ok(())
     }
 }

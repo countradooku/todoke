@@ -13,9 +13,21 @@
 //! - Files are created with `CREATE_NEW` (never an existing entry, link
 //!   or not) and opened for reading with `FILE_FLAG_OPEN_REPARSE_POINT`,
 //!   then checked to be plain files.
+//! - The staged file is created without `FILE_SHARE_DELETE` and its handle
+//!   is held from creation until it is released, so while the sink writes,
+//!   hashes, and publishes it, nobody can rename, delete, or replace the
+//!   temporary name (nor, after the hard link, the final name: both are
+//!   names of the one held file).
 //! - Publication is `CreateHardLinkW` (fails if the name exists), then the
-//!   temporary name is removed; filesystems without hard links (FAT,
-//!   exFAT) get an exclusive copy instead.
+//!   handle is closed and the temporary name removed; filesystems without
+//!   hard links (FAT, exFAT) get an exclusive copy, read from the held
+//!   handle, instead.
+//! - Publication cannot compare file identities as the Unix code does:
+//!   the standard library's `MetadataExt::file_index` and
+//!   `volume_serial_number` are unstable (`windows_by_handle`,
+//!   rust-lang/rust#63010), and `GetFileInformationByHandle` would need
+//!   `unsafe` FFI (a `todoke-sys-windows` exception). The held handle
+//!   gives the same guarantee for the temporary name instead.
 //! - Verbatim paths disable Win32 name munging: device names, trailing
 //!   dots and spaces, and short names are not interpreted.
 //!
@@ -27,7 +39,7 @@
 //! hence the hard link.
 
 use std::fs::{File, OpenOptions};
-use std::io;
+use std::io::{self, Seek as _, SeekFrom};
 use std::os::windows::fs::{MetadataExt as _, OpenOptionsExt as _};
 use std::path::Path;
 
@@ -118,9 +130,14 @@ pub(super) fn open_dir(_: &Handle, dir: &Path, name: &str) -> Result<Handle, Des
 }
 
 pub(super) fn create_new_file(_: &Handle, dir: &Path, name: &str) -> Result<File, DestError> {
+    // Without FILE_SHARE_DELETE: while this handle is open, the name can
+    // be neither renamed nor deleted, so it keeps referring to this file.
+    // Readable, so the copy fallback reads the handle, never the name.
     OpenOptions::new()
+        .read(true)
         .write(true)
         .create_new(true)
+        .share_mode(SHARE_READ_WRITE)
         .custom_flags(OPEN_REPARSE_POINT)
         .open(dir.join(name))
         .map_err(DestError::from)
@@ -148,19 +165,21 @@ pub(super) fn remove_file(_: &Handle, dir: &Path, name: &str) -> Result<(), Dest
 pub(super) fn publish(
     handle: &Handle,
     dir: &Path,
+    staged: &File,
     temp: &str,
     name: &str,
 ) -> Result<Atomicity, DestError> {
+    // `temp` is pinned to `staged` by the held handle (no
+    // FILE_SHARE_DELETE), so the link is to the file that was hashed.
     match std::fs::hard_link(dir.join(temp), dir.join(name)) {
-        Ok(()) => {
-            remove_file(handle, dir, temp)?;
-            Ok(Atomicity::Atomic)
-        }
+        Ok(()) => Ok(Atomicity::Atomic),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(DestError::Exists),
         Err(_) => {
             // FAT and exFAT have no hard links; some network shares refuse
-            // them. Copy into a file created exclusively under the name.
-            let mut source = open_file(handle, dir, temp)?;
+            // them. Copy the held file into one created exclusively under
+            // the name.
+            let mut source = staged;
+            source.seek(SeekFrom::Start(0))?;
             let mut target = create_new_file(handle, dir, name)?;
             let copied = io::copy(&mut source, &mut target).and_then(|_| target.sync_all());
             if let Err(failure) = copied {
@@ -168,11 +187,21 @@ pub(super) fn publish(
                 let _ = remove_file(handle, dir, name);
                 return Err(DestError::from(failure));
             }
-            drop(source);
-            remove_file(handle, dir, temp)?;
             Ok(Atomicity::Copied)
         }
     }
+}
+
+pub(super) fn release(
+    handle: &Handle,
+    dir: &Path,
+    staged: File,
+    temp: &str,
+) -> Result<(), DestError> {
+    // The temporary name can only be removed once no handle without
+    // FILE_SHARE_DELETE is open on the file.
+    drop(staged);
+    remove_file(handle, dir, temp)
 }
 
 /// NTFS journals directory changes; the standard library offers no

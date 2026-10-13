@@ -8,6 +8,8 @@ mod e2e;
 mod lifecycle;
 mod plan;
 #[cfg(any(unix, windows))]
+pub(crate) mod race;
+#[cfg(any(unix, windows))]
 pub(crate) mod sink;
 #[cfg(any(unix, windows))]
 pub(crate) mod support;

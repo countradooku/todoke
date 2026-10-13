@@ -730,34 +730,35 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         let chain = self.resolve(&transfer_id, file_id, true)?;
         let dir = chain.last().ok_or(SinkError::Storage)?;
         let temp = temp_name(&header, file_id);
-        self.destination.discard(dir, &temp).map_err(storage)?;
+        // Anything already under the temporary name is left alone (a
+        // leftover of ours is released after every attempt, and start-up
+        // removes a crash's): staging then fails with `Exists`.
+        // The staged file stays open until it is released: publication is
+        // bound to the file written and hashed here, not to its name.
         let mut staged = self.destination.stage(dir, &temp).map_err(storage)?;
         let written = self.write_plaintext(&transfer_id, file_id, &opener, &mut staged);
-        let (length, root, prefix) = match written {
-            Ok(result) => result,
-            Err(error) => {
-                drop(staged);
-                let _ = self.destination.discard(dir, &temp);
-                return Err(error);
+        let checked = match written {
+            // §7.7: exact length and whole-file BLAKE3 before publication.
+            Ok((length, root, _))
+                if length != binding.layout().size() || root != *binding.root() =>
+            {
+                Err(SinkError::Integrity)
             }
+            Ok(written) => self
+                .destination
+                .finish_staged(&staged)
+                .map(|()| written)
+                .map_err(storage),
+            Err(error) => Err(error),
         };
-        // §7.7: exact length and whole-file BLAKE3 before publication.
-        if length != binding.layout().size() || root != *binding.root() {
-            drop(staged);
-            let _ = self.destination.discard(dir, &temp);
-            return Err(SinkError::Integrity);
-        }
-        if self.destination.finish_staged(staged).is_err() {
-            let _ = self.destination.discard(dir, &temp);
-            return Err(SinkError::Storage);
-        }
-        let name = match self.commit(&transfer_id, file_id, dir, &temp) {
-            Ok(name) => name,
-            Err(error) => {
-                let _ = self.destination.discard(dir, &temp);
-                return Err(error);
-            }
-        };
+        let committed = checked.and_then(|(_, _, prefix)| {
+            self.commit(&transfer_id, file_id, dir, &staged, &temp)
+                .map(|name| (name, prefix))
+        });
+        // Removes the temporary name only while it is still ours; a
+        // substitute stays untouched.
+        let _ = self.destination.release(dir, staged, &temp);
+        let (name, prefix) = committed?;
         self.destination.sync_dir(dir).map_err(storage)?;
         drop(chain);
         self.append(
@@ -829,6 +830,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         transfer_id: &TransferId,
         file_id: u32,
         dir: &D::Dir,
+        staged: &D::Staged,
         temp: &str,
     ) -> Result<String, SinkError> {
         let plan = self
@@ -840,9 +842,11 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         let candidates = core::iter::once(entry.local().as_str().to_owned())
             .chain(plan.candidates(file_id).map(|(_, name)| name));
         for name in candidates {
-            match self.destination.publish(dir, temp, &name) {
+            match self.destination.publish(dir, staged, temp, &name) {
                 Ok(_) => return Ok(name),
                 Err(DestError::Exists) => {}
+                // Replaced included: nothing of ours was published, and
+                // nothing is journaled.
                 Err(_) => return Err(SinkError::Storage),
             }
         }

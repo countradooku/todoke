@@ -21,13 +21,23 @@ pub struct DirHandle {
     path: PathBuf,
 }
 
+#[cfg(test)]
+impl DirHandle {
+    /// Where the directory is expected to be (tests only).
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 impl fmt::Debug for DirHandle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("DirHandle")
     }
 }
 
-/// A file being written under its temporary name.
+/// A file being written under its temporary name, held open from creation
+/// until it is released, so that publication is bound to this file rather
+/// than to whatever the name refers to by then.
 pub struct StagedFile {
     file: File,
     path: PathBuf,
@@ -144,7 +154,7 @@ impl Destination for DirDestination {
         })
     }
 
-    fn finish_staged(&self, staged: StagedFile) -> Result<(), DestError> {
+    fn finish_staged(&self, staged: &StagedFile) -> Result<(), DestError> {
         if let Some(marker) = &self.marker {
             marker.mark(&staged.file, &staged.path)?;
         }
@@ -152,8 +162,18 @@ impl Destination for DirDestination {
         Ok(())
     }
 
-    fn publish(&self, dir: &DirHandle, temp: &str, name: &str) -> Result<Atomicity, DestError> {
-        sys::publish(&dir.handle, &dir.path, temp, name)
+    fn publish(
+        &self,
+        dir: &DirHandle,
+        staged: &StagedFile,
+        temp: &str,
+        name: &str,
+    ) -> Result<Atomicity, DestError> {
+        sys::publish(&dir.handle, &dir.path, &staged.file, temp, name)
+    }
+
+    fn release(&self, dir: &DirHandle, staged: StagedFile, temp: &str) -> Result<(), DestError> {
+        sys::release(&dir.handle, &dir.path, staged.file, temp)
     }
 
     fn discard(&self, dir: &DirHandle, temp: &str) -> Result<(), DestError> {
