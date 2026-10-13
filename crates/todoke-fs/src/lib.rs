@@ -17,6 +17,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod dest;
 pub mod detect;
 pub mod name;
 mod plan;

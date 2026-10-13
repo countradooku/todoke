@@ -1,5 +1,7 @@
 //! Crate tests that span modules, and shared fixtures.
 
+#[cfg(any(unix, windows))]
+mod dest;
 mod plan;
 
 use todoke_proto::time::UnixTime;
@@ -75,4 +77,96 @@ pub(crate) fn manifest(transfer_id: [u8; 16], specs: &[Spec]) -> AnyResult<Manif
         });
     }
     Ok(Manifest::new(header, entries, &ManifestLimits::SPEC)?)
+}
+
+/// A fresh directory under the system temporary directory, removed (with
+/// everything in it) when dropped.
+#[cfg(any(unix, windows))]
+pub(crate) struct TempDir(std::path::PathBuf);
+
+#[cfg(any(unix, windows))]
+impl TempDir {
+    pub(crate) fn new() -> AnyResult<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let unique = format!(
+            "todoke-fs-test-{}-{nanos}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+        let path = std::env::temp_dir().join(unique);
+        std::fs::create_dir(&path)?;
+        Ok(Self(path))
+    }
+
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+#[cfg(any(unix, windows))]
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// Creates a symbolic link to a directory, or `None` where the platform
+/// needs a privilege this process lacks (default Windows accounts).
+#[cfg(unix)]
+pub(crate) fn symlink_dir(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> AnyResult<Option<()>> {
+    std::os::unix::fs::symlink(target, link)?;
+    Ok(Some(()))
+}
+
+#[cfg(windows)]
+pub(crate) fn symlink_dir(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> AnyResult<Option<()>> {
+    match std::os::windows::fs::symlink_dir(target, link) {
+        Ok(()) => Ok(Some(())),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314) =>
+        {
+            eprintln!("skipping: creating symbolic links needs a privilege this account lacks");
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// As [`symlink_dir`], for a file target.
+#[cfg(unix)]
+pub(crate) fn symlink_file(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> AnyResult<Option<()>> {
+    std::os::unix::fs::symlink(target, link)?;
+    Ok(Some(()))
+}
+
+#[cfg(windows)]
+pub(crate) fn symlink_file(
+    target: &std::path::Path,
+    link: &std::path::Path,
+) -> AnyResult<Option<()>> {
+    match std::os::windows::fs::symlink_file(target, link) {
+        Ok(()) => Ok(Some(())),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::PermissionDenied
+                || error.raw_os_error() == Some(1314) =>
+        {
+            eprintln!("skipping: creating symbolic links needs a privilege this account lacks");
+            Ok(None)
+        }
+        Err(error) => Err(error.into()),
+    }
 }

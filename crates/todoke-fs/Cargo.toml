@@ -24,5 +24,12 @@ blake3.workspace = true
 unicode-normalization.workspace = true
 zeroize.workspace = true
 
+# openat-family calls without unsafe code in this crate: O_NOFOLLOW,
+# O_EXCL, renameat2(RENAME_NOREPLACE) / renameatx_np(RENAME_EXCL),
+# linkat, unlinkat, fsync (docs/adr/0006-filesystem.md). Windows uses
+# the standard library only.
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"] }
+
 [dev-dependencies]
 proptest.workspace = true

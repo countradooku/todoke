@@ -536,3 +536,34 @@ latest release, 2026-09-16) and `cargo kani setup`, which downloads Kani's
 own toolchain. Kani is a tool, not a dependency of any todoke graph, so it is
 not in a lock or a vet store. It was not run locally (see
 `docs/adr/0005-consent-api.md`).
+
+## Filesystem dependencies (2026-10-13)
+
+`todoke-fs` (P08) publishes received files through `openat`-family calls so
+that no path is resolved through a link and nothing is replaced
+([ADR 0006](../docs/adr/0006-filesystem.md)). On Unix targets (Linux,
+Android, macOS, iOS) it calls them through `rustix`; on Windows it uses only
+the standard library. No package is added for Windows code or for
+`wasm32-unknown-unknown`.
+
+| Package | Published | Why | Notes |
+| --- | --- | --- | --- |
+| `rustix 1.1.5` | 2026-09-16 | `openat`, `mkdirat`, `statat`, `renameat_with(NOREPLACE)`, `linkat`, `unlinkat`, `fstat`, `fsync`, `fcntl_fullfsync` without `unsafe` in todoke-fs | Latest release. `Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT`, within the allow list. `default-features = false`, features `std` and `fs`. Imported audits cover only older versions (the imported organisations trust its publisher rather than audit it), so it has an exact-version "Not yet reviewed" exemption. |
+| `linux-raw-sys 0.12.1` | 2025-12-23 | rustix's Linux/Android system-call definitions | Latest release. Same licence. Exact-version exemption, as above. |
+| `errno 0.3.14` | 2025-09-09 | rustix's errno access | Latest release. `MIT OR Apache-2.0`. Covered by imported Bytecode Alliance and Mozilla audits. |
+| `windows-sys 0.61.2` | 2025-10-06 | Declared by rustix and errno for Windows targets; todoke-fs does not use it | Latest release. `MIT OR Apache-2.0`. Exact-version exemption, as above. It reuses the existing `windows-link 0.2.1`. |
+
+The alternative, `cap-std`/`cap-fs-ext` 4.0.3 (Bytecode Alliance), would add
+about 35 packages, including three `windows-sys` versions (0.59, 0.60,
+0.61), two `io-lifetimes` versions, and two `windows-targets` trees with
+their per-target import-library crates. That needs new duplicate-version
+skips, which the latest-version policy avoids, and it still lacks a
+rename-without-replace operation. See ADR 0006.
+
+No new license, source, advisory, or duplicate-version exception was
+needed. `cargo vet` fetched the imported `errno` audits into
+`imports.lock`, and `cargo vet regenerate exemptions` added the three
+exemptions above to the root store with notes in the existing "Not yet
+reviewed" format, followed by `cargo vet fmt`. `unicode-normalization 0.1.25`
+moved to `[workspace.dependencies]`, since `todoke-proto` and `todoke-fs`
+both use it; its version did not change.
