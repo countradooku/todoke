@@ -163,3 +163,353 @@ async fn stranger_mode_is_explicit_short_and_rotating() -> TestResult {
     );
     Ok(())
 }
+
+/// Randomness that hands out a fixed script, then nothing.
+struct Script(Vec<[u8; 8]>);
+
+impl Random for Script {
+    fn bytes(&mut self) -> Option<[u8; 8]> {
+        (!self.0.is_empty()).then(|| self.0.remove(0))
+    }
+}
+
+/// R3: with several contacts, each gets `ROTATION` in turn, in key order;
+/// a priority contact takes every even slot and the others share the odd
+/// ones; a priority that is not a contact changes nothing.
+#[test]
+fn records_rotate_over_contacts_and_a_priority_takes_even_slots() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
+    assert_eq!(contacts.len(), 3);
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut advertiser = Advertiser::new();
+    let mut random = Counter(0);
+    let mut seen = Vec::new();
+    for second in 0..18_u64 {
+        let mono = SECOND * u32::try_from(second)?;
+        let slot = usize::try_from(second / ROTATION.as_secs())?;
+        let record = advertiser
+            .plan(table, None, wall, mono, &mut random)
+            .paired
+            .map(|a| a.record);
+        let expected = contacts.get(slot % contacts.len()).ok_or("contact")?;
+        assert_eq!(record, table.advertisement(expected), "second {second}");
+        seen.push(record);
+        let unknown = advertiser
+            .plan(table, Some(&fixture.alice), wall, mono, &mut random)
+            .paired
+            .map(|a| a.record);
+        assert_eq!(unknown, record);
+        let priority = *contacts.get(2).ok_or("contact")?;
+        let with_priority = advertiser
+            .plan(table, Some(priority), wall, mono, &mut random)
+            .paired
+            .map(|a| a.record);
+        let expected = if slot.is_multiple_of(2) {
+            priority
+        } else {
+            expected
+        };
+        assert_eq!(
+            with_priority,
+            table.advertisement(expected),
+            "second {second}"
+        );
+    }
+    // One record at a time, and every contact's in turn.
+    seen.dedup();
+    assert_eq!(seen.len(), 6);
+    Ok(())
+}
+
+/// R3: no randomness when a stranger token is due to rotate ends stranger
+/// mode rather than keep the old token; a token or label the OS could not
+/// supply (all-zero bytes, or none for the label) starts nothing.
+#[tokio::test]
+async fn stranger_mode_stops_without_randomness() -> TestResult {
+    let (alice, _) = paired().await?;
+    let table = alice.table(WALL)?;
+    let wall = time(WALL)?;
+    let mut advertiser = Advertiser::new();
+    assert!(advertiser.enable_stranger(wall, SECOND, &mut Counter(0)));
+    let rotated = advertiser.plan(&table, None, wall, SECOND * 61, &mut Empty);
+    assert_eq!(rotated.stranger, None);
+    assert!(!advertiser.stranger_enabled());
+    // A token but no label.
+    assert!(!advertiser.enable_stranger(wall, SECOND, &mut Script(vec![[1; 8]])));
+    // A zero token: no valid record.
+    assert!(!advertiser.enable_stranger(wall, SECOND, &mut Script(vec![[0; 8], [1; 8]])));
+    // A zero label.
+    assert!(!advertiser.enable_stranger(wall, SECOND, &mut Script(vec![[1; 8], [0; 8]])));
+    // A failed enable turns an earlier stranger mode off too.
+    assert!(advertiser.enable_stranger(wall, SECOND, &mut Counter(0)));
+    assert!(!advertiser.enable_stranger(wall, SECOND, &mut Empty));
+    assert!(!advertiser.stranger_enabled());
+    // A zero paired label: nothing paired.
+    let mut fresh = Advertiser::new();
+    assert_eq!(
+        fresh
+            .plan(&table, None, wall, SECOND, &mut Script(vec![[0; 8]]))
+            .paired,
+        None
+    );
+    Ok(())
+}
+
+#[test]
+fn os_randomness_gives_distinct_labels() -> TestResult {
+    let (a, b) = (OsRandom.bytes().ok_or("os")?, OsRandom.bytes().ok_or("os")?);
+    assert_ne!(a, b);
+    Ok(())
+}
+
+mod model {
+    //! R3: a model-based test of the advertising schedule.
+
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::support::fixture;
+
+    /// Counter randomness that can be switched off.
+    #[derive(Clone, Debug, Default)]
+    struct Switchable {
+        next: u64,
+        off: bool,
+    }
+
+    impl Random for Switchable {
+        fn bytes(&mut self) -> Option<[u8; 8]> {
+            if self.off {
+                return None;
+            }
+            self.next += 1;
+            Some(self.next.to_be_bytes())
+        }
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Table {
+        /// The table for the wall clock's epoch, if the fixture has one.
+        Current,
+        /// One for another epoch.
+        Stale,
+        /// One without contacts.
+        Empty,
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Plan {
+            mono: u64,
+            wall: u64,
+            table: Table,
+            /// An index into the contacts; 3 is Alice herself (no contact).
+            priority: Option<usize>,
+        },
+        Enable {
+            mono: u64,
+        },
+        Disable,
+        Randomness(bool),
+    }
+
+    fn step() -> impl Strategy<Value = u64> {
+        proptest::sample::select(vec![0_u64, 1, 2, 3, 30, 59, 60, 61, 240, 299, 300])
+    }
+
+    fn op() -> impl Strategy<Value = Op> {
+        let table = prop_oneof![
+            6 => Just(Table::Current),
+            1 => Just(Table::Stale),
+            1 => Just(Table::Empty),
+        ];
+        prop_oneof![
+            8 => (
+                step(),
+                proptest::sample::select(vec![0_u64, 1, 100, 450, 899, 900]),
+                table,
+                proptest::option::of(0_usize..4),
+            )
+                .prop_map(|(mono, wall, table, priority)| Op::Plan { mono, wall, table, priority }),
+            2 => step().prop_map(|mono| Op::Enable { mono }),
+            1 => Just(Op::Disable),
+            1 => any::<bool>().prop_map(Op::Randomness),
+        ]
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    struct Stranger {
+        started: Duration,
+        rotated: Duration,
+        advertisement: Advertisement,
+    }
+
+    /// The schedule's rules, written plainly.
+    #[derive(Default)]
+    struct Model {
+        random: Switchable,
+        label: Option<(Epoch, InstanceLabel)>,
+        stranger: Option<Stranger>,
+    }
+
+    impl Model {
+        fn stranger_record(&mut self, wall: UnixTime) -> Option<Advertisement> {
+            let token = self.random.bytes()?;
+            let label = InstanceLabel::from_random(self.random.bytes()?).ok()?;
+            let record =
+                DiscoveryRecord::new(DiscoveryMode::Stranger, Epoch::of(wall), token).ok()?;
+            Some(Advertisement { label, record })
+        }
+
+        fn paired(
+            &mut self,
+            table: &DiscoveryTable,
+            priority: Option<&Ed25519PublicKey>,
+            wall: UnixTime,
+            mono: Duration,
+        ) -> Option<Advertisement> {
+            if table.is_stale(wall) || table.is_empty() {
+                return None;
+            }
+            let epoch = Epoch::of(wall);
+            let label = match self.label {
+                Some((at, label)) if at == epoch => label,
+                _ => {
+                    let label = InstanceLabel::from_random(self.random.bytes()?).ok()?;
+                    self.label = Some((epoch, label));
+                    label
+                }
+            };
+            let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
+            let slot = mono.as_secs() / 3;
+            let device = match priority {
+                Some(device) if contacts.contains(&device) && slot.is_multiple_of(2) => device,
+                _ => *contacts.get(usize::try_from(slot).ok()? % contacts.len())?,
+            };
+            Some(Advertisement {
+                label,
+                record: table.advertisement(device)?,
+            })
+        }
+
+        fn stranger(&mut self, wall: UnixTime, mono: Duration) -> Option<Advertisement> {
+            let current = self.stranger?;
+            if mono.saturating_sub(current.started) >= Duration::from_secs(300) {
+                self.stranger = None;
+                return None;
+            }
+            if mono.saturating_sub(current.rotated) >= Duration::from_secs(60) {
+                let Some(advertisement) = self.stranger_record(wall) else {
+                    self.stranger = None;
+                    return None;
+                };
+                self.stranger = Some(Stranger {
+                    rotated: mono,
+                    advertisement,
+                    ..current
+                });
+                return Some(advertisement);
+            }
+            Some(current.advertisement)
+        }
+    }
+
+    fn fail(error: impl core::fmt::Display) -> TestCaseError {
+        TestCaseError::fail(error.to_string())
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        /// R3: the schedule against a plain model: one paired record at a
+        /// time rotating over the contacts every 3 seconds (a priority
+        /// contact on even slots), a label per epoch, nothing paired from a
+        /// stale or empty table; stranger mode only after an enable, for at
+        /// most 300 seconds, a new token and label every 60, and off when
+        /// randomness fails.
+        #[test]
+        fn the_schedule_follows_its_model(ops in proptest::collection::vec(op(), 1..50)) {
+            let fixture = fixture().map_err(fail)?;
+            let first_wall = *fixture.walls.first().ok_or_else(|| fail("wall"))?;
+            let mut advertiser = Advertiser::new();
+            let mut random = Switchable::default();
+            let mut model = Model::default();
+            let (mut mono, mut wall) = (Duration::ZERO, first_wall + 10);
+            let mut paired_labels: Vec<(Epoch, InstanceLabel)> = Vec::new();
+            let mut enabled_at = None;
+            for op in ops {
+                match op {
+                    Op::Plan { mono: dm, wall: dw, table, priority } => {
+                        mono += Duration::from_secs(dm);
+                        wall += dw;
+                        let now = time(wall).map_err(fail)?;
+                        let current = fixture.tables.iter().find(|t| !t.is_stale(now));
+                        let table = match table {
+                            Table::Current => current.unwrap_or(&fixture.reduced),
+                            Table::Stale => fixture
+                                .tables
+                                .iter()
+                                .find(|t| t.is_stale(now))
+                                .ok_or_else(|| fail("stale table"))?,
+                            Table::Empty => &fixture.empty,
+                        };
+                        let priority = priority.map(|index| fixture.contacts.get(index).unwrap_or(&fixture.alice));
+                        let plan = advertiser.plan(table, priority, now, mono, &mut random);
+                        let expected = Plan {
+                            paired: model.paired(table, priority, now, mono),
+                            stranger: model.stranger(now, mono),
+                        };
+                        prop_assert_eq!(plan, expected);
+                        // Independently of the model:
+                        if let Some(paired) = plan.paired {
+                            prop_assert!(!table.is_stale(now));
+                            prop_assert_eq!(paired.record.mode(), DiscoveryMode::Paired);
+                            prop_assert_eq!(paired.record.epoch(), Epoch::of(now));
+                            prop_assert!(table.contacts().any(|c| table.advertisement(c) == Some(paired.record)));
+                            // One label per epoch, never reused in another.
+                            for (epoch, label) in &paired_labels {
+                                prop_assert_eq!(*epoch == Epoch::of(now), *label == paired.label);
+                            }
+                            if !paired_labels.contains(&(Epoch::of(now), paired.label)) {
+                                paired_labels.push((Epoch::of(now), paired.label));
+                            }
+                        }
+                        if let Some(stranger) = plan.stranger {
+                            prop_assert_eq!(stranger.record.mode(), DiscoveryMode::Stranger);
+                            let since = enabled_at.map(|at| mono.saturating_sub(at));
+                            prop_assert!(since.is_some_and(|since| since < STRANGER_LIFETIME));
+                            prop_assert!(plan.paired.is_none_or(|p| p.label != stranger.label));
+                        } else {
+                            enabled_at = None;
+                        }
+                        prop_assert_eq!(advertiser.stranger_enabled(), model.stranger.is_some());
+                    }
+                    Op::Enable { mono: dm } => {
+                        mono += Duration::from_secs(dm);
+                        let now = time(wall).map_err(fail)?;
+                        let started = advertiser.enable_stranger(now, mono, &mut random);
+                        model.stranger = model.stranger_record(now).map(|advertisement| Stranger {
+                            started: mono,
+                            rotated: mono,
+                            advertisement,
+                        });
+                        prop_assert_eq!(started, model.stranger.is_some());
+                        enabled_at = started.then_some(mono);
+                    }
+                    Op::Disable => {
+                        advertiser.disable_stranger();
+                        model.stranger = None;
+                        enabled_at = None;
+                        prop_assert!(!advertiser.stranger_enabled());
+                    }
+                    Op::Randomness(on) => {
+                        random.off = !on;
+                        model.random.off = !on;
+                    }
+                }
+            }
+        }
+    }
+}

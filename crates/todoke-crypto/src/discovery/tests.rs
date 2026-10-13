@@ -208,3 +208,107 @@ fn debug_output_shows_no_tokens_or_locators() -> TestResult {
     assert!(!shown.contains(&hex::encode(locator)));
     Ok(())
 }
+
+/// R3: the fixture fields no other test reads. Each HMAC case's full
+/// 32-byte HMAC-BLAKE3 tag and big-endian epoch; the chain's source PSK
+/// (the ratchet vector's `next_psk_hex`), its info strings, and for each
+/// epoch the full 32-byte rendezvous token (the locator is its prefix)
+/// and its HKDF salt (the epoch as u64 big-endian).
+#[test]
+fn every_fixture_field_is_reproduced() -> TestResult {
+    let chain = load("discovery-token.json")?;
+    let pair_key = hex_at::<32>(&chain, "/pair_key_hex")?;
+    let cases = chain
+        .pointer("/cases")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("cases")?;
+    for (index, case) in cases.iter().enumerate() {
+        let epoch = case
+            .get("epoch")
+            .and_then(serde_json::Value::as_u64)
+            .ok_or("epoch")?;
+        assert_eq!(
+            hex_at::<8>(&chain, &format!("/cases/{index}/epoch_be_hex"))?,
+            epoch.to_be_bytes()
+        );
+        let mut mac = SimpleHmac::<blake3::Hasher>::new_from_slice(&pair_key)?;
+        mac.update(&epoch.to_be_bytes());
+        let tag: [u8; 32] = mac.finalize().into_bytes().into();
+        assert_eq!(
+            tag,
+            hex_at::<32>(&chain, &format!("/cases/{index}/hmac_blake3_hex"))?
+        );
+        assert_eq!(
+            tag[..DISCOVERY_TOKEN_LEN],
+            hex_at::<8>(&chain, &format!("/cases/{index}/token_hex"))?
+        );
+    }
+    let ratchet = load("psk-ratchet.json")?;
+    let psk = hex_at::<32>(&chain, "/derived_chain/next_psk_hex")?;
+    assert_eq!(psk, hex_at::<32>(&ratchet, "/next_psk_hex")?);
+    // The info strings are the ones the derivations use.
+    let info = |name: &str| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        Ok(hex::decode(
+            chain
+                .pointer(&format!("/derived_chain/{name}"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or("info")?,
+        )?)
+    };
+    let pair_secret = kdf::pair_secret(&psk).map_err(|_| "kdf")?;
+    assert_eq!(
+        *kdf::hkdf_sha256(&[], &psk, &info("pair_secret_info_hex")?).map_err(|_| "kdf")?,
+        *pair_secret
+    );
+    assert_eq!(
+        *kdf::hkdf_sha256(
+            &[],
+            pair_secret.as_slice(),
+            &info("discovery_key_info_hex")?
+        )
+        .map_err(|_| "kdf")?,
+        *kdf::discovery_key(&pair_secret).map_err(|_| "kdf")?
+    );
+    assert_eq!(info("rendezvous_info_hex")?, RENDEZVOUS_INFO);
+    let keys = PairKeys::derive(&psk)?;
+    let epochs = chain
+        .pointer("/derived_chain/epochs")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("epochs")?;
+    for (index, entry) in epochs.iter().enumerate() {
+        let at = |field: &str| format!("/derived_chain/epochs/{index}/{field}");
+        let epoch = Epoch::new(
+            entry
+                .get("epoch")
+                .and_then(serde_json::Value::as_u64)
+                .ok_or("epoch")?,
+        )?;
+        assert_eq!(
+            hex_at::<8>(&chain, &at("rendezvous_salt_hex"))?,
+            epoch.get().to_be_bytes()
+        );
+        let rendezvous = keys.rendezvous_token(epoch)?;
+        assert_eq!(
+            *rendezvous,
+            hex_at::<32>(&chain, &at("rendezvous_token_hex"))?
+        );
+        assert_eq!(
+            rendezvous[..LOCATOR_LEN],
+            hex_at::<16>(&chain, &at("contact_locator_hex"))?
+        );
+        assert_eq!(keys.token(epoch)?, hex_at::<8>(&chain, &at("token_hex"))?);
+    }
+    Ok(())
+}
+
+#[test]
+fn errors_and_empty_tables() -> TestResult {
+    assert_ne!(DiscoveryError.to_string(), "");
+    assert_eq!(DiscoveryError::from(KdfError), DiscoveryError);
+    let empty: Store = ContactStore::open(sealer(9), MemoryStorage::new())?;
+    let table = empty.discovery_table(time(T0)?)?;
+    assert!(table.is_empty());
+    let (table, _) = fixture_table()?;
+    assert!(!table.is_empty());
+    Ok(())
+}

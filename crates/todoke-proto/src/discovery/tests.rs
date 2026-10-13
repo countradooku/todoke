@@ -199,6 +199,44 @@ fn debug_output_hides_tokens_and_labels() -> TestResult {
     Ok(())
 }
 
+/// R3: every byte value at every hex position of a TXT string and an
+/// instance label: only `0-9` and `a-f` are accepted.
+#[test]
+fn only_lowercase_hex_digits_are_accepted() -> TestResult {
+    let good = record()?.to_txt().into_bytes();
+    let label = InstanceLabel::from_random([0x5c; 8])?;
+    for byte in 0..=u8::MAX {
+        let hex = byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte);
+        for position in 3..good.len() {
+            let mut txt = good.clone();
+            txt[position] = byte;
+            if !hex {
+                assert_eq!(
+                    DiscoveryRecord::from_txt(&txt),
+                    Err(DecodeError::Reserved),
+                    "{byte} at {position}"
+                );
+            }
+        }
+        let value = char::from(byte)
+            .to_digit(16)
+            .and_then(|v| u8::try_from(v).ok());
+        assert_eq!(nibble(byte).ok(), value.filter(|_| hex), "{byte}");
+        for position in 0..INSTANCE_LABEL_LEN {
+            let mut text = label.as_str().as_bytes().to_vec();
+            text[position] = byte;
+            if let Ok(text) = core::str::from_utf8(&text) {
+                assert_eq!(
+                    InstanceLabel::parse(text).is_ok(),
+                    hex,
+                    "{byte} at {position}"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 proptest! {
     #[test]
     fn records_round_trip(

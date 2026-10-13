@@ -3,6 +3,7 @@
 //! built from them.
 
 use std::net::{Ipv4Addr, SocketAddr};
+use std::sync::OnceLock;
 
 use todoke_crypto::discovery::DiscoveryTable;
 use todoke_crypto::identity::{
@@ -14,6 +15,7 @@ use todoke_crypto::pairing::{PairingOffers, QrPayload};
 use todoke_crypto::session::{
     Accepted, IncomingSession, LocalIdentity, NoiseStaticKey, Session, UnauditedSuite0001,
 };
+use todoke_proto::discovery::{DiscoveryRecord, EPOCH_SECONDS, Epoch};
 use todoke_proto::time::UnixTime;
 use todoke_transport::{
     Candidate, Connector as _, LanListener, LanPolicy, LinkKind, TcpConnector, TokioTimer,
@@ -99,6 +101,30 @@ pub(crate) async fn paired() -> AnyResult<(Device, Device)> {
 async fn pair() -> AnyResult<(Device, Device)> {
     let mut alice = Device::new(0x41)?;
     let mut bob = Device::new(0x42)?;
+    pair_into(&mut alice, &mut bob).await?;
+    Ok((alice, bob))
+}
+
+/// Alice and `count` other devices, each paired with her by QR (she scans
+/// each one's code), so her table holds `count` contacts. Bounded like
+/// [`paired`].
+pub(crate) async fn with_contacts(count: u8) -> AnyResult<(Device, Vec<Device>)> {
+    tokio::time::timeout(core::time::Duration::from_secs(120), async {
+        let mut alice = Device::new(0x41)?;
+        let mut contacts = Vec::new();
+        for n in 0..count {
+            let mut contact = Device::new(0x50_u8.wrapping_add(n))?;
+            pair_into(&mut alice, &mut contact).await?;
+            contacts.push(contact);
+        }
+        Ok((alice, contacts))
+    })
+    .await
+    .map_err(|_| "pairing over loopback stalled")?
+}
+
+/// Alice scans Bob's QR code over loopback TCP.
+async fn pair_into(alice: &mut Device, bob: &mut Device) -> AnyResult<()> {
     let offers = PairingOffers::new();
     let timer = TokioTimer::new();
     let wall = time(WALL)?;
@@ -145,5 +171,73 @@ async fn pair() -> AnyResult<(Device, Device)> {
     };
     let (initiated, responded) = tokio::join!(initiate, respond);
     drop((initiated?, responded?));
-    Ok((alice, bob))
+    Ok(())
+}
+
+/// Discovery state of Alice and three contacts, built once per test binary
+/// (one QR pairing each) for the model-based property tests.
+pub(crate) struct Fixture {
+    /// Alice's device key.
+    pub(crate) alice: Ed25519PublicKey,
+    /// Her contacts' device keys, in pairing order.
+    pub(crate) contacts: Vec<Ed25519PublicKey>,
+    /// The first second of each epoch in `tables`.
+    pub(crate) walls: Vec<u64>,
+    /// Alice's table at each of `walls`: `WALL`'s epoch and the next two.
+    pub(crate) tables: Vec<DiscoveryTable>,
+    /// What each contact advertises for Alice in `WALL`'s epoch.
+    pub(crate) records: Vec<DiscoveryRecord>,
+    /// Alice's table at `WALL` once contact 0 is ratchet-uncertain.
+    pub(crate) reduced: DiscoveryTable,
+    /// A table with no contacts at `WALL`.
+    pub(crate) empty: DiscoveryTable,
+}
+
+static FIXTURE: OnceLock<Result<Fixture, String>> = OnceLock::new();
+
+/// The shared [`Fixture`]. Call it outside any tokio runtime.
+pub(crate) fn fixture() -> Result<&'static Fixture, String> {
+    FIXTURE
+        .get_or_init(|| build_fixture().map_err(|error| error.to_string()))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+fn build_fixture() -> AnyResult<Fixture> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let (mut alice, contacts) = runtime.block_on(with_contacts(3))?;
+    let first = Epoch::of(time(WALL)?).get();
+    let walls: Vec<u64> = (first..first + 3)
+        .map(|epoch| epoch * EPOCH_SECONDS)
+        .collect();
+    let tables = walls
+        .iter()
+        .map(|wall| alice.table(*wall))
+        .collect::<AnyResult<Vec<_>>>()?;
+    let records = contacts
+        .iter()
+        .map(|contact| {
+            contact
+                .table(WALL)?
+                .advertisement(&alice.key())
+                .ok_or_else(|| "no record".into())
+        })
+        .collect::<AnyResult<Vec<_>>>()?;
+    let keys: Vec<Ed25519PublicKey> = contacts.iter().map(Device::key).collect();
+    let empty = Device::new(0x60)?.table(WALL)?;
+    alice
+        .store
+        .mark_ratchet_uncertain(keys.first().ok_or("contact")?)?;
+    let reduced = alice.table(WALL)?;
+    Ok(Fixture {
+        alice: alice.key(),
+        contacts: keys,
+        walls,
+        tables,
+        records,
+        reduced,
+        empty,
+    })
 }

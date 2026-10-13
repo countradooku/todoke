@@ -236,6 +236,48 @@ fn debug_output_hides_addresses_and_tokens() -> TestResult {
     Ok(())
 }
 
+/// R3: all four address kinds in one answer: private IPv4, then
+/// unique-local IPv6, then link-local IPv4, then link-local IPv6.
+#[test]
+fn every_address_kind_has_its_place() -> TestResult {
+    let value = record()?.txt_value();
+    let good: &[(&str, Option<&[u8]>)] = &[("v1", Some(value.as_bytes()))];
+    let addresses: Vec<(IpAddr, u32)> = vec![
+        ("fe80::9".parse()?, 4),
+        (IpAddr::from(Ipv4Addr::new(169, 254, 7, 7)), 4),
+        ("fd00::9".parse()?, 4),
+        (IpAddr::from(Ipv4Addr::new(192, 168, 1, 9)), 4),
+    ];
+    let sighting = check(&fullname(LABEL), PORT, addresses, good)?;
+    assert_eq!(
+        sighting.addresses(),
+        &[
+            SocketAddr::from(([192, 168, 1, 9], PORT)),
+            SocketAddr::V6(SocketAddrV6::new("fd00::9".parse()?, PORT, 0, 0)),
+            SocketAddr::from(([169, 254, 7, 7], PORT)),
+            SocketAddr::V6(SocketAddrV6::new("fe80::9".parse()?, PORT, 0, 4)),
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn drop_reasons_have_distinct_messages() {
+    let messages: Vec<String> = [
+        Dropped::Name,
+        Dropped::Txt,
+        Dropped::Port,
+        Dropped::NoAddress,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    for (index, message) in messages.iter().enumerate() {
+        assert_ne!(message, "");
+        assert!(!messages[..index].contains(message), "{message}");
+    }
+}
+
 proptest! {
     /// Arbitrary answers never panic, and a kept sighting always has the
     /// exact §9 shape.
