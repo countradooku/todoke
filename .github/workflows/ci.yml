@@ -166,12 +166,12 @@ jobs:
           ${timer[@]+"${timer[@]}"} cargo kani -p todoke-transfer --exact "${filters[@]}" 2>&1 | tee "$RUNNER_TEMP/kani.log"
           count=${#harnesses[@]}
           grep -Fx "Complete - $count successfully verified harnesses, 0 failures, $count total." "$RUNNER_TEMP/kani.log"
-      # The five-step consent sequences, exhaustively: a bounded model check of
-      # five steps does not fit in the runner's memory.
-      - name: Check every five-step consent-gate sequence
+      # Longer consent sequences, exhaustively: a bounded model check beyond
+      # two steps does not fit in the runner's memory (gate_proofs.rs).
+      - name: Check every six-step consent-gate sequence
         run: >-
           cargo test --release --locked -p todoke-transfer --lib --
-          --ignored --exact gate_proofs::tests::consent_gate_invariant_exhaustive_five_steps
+          --ignored --exact gate_proofs::tests::consent_gate_invariant_exhaustive_six_steps
 
   cross:
     name: Check ${{ matrix.target }}
