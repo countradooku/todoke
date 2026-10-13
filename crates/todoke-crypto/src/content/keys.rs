@@ -7,6 +7,7 @@ use subtle::ConstantTimeEq as _;
 use zeroize::Zeroizing;
 
 use super::{ContentError, ContentSuite, FileBinding, Segment};
+use crate::identity::sealing::{SealError, Sealer};
 use crate::rng::{self, RandomError};
 use crate::session::kdf::{hkdf_sha256_expand, hkdf_sha256_extract};
 
@@ -55,6 +56,42 @@ impl FileMaster {
     #[must_use]
     pub fn ct_eq(&self, other: &Self) -> bool {
         self.0.as_slice().ct_eq(other.0.as_slice()).into()
+    }
+
+    /// Seals this master for local storage with `sealer`, binding
+    /// `context` (§8: "Local master storage MUST be sealed by the
+    /// platform's approved secret storage"). The master's bytes go only to
+    /// the sealer; [`Self::open_sealed`] with the same context restores it.
+    ///
+    /// # Errors
+    ///
+    /// [`SealError`] from the sealer.
+    pub fn seal<S: Sealer + ?Sized>(
+        &self,
+        sealer: &S,
+        context: &[u8],
+    ) -> Result<Vec<u8>, SealError> {
+        sealer.seal(context, self.0.as_slice())
+    }
+
+    /// Restores a master that [`Self::seal`] sealed under `context`.
+    ///
+    /// # Errors
+    ///
+    /// [`SealError`] if the sealer refuses (wrong key or context,
+    /// tampering, truncation) or the opened value is not 32 bytes.
+    pub fn open_sealed<S: Sealer + ?Sized>(
+        sealer: &S,
+        context: &[u8],
+        sealed: &[u8],
+    ) -> Result<Self, SealError> {
+        let opened = sealer.open(context, sealed)?;
+        let mut master = Zeroizing::new([0; 32]);
+        if opened.len() != master.len() {
+            return Err(SealError);
+        }
+        master.copy_from_slice(&opened);
+        Ok(Self(master))
     }
 
     pub(crate) fn secret(&self) -> &[u8; 32] {
