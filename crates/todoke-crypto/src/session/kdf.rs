@@ -1,4 +1,5 @@
 //! Labeled derivations bound to a session (PROTOCOL §4.2.6, §4.3, §4.4).
+//! The HKDF helpers also serve the content key schedule (§8).
 //!
 //! HKDF is RFC 5869 HKDF-SHA-256 and HMAC is HMAC-SHA-256, both from libcrux.
 //! These are distinct from Noise's internal HKDF (§4.2.3). libcrux's HACL
@@ -39,6 +40,18 @@ pub(crate) fn hkdf_sha256(
     ikm: &[u8],
     info: &[u8],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
+    let prk = hkdf_sha256_extract(salt, ikm)?;
+    let mut okm = Zeroizing::new([0; KEY_LEN]);
+    hkdf_sha256_expand(&prk, info, okm.as_mut_slice())?;
+    Ok(okm)
+}
+
+/// RFC 5869 HKDF-SHA-256 Extract: the pseudorandom key for
+/// [`hkdf_sha256_expand`]. An empty salt means 32 zero bytes.
+pub(crate) fn hkdf_sha256_extract(
+    salt: &[u8],
+    ikm: &[u8],
+) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
     let mut prk = Zeroizing::new([0; KEY_LEN]);
     Hkdf::<Sha2_256>::extract(
         prk.as_mut_slice().classify_ref_mut(),
@@ -46,14 +59,19 @@ pub(crate) fn hkdf_sha256(
         ikm.classify_ref(),
     )
     .map_err(|_| KdfError)?;
-    let mut okm = Zeroizing::new([0; KEY_LEN]);
-    Hkdf::<Sha2_256>::expand(
-        okm.as_mut_slice().classify_ref_mut(),
-        prk.as_slice().classify_ref(),
-        info,
-    )
-    .map_err(|_| KdfError)?;
-    Ok(okm)
+    Ok(prk)
+}
+
+/// RFC 5869 HKDF-SHA-256 Expand of `prk` into all of `okm` (at most 8160
+/// bytes). Extract then Expand with the same inputs is `HKDF(salt, ikm,
+/// info, okm.len())` (§1).
+pub(crate) fn hkdf_sha256_expand(
+    prk: &[u8; KEY_LEN],
+    info: &[u8],
+    okm: &mut [u8],
+) -> Result<(), KdfError> {
+    Hkdf::<Sha2_256>::expand(okm.classify_ref_mut(), prk.as_slice().classify_ref(), info)
+        .map_err(|_| KdfError)
 }
 
 /// `psk_next = HKDF(h, psk, "todoke/v1/psk-ratchet\0", 32)`: the handshake
@@ -184,6 +202,50 @@ mod tests {
             hex::encode(tag),
             "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
         );
+    }
+
+    /// RFC 5869 A.1 and A.3 through the split helpers: Extract gives the
+    /// published PRK (an empty salt acting as 32 zero bytes), Expand fills
+    /// an output of any length up to 255 × 32 bytes, as the content key
+    /// schedule's 7- and 19-byte nonce prefixes need, and refuses longer
+    /// ones; `hkdf_sha256` is Extract then Expand.
+    #[test]
+    fn split_hkdf_matches_rfc5869() -> TestResult {
+        let ikm = [0x0b; 22];
+        let salt: Vec<u8> = (0..=0x0c).collect();
+        let info: Vec<u8> = (0xf0..=0xf9).collect();
+        for (salt, info, prk, okm) in [
+            (
+                salt.as_slice(),
+                info.as_slice(),
+                "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+                "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865",
+            ),
+            (
+                &[][..],
+                &[][..],
+                "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04",
+                "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8",
+            ),
+        ] {
+            let derived = hkdf_sha256_extract(salt, &ikm).map_err(|_| "extract")?;
+            assert_eq!(hex::encode(*derived), prk);
+            let mut output = [0; 42];
+            hkdf_sha256_expand(&derived, info, &mut output).map_err(|_| "expand")?;
+            assert_eq!(hex::encode(output), okm);
+            let combined = hkdf_sha256(salt, &ikm, info).map_err(|_| "hkdf")?;
+            assert_eq!(combined.as_slice(), &output[..32]);
+        }
+        assert_eq!(
+            *hkdf_sha256_extract(&[], &ikm).map_err(|_| "extract")?,
+            *hkdf_sha256_extract(&[0; 32], &ikm).map_err(|_| "extract")?
+        );
+        let prk = [7; 32];
+        let mut longest = vec![0; 255 * 32];
+        assert_eq!(hkdf_sha256_expand(&prk, b"", &mut longest), Ok(()));
+        let mut too_long = vec![0; 255 * 32 + 1];
+        assert_eq!(hkdf_sha256_expand(&prk, b"", &mut too_long), Err(KdfError));
+        Ok(())
     }
 
     #[test]

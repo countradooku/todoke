@@ -63,6 +63,8 @@ jobs:
         run: bash scripts/ci/deny-exceptions-dev-only.sh
       - name: Test the deny exception guard
         run: bash scripts/ci/deny-exceptions-dev-only.test.sh
+      - name: Check fuzzing-only modules need their gate features
+        run: bash scripts/ci/fuzzing-gates.test.sh
       - name: Check dependency audits
         run: cargo vet --locked
       - name: Check fuzz dependency policy and audits
@@ -70,6 +72,10 @@ jobs:
         run: |
           cargo deny --manifest-path fuzz/Cargo.toml --locked --config deny.toml check
           cargo vet --manifest-path fuzz/Cargo.toml --locked
+      - name: Check benchmark dependency policy and audits
+        run: |
+          cargo deny --manifest-path bench/Cargo.toml --locked --config deny.toml check
+          cargo vet --manifest-path bench/Cargo.toml --locked
 
   msrv:
     name: Minimum supported Rust (1.94.0)
@@ -85,6 +91,29 @@ jobs:
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Check every workspace target on the MSRV
         run: cargo check --workspace --all-targets --locked
+      - name: Check the benchmark workspace on the MSRV
+        run: cargo check --manifest-path bench/Cargo.toml --all-targets --locked
+
+  # bench/ is an isolated workspace (bench/README.md): its consent-bypass
+  # feature must stay out of root workspace builds.
+  bench:
+    name: Benchmarks build and run once
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and components
+        run: rustup show
+      - name: Check formatting
+        run: cargo fmt --all --manifest-path bench/Cargo.toml -- --check
+      - name: Clippy
+        run: cargo clippy --manifest-path bench/Cargo.toml --all-targets --locked -- -D warnings -W clippy::pedantic
+      - name: Build the benchmarks
+        run: cargo bench --manifest-path bench/Cargo.toml --locked --no-run
+      - name: Run each benchmark once (criterion test mode)
+        run: cargo test --manifest-path bench/Cargo.toml --locked --benches
 
   cross:
     name: Check ${{ matrix.target }}

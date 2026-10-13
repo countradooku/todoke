@@ -32,9 +32,9 @@ is visible in review. The one-time exemption of the existing graph at adoption
 (2026-10-13) does not extend to later additions. Commit the root `Cargo.lock`
 and all generated store files, including `imports.lock`.
 
-When an isolated fuzz workspace is introduced, its dependency graph and lockfile
-must receive the same checks and their own audit store; see
-[`fuzz/README.md`](../fuzz/README.md).
+The isolated fuzz and benchmark workspaces (`fuzz/`, `bench/`) have their own
+lockfiles and audit stores and receive the same checks; see
+[`fuzz/README.md`](../fuzz/README.md) and [`bench/README.md`](../bench/README.md).
 
 References: [cargo-deny configuration](https://embarkstudios.github.io/cargo-deny/checks/cfg.html),
 [cargo-vet setup](https://mozilla.github.io/cargo-vet/setup.html), and
@@ -376,3 +376,117 @@ taking the latest release with no cooling-off period (see "Latest-version
 upgrade" above); no review of the release beyond its notes was done. It
 reaches runtime builds through `ed25519-dalek`, so a regression or a
 compromised release would affect signing in every build.
+
+## Content layer dependencies (2026-10-13)
+
+The per-file content layer (PROTOCOL §7.4, §8; `todoke-crypto::content`)
+adds two runtime packages, both direct dependencies of `todoke-crypto`:
+
+| Package | Published | Why | Notes |
+| --- | --- | --- | --- |
+| `bao 0.13.1` | 2025-04-07 | Bao 0.13.1 combined slices, the format §7.4 pins ([ADR 0003](../docs/adr/0003-bao.md)) | Latest release; the reference implementation. `CC0-1.0 OR Apache-2.0`, `forbid(unsafe_code)`. Its dependencies `blake3 1.8.7` and `arrayvec 0.7.8` were already in the lock. |
+| `libcrux-aes 0.0.10` | 2026-10-07 | AES-256-GCM for content suite 1 ([ADR 0004](../docs/adr/0004-content-aead.md)) | Latest release, six days old when adopted (no cooling-off, per the maintainer's policy). Apache-2.0. Uses the `libcrux-intrinsics`, `libcrux-platform`, `libcrux-secrets`, and `libcrux-traits` versions already in the lock. Contains `unsafe` for its SIMD intrinsics; Cryspen marks it "pre-verification". |
+
+`libcrux-platform 0.0.4` (already in the lock) is now also a direct
+dependency, for the same CPU checks libcrux-aes uses. XChaCha20-Poly1305
+comes from the existing `libcrux-chacha20poly1305 0.0.10`.
+
+The `todoke-bench` crate (`bench/`, a new crate) has
+development dependencies only: `criterion 0.8.2` with default features off
+(no plotting, no rayon), not built for wasm32. It brings `alloca 0.4.0`,
+`anes 0.1.6`, `anstyle 1.0.14`, `cast 0.3.0`, `ciborium`/`ciborium-io`/
+`ciborium-ll 0.2.2`, `clap`/`clap_builder 4.6.7`, `clap_lex 1.1.1`,
+`criterion-plot 0.8.2`, `crunchy 0.2.4`, `half 2.7.1`, `oorandom 11.1.5`,
+`page_size 0.6.0`, `same-file 1.0.6`, `tinytemplate 1.2.1`, `walkdir 2.5.0`,
+`winapi 0.3.9` (with its two target shims), `winapi-util 0.1.11`,
+`windows-sys 0.61.2`, and `zerocopy`/`zerocopy-derive 0.8.62`, all the
+latest releases. `alloca` compiles a small C file, so checking this
+crate for another target needs that target's C compiler (see the MSRV note
+below). Licenses are all within the existing Apache-2.0/MIT allow list (as
+one choice of each dual or triple license), so no license, ban, advisory,
+or source exception was needed, and `cargo deny` passes for both graphs.
+
+The benchmarks need the new non-default `todoke-crypto` feature
+`insecure-content-without-accept`, which bypasses the §7.2 consent gate.
+`scripts/ci/deny-exceptions-dev-only.sh` now fails if any shipped graph
+enables it, and its test script covers that with a mutated workspace copy.
+`bench/` has since become an isolated workspace with its own lock and
+audit store (see "Isolated benchmark workspace" below), so the benchmark
+packages and their audits described next are no longer in the root graph
+or the root store.
+
+cargo-vet, root store: new imported audits cover `alloca`, `anes`, `cast`,
+`ciborium*`, `criterion-plot`, `crunchy`, `oorandom`, `page_size`,
+`same-file`, `tinytemplate`, `winapi`, `winapi-util`, and the criterion and
+walkdir version deltas (Bytecode Alliance, Google, ISRG, Mozilla, Zcash;
+pinned in `imports.lock`). `cargo vet regenerate exemptions`
+added exact-version "Not yet reviewed" exemptions for `bao 0.13.1` and
+`libcrux-aes 0.0.10` (safe-to-deploy) and for the remaining benchmark-only
+packages (safe-to-run). For `criterion` and `walkdir` it exempted the older
+base versions 0.3.5 and 2.4.0, which the imported delta audits extend to
+0.8.2 and 2.5.0; their notes say so. The fuzz store gained only the two
+runtime exemptions. No audit was recorded for work not performed;
+reviewing `bao` and `libcrux-aes` is part of gate O6.
+
+`fuzz/Cargo.lock` gained `bao` and `libcrux-aes` at the root lock's
+versions.
+
+MSRV: everything builds on Rust 1.94.0 (`bao` declares no `rust-version`;
+`criterion 0.8.2` declares 1.86). On macOS, the local
+`--target x86_64-unknown-linux-gnu` check now needs a C compiler for
+`alloca`'s build script, for example
+`CC_x86_64_unknown_linux_gnu=clang CFLAGS_x86_64_unknown_linux_gnu=--target=x86_64-unknown-linux-gnu`.
+CI's MSRV job runs natively on Linux and is unaffected.
+
+## Isolated benchmark workspace (2026-10-13)
+
+Review of the content layer found that, as a root workspace member, `bench/`
+enabled `todoke-crypto/insecure-content-without-accept` in the root
+development graph. Cargo unifies dev-dependency features across a
+workspace build, so `cargo test --workspace` and every `--all-targets`
+build compiled each shipped crate's tests against the consent bypass, and
+the guard, which looked only at `-e no-dev` graphs, did not notice.
+
+- `bench/` is now its own workspace (`[workspace]` in `bench/Cargo.toml`,
+  excluded from the root), like `fuzz/`, with a committed `bench/Cargo.lock`
+  seeded from the root lock (no version differs) and a versioned path
+  dependency on `todoke-crypto` with the feature.
+- The root lock lost `todoke-bench` and the 26 benchmark-only packages
+  listed above. `cargo vet prune` removed their now-unused root exemptions
+  and imported audits, leaving the root store as on `main` plus the `bao` and
+  `libcrux-aes` exemptions.
+- `bench/supply-chain` was created with `cargo vet init` inside `bench/`,
+  then `cargo vet import` of the same six audit sets (Mozilla, Google,
+  Bytecode Alliance, ISRG, Zcash, Embark Studios), `cargo vet regenerate
+  exemptions`, and `cargo vet fmt`: 36 packages fully audited by imports
+  and 99 exact-version exemptions. Every exemption carries the root or fuzz
+  store's existing "Not yet reviewed" note for the same version; the four
+  versions those stores do not exempt directly (`criterion 0.8.2` and
+  `walkdir 2.5.0`, which the root covered through imported deltas, and
+  `libc 0.2.190` and `curve25519-dalek-derive 0.1.1`, likewise) have a note
+  saying so. All are `safe-to-run`, because nothing in this workspace
+  ships. No audit was recorded.
+- CI's supply-chain job runs `cargo deny` (with the root `deny.toml`) and
+  `cargo vet` for `bench/`; a `bench` job checks formatting and clippy,
+  builds the benchmarks, and runs each once (criterion's test mode); the
+  MSRV job checks `bench/` too. cargo-deny's license check skips
+  development dependencies, and every `bench/` dependency is one, so it
+  checks no licenses there (as before, when they were root dev-dependencies).
+  The root workspace no longer compiles `alloca`, so the local
+  `--target x86_64-unknown-linux-gnu` MSRV check of the root needs no C
+  compiler settings again; only a cross check of `bench/` would.
+- `scripts/ci/deny-exceptions-dev-only.sh` also fails if any root graph,
+  dev-dependencies included, enables `insecure-content-without-accept`, and
+  its test script covers that with a workspace copy whose `todoke-core`
+  enables it as a dev-dependency.
+
+## libcrux SIMD build variables (2026-10-13)
+
+libcrux-aes's build script honours `LIBCRUX_DISABLE_SIMD256` and
+`LIBCRUX_DISABLE_SIMD128`, which replace its hardware AES-GCM with the
+portable implementation while `ContentSuites::local` still advertises AES
+(see [ADR 0004](../docs/adr/0004-content-aead.md), "Build configuration").
+`scripts/ci/deny-exceptions-dev-only.sh` now fails if either is set in its
+environment or appears in a repository workflow or `.cargo/config*` file,
+and its test script covers the environment, a workflow, and a Cargo
+config. No dependency changed.

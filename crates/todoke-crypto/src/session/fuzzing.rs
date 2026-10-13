@@ -1,4 +1,6 @@
-//! Entry points for `cargo fuzz` harnesses; compiled only with `--cfg fuzzing`.
+//! Entry points for `cargo fuzz` harnesses; compiled only with `--cfg fuzzing`
+//! and the `unaudited-suite-0001` feature (the code-pairing harness also
+//! needs `unaudited-code-pairing`).
 //!
 //! Every input is parsed by the real prelude reader and handshake driver,
 //! set up deterministically from the public §4.2 fixture inputs

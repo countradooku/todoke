@@ -24,12 +24,18 @@
 //! construct, because PROTOCOL §16 keeps the suite disabled until gates O6 and
 //! O10 close (`docs/adr/0001-noise-crate.md`); code pairing additionally
 //! needs [`UnauditedCodePairing`](pairing::UnauditedCodePairing) until O2
-//! closes (`docs/adr/0002-cpace.md`). Capabilities, transfers, and content
-//! encryption are not implemented yet.
+//! closes (`docs/adr/0002-cpace.md`). The per-file content layer (see
+//! [`content`]) implements the §8 key schedule, both content AEADs,
+//! strictly verified Bao 0.13.1 segments, and resume tracking; it needs an
+//! [`AcceptedFile`](content::AcceptedFile), which only the future
+//! verified-Accept path may create (unit tests and the non-default
+//! `insecure-content-without-accept` feature aside). Capabilities,
+//! manifests, Accept, and transfers are not implemented yet.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
 #![forbid(unsafe_code)]
 
+pub mod content;
 pub mod identity;
 pub mod pairing;
 mod rng;

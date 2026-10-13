@@ -33,6 +33,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "bao"
+version = "0.13.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f9125f93587b894c196d58b0a752ce2213552d0d483c98ee41530e38202a511"
+dependencies = [
+ "arrayvec",
+ "blake3",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -474,6 +484,18 @@ name = "libc"
 version = "0.2.190"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
+
+[[package]]
+name = "libcrux-aes"
+version = "0.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd415025511a0bd8731cae34ae2d5e07c1b3f0443d5c12bd199c9e9b2f1fd4d5"
+dependencies = [
+ "libcrux-intrinsics",
+ "libcrux-platform",
+ "libcrux-secrets",
+ "libcrux-traits",
+]
 
 [[package]]
 name = "libcrux-chacha20poly1305"
@@ -1021,16 +1043,19 @@ dependencies = [
 name = "todoke-crypto"
 version = "0.1.0"
 dependencies = [
+ "bao",
  "blake3",
  "curve25519-dalek",
  "ed25519-dalek",
  "futures-io",
  "getrandom",
+ "libcrux-aes",
  "libcrux-chacha20poly1305",
  "libcrux-curve25519",
  "libcrux-hkdf",
  "libcrux-hmac",
  "libcrux-ml-kem",
+ "libcrux-platform",
  "libcrux-secrets",
  "libcrux-sha2",
  "pakery-cpace",

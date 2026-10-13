@@ -25,6 +25,8 @@ pub(crate) mod binding;
 mod codec;
 pub mod contacts;
 mod ed25519;
+// Decoders only (local storage plaintext, a fixed public test key's
+// envelope, binding signatures): no gate to bypass, so the cfg alone.
 #[cfg(fuzzing)]
 pub mod fuzzing;
 mod ids;

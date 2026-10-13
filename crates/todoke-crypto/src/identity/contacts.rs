@@ -1959,7 +1959,11 @@ mod tests {
         let (enrolled, store) = paired()?;
         let rendered = format!("{store:?} {:?}", store.contact(&device(&enrolled)?));
         assert!(rendered.contains("REDACTED"));
-        assert!(!rendered.contains("77, 77") && !rendered.contains("7777"));
+        // Search for the whole 32-byte PSK in both renderings. A short
+        // pattern such as "7777" also occurs by chance in the random key hex.
+        let psk = [0x77_u8; 32];
+        assert!(!rendered.contains(&hex::encode(psk)));
+        assert!(!rendered.contains(&format!("{psk:?}")[1..]));
         Ok(())
     }
 

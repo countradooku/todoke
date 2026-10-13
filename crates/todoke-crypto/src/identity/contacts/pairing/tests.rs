@@ -479,7 +479,12 @@ fn debug_shows_counts_only() -> TestResult {
     assert!(debug.contains("pairing_pending: true, burned_pairings: 1"));
     let pending = format!("{:?}", store.pairing.pending.as_ref().ok_or("pending")?);
     assert!(pending.starts_with("PendingPairing { origin: QrPairing, device: "));
-    assert!(!pending.contains("6b6b") && !pending.contains("a1a1"));
+    // Whole-value searches: short patterns occur by chance in the random
+    // device key hex.
+    for secret in [&PSK_NEXT[..], &ID[..]] {
+        assert!(!pending.contains(&hex::encode(secret)));
+        assert!(!pending.contains(&format!("{secret:?}")[1..]));
+    }
     Ok(())
 }
 
