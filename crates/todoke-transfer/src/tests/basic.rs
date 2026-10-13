@@ -306,6 +306,54 @@ fn no_key_or_content_before_accept() -> TestResult {
     Ok(())
 }
 
+/// A `FileKey` for a transfer without an open gate is refused from its
+/// transfer ID alone (§7.2: no `FileKey` is processed before consent): its
+/// body is never decoded, so a body that would not even decode is still
+/// `CONSENT_REQUIRED`, not `MALFORMED`. Only a wrong length (or a zero
+/// transfer ID) is `MALFORMED`, from the peek itself.
+#[test]
+fn file_key_before_accept_is_refused_before_decoding() -> TestResult {
+    let fixture = fixture()?;
+    let suite = ContentSuites::local()
+        .select(ContentSuites::local())
+        .ok_or("suite")?;
+    let valid = FileKeyBody::new([0x99; 16], [3; 32], 2, suite, FileMaster::generate()?)?.encode();
+    // An unknown transfer, then the offered one.
+    for during_offer in [false, true] {
+        // Each body has the right length but would fail to decode: an
+        // unknown suite, then file ID 0.
+        let mut bad_suite = valid.to_vec();
+        bad_suite[52..54].copy_from_slice(&[0, 0]);
+        let mut bad_file = valid.to_vec();
+        bad_file[48..52].copy_from_slice(&[0; 4]);
+        for body in [bad_suite, bad_file] {
+            let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+            let mut body = body;
+            if during_offer {
+                body[..16].copy_from_slice(&link.transfer_id_of_offer().ok_or("offer")?);
+            }
+            let result = link.b.handle_frame(FrameType::FILE_KEY, &body, link.now);
+            assert_eq!(session_failure(result), Some(FailureCode::ConsentRequired));
+            assert!(sent_session_error(
+                &mut link,
+                false,
+                ErrorCode::CONSENT_REQUIRED
+            ));
+        }
+    }
+    // Malformed from the peek alone: wrong lengths and a zero transfer ID.
+    for body in [vec![0x99; 85], vec![0x99; 87], {
+        let mut body = vec![0x99; 86];
+        body[..16].copy_from_slice(&[0; 16]);
+        body
+    }] {
+        let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+        let result = link.b.handle_frame(FrameType::FILE_KEY, &body, link.now);
+        assert_eq!(session_failure(result), Some(FailureCode::Malformed));
+    }
+    Ok(())
+}
+
 /// Delivers frames until the frame at the head of the wire toward Bob
 /// (`toward_bob`) or Alice is of `frame_type`.
 pub(super) fn run_until(

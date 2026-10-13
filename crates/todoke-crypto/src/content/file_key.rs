@@ -89,6 +89,29 @@ impl FileKeyBody {
         })
     }
 
+    /// The transfer ID of a `FileKey` body, read without decoding anything
+    /// else and without copying the master: the receiver decides from it
+    /// alone whether the key may be processed at all (§7.2: no `FileKey`
+    /// is processed before consent). [`Self::decode`] accepts a body only
+    /// if this accepts it and returns the same transfer ID.
+    ///
+    /// # Errors
+    ///
+    /// [`FileKeyError::Length`] unless the body is exactly 86 bytes;
+    /// [`FileKeyError::TransferId`] for an all-zero transfer ID.
+    pub fn peek_transfer_id(bytes: &[u8]) -> Result<[u8; 16], FileKeyError> {
+        if bytes.len() != FILE_KEY_BODY_LEN {
+            return Err(FileKeyError::Length);
+        }
+        let (transfer_id, _) = bytes
+            .split_first_chunk::<16>()
+            .ok_or(FileKeyError::Length)?;
+        if *transfer_id == [0; 16] {
+            return Err(FileKeyError::TransferId);
+        }
+        Ok(*transfer_id)
+    }
+
     /// Decodes exactly 86 bytes. The length is checked before anything is
     /// read; the master is copied only into a zeroizing buffer.
     ///

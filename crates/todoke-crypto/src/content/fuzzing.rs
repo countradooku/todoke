@@ -162,13 +162,17 @@ pub fn honest_ciphertext(size: u32, index: u8) -> Option<Vec<u8>> {
 }
 
 /// Decodes a `FileKey` body (§8) and returns its re-encoding, which must
-/// equal the input.
+/// equal the input; peeks its transfer ID, which must agree with every
+/// accepted body.
 ///
 /// # Panics
 ///
-/// If an accepted body does not re-encode to the input, which is a bug.
+/// If an accepted body does not re-encode to the input, or the peek
+/// refuses it or returns another transfer ID, which is a bug.
 pub fn file_key_body(data: &[u8]) {
+    let peeked = FileKeyBody::peek_transfer_id(data);
     if let Ok(body) = FileKeyBody::decode(data) {
         assert_eq!(body.encode().as_slice(), data);
+        assert_eq!(peeked.ok().as_ref(), Some(body.transfer_id()));
     }
 }

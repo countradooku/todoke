@@ -6,8 +6,8 @@
 //! consent gate is open for the selection) → ended.
 //!
 //! Every `FileKey` and `Chunk` reaches the consent gate before anything
-//! else happens to it. A chunk for a transfer without an open gate is
-//! refused from its transfer ID alone, before its body is even decoded
+//! else happens to it. A key or chunk for a transfer without an open gate
+//! is refused from its transfer ID alone, before its body is even decoded
 //! (§7.2).
 
 use core::time::Duration;
@@ -532,12 +532,19 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
     }
 
     pub(super) fn on_file_key(&mut self, body: &[u8], _now: Duration) -> Handled {
-        let key = FileKeyBody::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
-        let receiving = match self.incoming.get_mut(key.transfer_id()) {
-            // §7.2: no FileKey is processed before this side's Accept.
-            None | Some(Incoming::Assembling(_) | Incoming::Offered(_)) => {
+        // §7.2: no FileKey is processed before this side's Accept. Decide
+        // from the transfer ID alone; the body (and its master) is decoded
+        // only for a transfer whose consent gate is open.
+        let transfer_id =
+            FileKeyBody::peek_transfer_id(body).map_err(|_| violation(FailureCode::Malformed))?;
+        let receiving = match self.incoming.get_mut(&transfer_id) {
+            Some(Incoming::Receiving(receiving)) if receiving.gate.proof().is_some() => receiving,
+            None
+            | Some(Incoming::Assembling(_) | Incoming::Offered(_) | Incoming::Receiving(_)) => {
                 return Err(violation(FailureCode::ConsentRequired));
             }
+            // In flight before this side ended the transfer: discarded
+            // without decoding, within the allowance.
             Some(Incoming::Ended(ended)) => {
                 return if ended.late.take(LateKind::FileKey) {
                     Ok(())
@@ -545,8 +552,8 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
                     Err(violation(FailureCode::State))
                 };
             }
-            Some(Incoming::Receiving(receiving)) => receiving,
         };
+        let key = FileKeyBody::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
         let file_id = key.file_id();
         let new = receiving
             .gate

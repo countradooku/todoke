@@ -55,9 +55,10 @@ sessions). The transfer engine owns those.
 In `todoke-transfer`, every incoming `FileKey` and `Chunk` passes a small
 `ConsentGate` before anything else: closed until a `VerifiedAccept` opens it
 (once), keys only for selected files under that Accept's hash, content only
-for keyed selected files, nothing after it closes. A chunk for a transfer
-without an open gate is refused from its transfer ID alone, before its body
-is decoded (§7.2: discard without processing). The gate is generic over the
+for keyed selected files, nothing after it closes. A key or chunk for a
+transfer without an open gate is refused from its transfer ID alone, before
+its body is decoded (§7.2: discard without processing; no `FileKey` is
+processed before consent). The gate is generic over the
 proof so that Kani harnesses can check it for every proof and operation
 sequence; the same harness bodies run exhaustively over short sequences in
 the unit tests, so the logic is exercised locally too. Below the gate the
