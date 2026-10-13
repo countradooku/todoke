@@ -630,6 +630,13 @@ enum Op {
     /// Reserve offer number `n` (modulo the offers created so far) in its
     /// own mode, or in the other mode.
     Reserve(usize, bool),
+    /// A stream is accepted and takes a place in the §13 budget.
+    Admit,
+    /// Accepted stream number `n` (modulo those holding a place) ends.
+    DropPermit(usize),
+    /// Reserve offer number `n` in its own mode or the other, passing the
+    /// place of accepted stream number `k`.
+    ReserveWithPermit(usize, bool, usize),
     Authenticate(usize),
     Burn(usize),
     Release(usize),
@@ -649,6 +656,9 @@ fn op() -> impl Strategy<Value = Op> {
         2 => Just(Op::CreateQr),
         1 => Just(Op::CreateCode),
         5 => (0..8_usize, any::<bool>()).prop_map(|(n, same)| Op::Reserve(n, same)),
+        2 => Just(Op::Admit),
+        1 => (0..8_usize).prop_map(Op::DropPermit),
+        3 => (0..8_usize, any::<bool>(), 0..8_usize).prop_map(|(n, same, k)| Op::ReserveWithPermit(n, same, k)),
         2 => (0..8_usize).prop_map(Op::Authenticate),
         2 => (0..8_usize).prop_map(Op::Burn),
         3 => (0..8_usize).prop_map(Op::Release),
@@ -681,7 +691,9 @@ proptest! {
     /// expired offers never reserve again, a restart forgets every offer,
     /// a held code is never replaced, a withdrawn offer can no longer be
     /// burned by the attempt that held it, and the §13 budget counts
-    /// exactly the unauthenticated reservations.
+    /// exactly the accepted streams and the unauthenticated reservations;
+    /// a stream's place moves only into its own successful reservation,
+    /// without a second start.
     #[test]
     fn registry_matches_the_model(ops in proptest::collection::vec(op(), 1..60)) {
         let device = Device::new().map_err(|e| TestCaseError::fail(e.to_string()))?;
@@ -692,6 +704,8 @@ proptest! {
         let mut model: BTreeMap<[u8; 16], ModelOffer> = BTreeMap::new();
         let mut held: BTreeMap<[u8; 16], (OfferReservation, bool)> = BTreeMap::new();
         let mut starts: Vec<u64> = Vec::new();
+        // Accepted streams holding a place in the §13 budget.
+        let mut permits: Vec<AttemptPermit> = Vec::new();
         let mut elapsed_ms: u64 = 0;
         for op in ops {
             let mono = MONO + Duration::from_millis(elapsed_ms);
@@ -723,25 +737,54 @@ proptest! {
                         model.insert(id, ModelOffer { code, created_ms: elapsed_ms, reserved: false, burned: false, failures: 0, last_attempt_ms: None, restarted: false });
                     }
                 }
-                Op::Reserve(n, same) => {
+                Op::Reserve(n, same) | Op::ReserveWithPermit(n, same, _) => {
                     if ids.is_empty() { continue; }
                     let id = ids[n % ids.len()];
                     let entry = model[&id];
                     let mode = if entry.code == same { SessionMode::Code } else { SessionMode::Qr };
                     let hello = hello(mode, id).map_err(|e| TestCaseError::fail(e.to_string()))?;
-                    let result = offers.reserve(&hello, wall, mono);
+                    let mut permit = match op {
+                        Op::ReserveWithPermit(_, _, k) if !permits.is_empty() => Some(permits.remove(k % permits.len())),
+                        _ => None,
+                    };
+                    let with_permit = permit.is_some();
+                    let result = offers.reserve_attempt(&hello, true, &mut permit, wall, mono);
                     starts.retain(|&start| elapsed_ms.saturating_sub(start) < 60_000);
                     let unauthenticated = held.values().filter(|(_, auth)| !auth).count();
                     let too_soon = entry.code && entry.last_attempt_ms.is_some_and(|last| elapsed_ms < last + 2_000);
-                    let expected_ok = same && !entry.reserved && live(&entry) && !too_soon
-                        && unauthenticated < MAX_CONCURRENT_ATTEMPTS && starts.len() < MAX_ATTEMPT_STARTS_PER_MINUTE;
+                    // A stream's place becomes the reservation's: no new start.
+                    let budget = with_permit
+                        || (unauthenticated + permits.len() < MAX_CONCURRENT_ATTEMPTS && starts.len() < MAX_ATTEMPT_STARTS_PER_MINUTE);
+                    let expected_ok = same && !entry.reserved && live(&entry) && !too_soon && budget;
                     prop_assert_eq!(result.is_ok(), expected_ok, "{:?} {:?}", entry, result.as_ref().err());
+                    // The place moves only into a successful reservation.
+                    prop_assert_eq!(permit.is_some(), with_permit && !expected_ok);
+                    permits.extend(permit);
                     if let Ok(reservation) = result {
-                        starts.push(elapsed_ms);
+                        if !with_permit {
+                            starts.push(elapsed_ms);
+                        }
                         let entry = model.get_mut(&id).ok_or_else(|| TestCaseError::fail("model"))?;
                         entry.reserved = true;
                         entry.last_attempt_ms = Some(elapsed_ms);
                         held.insert(id, (reservation, false));
+                    }
+                }
+                Op::Admit => {
+                    starts.retain(|&start| elapsed_ms.saturating_sub(start) < 60_000);
+                    let unauthenticated = held.values().filter(|(_, auth)| !auth).count();
+                    let expected_ok = unauthenticated + permits.len() < MAX_CONCURRENT_ATTEMPTS
+                        && starts.len() < MAX_ATTEMPT_STARTS_PER_MINUTE;
+                    let result = offers.admit(mono);
+                    prop_assert_eq!(result.is_ok(), expected_ok, "{:?}", result.as_ref().err());
+                    if let Ok(permit) = result {
+                        starts.push(elapsed_ms);
+                        permits.push(permit);
+                    }
+                }
+                Op::DropPermit(n) => {
+                    if !permits.is_empty() {
+                        drop(permits.remove(n % permits.len()));
                     }
                 }
                 Op::Authenticate(n) => {
@@ -786,6 +829,7 @@ proptest! {
                 Op::Advance(ms) => elapsed_ms += u64::from(ms),
                 Op::Restart => {
                     held.clear();
+                    permits.clear();
                     offers = PairingOffers::new();
                     for entry in model.values_mut() {
                         entry.restarted = true;
@@ -795,7 +839,7 @@ proptest! {
                 }
             }
             let unauthenticated = held.values().filter(|(_, auth)| !auth).count();
-            prop_assert_eq!(offers.active_attempts(), unauthenticated);
+            prop_assert_eq!(offers.active_attempts(), unauthenticated + permits.len());
             for (id, entry) in &model {
                 if entry.code && !entry.burned && !entry.restarted && entry.failures < MAX_CODE_FAILURES
                     && let Some(failures) = offers.failures(id)
