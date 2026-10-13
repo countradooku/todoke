@@ -24,6 +24,9 @@
 
 pub mod dest;
 pub mod detect;
+/// Fuzzing entry points: built only with `--cfg fuzzing` (cargo-fuzz).
+#[cfg(fuzzing)]
+pub mod fuzzing;
 pub mod name;
 mod plan;
 pub mod quarantine;

@@ -30,6 +30,9 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_consent_manifest` | `CanonicalManifest::parse`: the schema plus Ed25519 key validation and the empty-file root; an accepted manifest keeps the exact input and its hash (PROTOCOL §7.1) |
 | `crypto_consent_accept` | `verify_accept` against the committed fixture's session, manifest, and keys: only the fixture Accept may verify (PROTOCOL §7.3) |
 | `crypto_consent_receipt` | `verify_receipt` against that Accept: only the receipt signed at start-up with the fixture's public receiver seed may verify (PROTOCOL §7.7) |
+| `fs_name_mapping` | `todoke_fs::sanitize_component` on arbitrary names (each output is one safe, stable component within the length limit), then `DestinationPlan::new` on a tree of the names the manifest decoder accepts, with fuzzer-chosen existing names: no two siblings share a collision key, no top-level name lands on an existing one, every local path is unique (PROTOCOL §7.1) |
+| `fs_quarantine_records` | The quarantine's local journal (header, then entries up to the first damaged one) and tombstone list decoders: whatever decodes re-encodes to exactly its bytes, and journal names are safe components (local format) |
+| `fs_content_type` | `todoke_fs::detect::detect` and `assess` on arbitrary content with a fuzzer-chosen name and MIME label: bounded signature checks, assessment consistent with detection |
 
 The `crypto_*` targets call `todoke_crypto::identity::fuzzing`,
 `todoke_crypto::pairing::fuzzing`, `todoke_crypto::session::fuzzing`,
@@ -50,6 +53,12 @@ feature:
   `consent::fuzzing` only verifies records against fixed public fixture
   keys, so the cfg alone is enough.
 
+The `fs_*` targets call `todoke_fs::fuzzing` (also `--cfg fuzzing` only)
+or the public `todoke_fs::quarantine::codec` decoders. `todoke_fs::fuzzing`
+runs the sanitizer, destination mapping, and content-type detection in
+memory and asserts their invariants with the crate's private helpers; it
+touches no filesystem and bypasses no gate, so it needs no feature.
+
 `fuzz/Cargo.toml` therefore enables `todoke-crypto`'s `unaudited-code-pairing`
 (which implies `unaudited-suite-0001`) and `insecure-content-without-accept`
 features. Shipped graphs never do (`scripts/ci/deny-exceptions-dev-only.sh`
@@ -57,7 +66,13 @@ checks this), and `scripts/ci/fuzzing-gates.test.sh` checks that `--cfg
 fuzzing` without a feature exposes no module behind it.
 
 Committed seeds live in `fuzz/seeds/<target>/`: small valid and malformed
-inputs built from public RFC 8032 test keys and fixed bytes. The transfer
+inputs built from public RFC 8032 test keys and fixed bytes. The `fs_*`
+seeds are hostile names (traversal, Windows device names, bidi overrides,
+disguised extensions, case and Unicode variants), journals and tombstone
+lists from the real encoders (whole, header only, and with a torn tail),
+and file signatures with mismatched names; `fs_name_mapping` keeps the
+input of its first finding (two existing names given the same suffix) as
+`regression-shared-suffix`. The transfer
 and consent seeds come from the committed `manifest-hash.json` and
 `accept-signature.json` fixtures, a small folder manifest, one valid record
 of each type, and a delivery receipt signed with the fixtures' public

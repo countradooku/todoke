@@ -337,6 +337,11 @@ version = "0.8.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.linux-raw-sys]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (Linux system call definitions used by rustix); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.log]]
 version = "0.4.34"
 criteria = "safe-to-deploy"
@@ -432,6 +437,11 @@ version = "2.1.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.rustix]]
+version = "1.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (todoke-fs uses its openat-family calls; docs/adr/0006-filesystem.md); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.rustversion]]
 version = "1.0.23"
 criteria = "safe-to-deploy"
@@ -526,6 +536,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
+version = "0.61.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (declared by rustix and errno for Windows targets); imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.zeroize]]
 version = "1.9.1"
