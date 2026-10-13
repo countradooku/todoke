@@ -249,6 +249,33 @@ fn commit_requires_the_journaled_transaction() -> TestResult {
     Ok(())
 }
 
+/// The commit pins the journaled keys, not only the device: a binding of
+/// the same device that certifies another Noise or ML-KEM key is refused
+/// and the journal stays pending.
+#[test]
+fn commit_requires_the_journaled_keys() -> TestResult {
+    let enrolled = Enrolled::new()?;
+    let peer = enrolled.bind_with(1, 0x33, 0x44)?;
+    let other_noise = enrolled.bind_with(1, 0x35, 0x44)?;
+    let other_kem = enrolled.bind_with(1, 0x33, 0x45)?;
+    let mut store = empty()?;
+    store.journal_pairing(&journal(&peer, ID)?, time(T0)?)?;
+    for other in [&other_noise, &other_kem] {
+        assert_eq!(other.device_public(), peer.device_public());
+        assert_eq!(
+            store.commit_pairing(other, &HASH, time(T0)?),
+            Err(ContactError::RatchetMismatch)
+        );
+        assert!(store.pairing_pending());
+        assert!(store.contact(peer.device_public()).is_none());
+    }
+    assert_eq!(
+        store.commit_pairing(&peer, &HASH, time(T0)?),
+        Ok(PairOutcome::New)
+    );
+    Ok(())
+}
+
 #[test]
 fn ledger_expires_entries_and_has_a_quota() -> TestResult {
     let peer = Enrolled::new()?.bind(1)?;
