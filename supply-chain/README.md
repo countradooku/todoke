@@ -376,3 +376,61 @@ taking the latest release with no cooling-off period (see "Latest-version
 upgrade" above); no review of the release beyond its notes was done. It
 reaches runtime builds through `ed25519-dalek`, so a regression or a
 compromised release would affect signing in every build.
+
+## Content layer dependencies (2026-10-13)
+
+The per-file content layer (PROTOCOL §7.4, §8; `todoke-crypto::content`)
+adds two runtime packages, both direct dependencies of `todoke-crypto`:
+
+| Package | Published | Why | Notes |
+| --- | --- | --- | --- |
+| `bao 0.13.1` | 2025-04-07 | Bao 0.13.1 combined slices, the format §7.4 pins ([ADR 0003](../docs/adr/0003-bao.md)) | Latest release; the reference implementation. `CC0-1.0 OR Apache-2.0`, `forbid(unsafe_code)`. Its dependencies `blake3 1.8.7` and `arrayvec 0.7.8` were already in the lock. |
+| `libcrux-aes 0.0.10` | 2026-10-07 | AES-256-GCM for content suite 1 ([ADR 0004](../docs/adr/0004-content-aead.md)) | Latest release, six days old when adopted (no cooling-off, per the maintainer's policy). Apache-2.0. Uses the `libcrux-intrinsics`, `libcrux-platform`, `libcrux-secrets`, and `libcrux-traits` versions already in the lock. Contains `unsafe` for its SIMD intrinsics; Cryspen marks it "pre-verification". |
+
+`libcrux-platform 0.0.4` (already in the lock) is now also a direct
+dependency, for the same CPU checks libcrux-aes uses. XChaCha20-Poly1305
+comes from the existing `libcrux-chacha20poly1305 0.0.10`.
+
+The `todoke-bench` crate (`bench/`, a new workspace member) has
+development dependencies only: `criterion 0.8.2` with default features off
+(no plotting, no rayon), not built for wasm32. It brings `alloca 0.4.0`,
+`anes 0.1.6`, `anstyle 1.0.14`, `cast 0.3.0`, `ciborium`/`ciborium-io`/
+`ciborium-ll 0.2.2`, `clap`/`clap_builder 4.6.7`, `clap_lex 1.1.1`,
+`criterion-plot 0.8.2`, `crunchy 0.2.4`, `half 2.7.1`, `oorandom 11.1.5`,
+`page_size 0.6.0`, `same-file 1.0.6`, `tinytemplate 1.2.1`, `walkdir 2.5.0`,
+`winapi 0.3.9` (with its two target shims), `winapi-util 0.1.11`,
+`windows-sys 0.61.2`, and `zerocopy`/`zerocopy-derive 0.8.62`, all the
+latest releases. `alloca` compiles a small C file, so checking this
+crate for another target needs that target's C compiler (see the MSRV note
+below). Licenses are all within the existing Apache-2.0/MIT allow list (as
+one choice of each dual or triple license), so no license, ban, advisory,
+or source exception was needed, and `cargo deny` passes for both graphs.
+
+The benchmarks need the new non-default `todoke-crypto` feature
+`insecure-content-without-accept`, which bypasses the §7.2 consent gate.
+`scripts/ci/deny-exceptions-dev-only.sh` now fails if any shipped graph
+enables it, and its test script covers that with a mutated workspace copy;
+the copy now includes `bench/`.
+
+cargo-vet, root store: new imported audits cover `alloca`, `anes`, `cast`,
+`ciborium*`, `criterion-plot`, `crunchy`, `oorandom`, `page_size`,
+`same-file`, `tinytemplate`, `winapi`, `winapi-util`, and the criterion and
+walkdir version deltas (Bytecode Alliance, Google, ISRG, Mozilla, Zcash;
+pinned in `imports.lock`). `cargo vet regenerate exemptions`
+added exact-version "Not yet reviewed" exemptions for `bao 0.13.1` and
+`libcrux-aes 0.0.10` (safe-to-deploy) and for the remaining benchmark-only
+packages (safe-to-run). For `criterion` and `walkdir` it exempted the older
+base versions 0.3.5 and 2.4.0, which the imported delta audits extend to
+0.8.2 and 2.5.0; their notes say so. The fuzz store gained only the two
+runtime exemptions. No audit was recorded for work not performed;
+reviewing `bao` and `libcrux-aes` is part of gate O6.
+
+`fuzz/Cargo.lock` gained `bao` and `libcrux-aes` at the root lock's
+versions.
+
+MSRV: everything builds on Rust 1.94.0 (`bao` declares no `rust-version`;
+`criterion 0.8.2` declares 1.86). On macOS, the local
+`--target x86_64-unknown-linux-gnu` check now needs a C compiler for
+`alloca`'s build script, for example
+`CC_x86_64_unknown_linux_gnu=clang CFLAGS_x86_64_unknown_linux_gnu=--target=x86_64-unknown-linux-gnu`.
+CI's MSRV job runs natively on Linux and is unaffected.
