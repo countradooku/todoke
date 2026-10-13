@@ -327,6 +327,13 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         !self.events.is_empty()
     }
 
+    /// Incoming transfer records this session keeps, live and ended (at
+    /// most [`crate::limits::MAX_INCOMING_TRANSFER_IDS`]).
+    #[cfg(test)]
+    pub(crate) fn incoming_records(&self) -> usize {
+        self.incoming.len()
+    }
+
     /// Bytes of frames waiting to be sent.
     fn queued_bytes(&self) -> usize {
         self.frames

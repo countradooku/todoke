@@ -88,7 +88,12 @@ arrives (within 5 seconds).
 files: immutable sources and outboards; durable segment storage that keeps
 each verified segment's ciphertext for revalidation on resume; durable
 recording of the Accept; publication with length and whole-file BLAKE3
-checks; tombstones; and revocation. `MemorySource`/`MemorySink` implement
+checks; tombstones; and revocation. Tombstones must outlive their manifest
+(§7.6), so a sink bounds them by reporting no room (`tombstone_room`)
+rather than by dropping any early; the engine then takes no new incoming
+transfer ID. Within a session the engine itself keeps at most 1024
+incoming transfer records and 8 MiB of manifest bytes in flight, and
+closes the session with `LIMIT` beyond either (§12, §13). `MemorySource`/`MemorySink` implement
 them in memory.
 
 ## Alternatives considered

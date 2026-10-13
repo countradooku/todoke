@@ -133,6 +133,20 @@ pub trait ReceiveSink {
     /// temporary data (§7.6).
     fn tombstone(&mut self, transfer_id: &TransferId, until: UnixTime);
 
+    /// Whether the tombstone store has room for more (it may first drop
+    /// tombstones that expired before `now`). While it has none, the engine
+    /// takes no new incoming transfer ID: it closes the session with
+    /// `LIMIT` at the next `ManifestStart`.
+    ///
+    /// **Requirement for implementations (P08):** tombstone storage must be
+    /// bounded, and the bound is enforced here, never by dropping a
+    /// tombstone before its `until` (§7.6 requires it to survive). Every
+    /// tombstone belongs to a transfer ID a session admitted, and a session
+    /// admits at most [`crate::limits::MAX_INCOMING_TRANSFER_IDS`], so a
+    /// store that answers `false` at `N` live tombstones never holds more
+    /// than `N` plus that many per session that was already running.
+    fn tombstone_room(&mut self, now: UnixTime) -> bool;
+
     /// What an earlier session retained for `transfer_id`, unless it
     /// expired (§7.5: at most the manifest's expiry).
     fn retained(&self, transfer_id: &TransferId, now: UnixTime) -> Option<Retained>;
@@ -313,7 +327,9 @@ struct MemoryTransfer {
 
 /// An in-memory [`ReceiveSink`]: retained transfers, tombstones, and
 /// published files. It accepts every manifest unless told to refuse, and
-/// can be told to fail writes, for tests.
+/// can be told to fail writes, for tests. It keeps at most
+/// [`Self::TOMBSTONE_LIMIT`] unexpired tombstones before reporting no room
+/// (adjustable for tests).
 #[derive(Default)]
 pub struct MemorySink {
     transfers: BTreeMap<TransferId, MemoryTransfer>,
@@ -321,6 +337,7 @@ pub struct MemorySink {
     published: BTreeMap<(TransferId, u32), Zeroizing<Vec<u8>>>,
     refusal: Option<SinkRefusal>,
     failing: bool,
+    tombstone_limit: Option<usize>,
 }
 
 impl MemorySink {
@@ -338,6 +355,20 @@ impl MemorySink {
     /// Makes every write fail while `failing`.
     pub fn set_failing(&mut self, failing: bool) {
         self.failing = failing;
+    }
+
+    /// The default bound on unexpired tombstones: 4096.
+    pub const TOMBSTONE_LIMIT: usize = 4096;
+
+    /// Changes the bound on unexpired tombstones.
+    pub fn set_tombstone_limit(&mut self, limit: usize) {
+        self.tombstone_limit = Some(limit);
+    }
+
+    /// How many tombstones are kept, expired or not.
+    #[must_use]
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones.len()
     }
 
     /// The published content of `file_id`.
@@ -417,6 +448,11 @@ impl ReceiveSink for MemorySink {
         self.transfers.remove(transfer_id);
         let entry = self.tombstones.entry(*transfer_id).or_insert(until);
         *entry = (*entry).max(until);
+    }
+
+    fn tombstone_room(&mut self, now: UnixTime) -> bool {
+        self.tombstones.retain(|_, until| now <= *until);
+        self.tombstones.len() < self.tombstone_limit.unwrap_or(Self::TOMBSTONE_LIMIT)
     }
 
     fn retained(&self, transfer_id: &TransferId, now: UnixTime) -> Option<Retained> {

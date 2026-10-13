@@ -27,6 +27,27 @@ pub const MAX_INCOMING_TRANSFERS: usize = 2;
 pub const MAX_ACTIVE_INCOMING_FILES: usize = 2;
 /// At most one incomplete incoming manifest per endpoint (§7.1, §13).
 pub const MAX_INCOMPLETE_MANIFESTS: usize = 1;
+/// Incoming transfer IDs one session keeps records for, live and ended:
+/// 1024. An ended transfer's record stays for the session, so that late
+/// frames, a late `Cancel`, and a reused ID are recognized (§7.6, §11: no
+/// reopening in the session); a `ManifestStart` for a new ID beyond this
+/// closes the session with `LIMIT` (§12: session-scoped outside a declared
+/// transfer quota), and the peer reconnects with fresh state. §13 allows
+/// two concurrent incoming transfers, and each accepted one needs the
+/// user's consent (up to 300 seconds per prompt), so 1024 in a session of
+/// at most 24 hours is one new transfer every 84 seconds throughout.
+/// Records are a few hundred bytes, so this bounds them to well under
+/// 1 MiB, and bounds the work of every frame and timer pass that visits
+/// them.
+pub const MAX_INCOMING_TRANSFER_IDS: usize = 1024;
+/// Manifest bytes that may still arrive for incoming transfers, across all
+/// of them: 8 MiB. That is the incomplete manifest being assembled plus the
+/// parts still allowed for transfers refused or cancelled before their
+/// manifest was complete. The sender queues a manifest in full when it
+/// offers it and has at most two offers open (§7, §13), so an honest peer
+/// never has more than two manifests of at most 4 MiB (§7.1) in flight. A
+/// `ManifestStart` that would exceed this closes the session with `LIMIT`.
+pub const LATE_MANIFEST_BUDGET: u64 = 8 << 20;
 /// At most 64 forwarded `Revoke` records per session (§2, §13).
 pub const MAX_REVOCATIONS: usize = 64;
 /// Per-session resume metadata in memory: at most 8 MiB (§7.5).

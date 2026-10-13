@@ -1194,3 +1194,160 @@ fn cancel_by_sender_and_simultaneous_cancel() -> TestResult {
     );
     Ok(())
 }
+
+/// A distinct nonzero transfer ID for flood tests.
+fn flood_id(index: usize) -> AnyResult<TransferId> {
+    let mut id = [0xf1; 16];
+    id[8..].copy_from_slice(&u64::try_from(index)?.to_be_bytes());
+    Ok(id)
+}
+
+/// A peer that opens a new transfer ID per `ManifestStart` and cancels it
+/// cannot grow the receiver's per-session state without bound: after
+/// `MAX_INCOMING_TRANSFER_IDS` IDs the session closes with `LIMIT` (§12:
+/// LIMIT is session-scoped outside a declared transfer quota, §13).
+#[test]
+fn a_flood_of_manifest_starts_and_cancels_is_bounded() -> TestResult {
+    let fixture = fixture()?;
+    let mut link = ready_with(&fixture, 16, 4_194_304)?;
+    let max = crate::limits::MAX_INCOMING_TRANSFER_IDS;
+    for index in 0..max {
+        let id = flood_id(index)?;
+        let start = ManifestStart::new(id, [1; 32], 108)?.encode();
+        link.b
+            .handle_frame(FrameType::MANIFEST_START, &start, link.now)?;
+        let cancel = todoke_proto::transfer::Cancel::new(id, [1; 32], [2; 16], CancelReason::User)?;
+        link.b
+            .handle_frame(FrameType::CANCEL, &cancel.encode(), link.now)?;
+    }
+    assert_eq!(link.b.incoming_records(), max);
+    assert_eq!(link.b.sink().tombstone_count(), max);
+    // One acknowledgment per cancel and nothing else is queued.
+    link.collect();
+    assert_eq!(link.to_a.len(), max);
+    assert!(
+        link.to_a
+            .iter()
+            .all(|frame| raw(frame).0 == FrameType::CANCEL_ACK)
+    );
+    // The work per frame is bounded by the same number: timers still run.
+    let (_, b) = link.advance(Duration::from_secs(1));
+    b?;
+    let start = ManifestStart::new(flood_id(max)?, [1; 32], 108)?.encode();
+    let result = link
+        .b
+        .handle_frame(FrameType::MANIFEST_START, &start, link.now);
+    assert_eq!(session_failure(result), Some(FailureCode::Limit));
+    assert!(sent_session_error(&mut link, false, ErrorCode::LIMIT));
+    assert_eq!(link.b.incoming_records(), max);
+    Ok(())
+}
+
+/// Cancel tombstones must outlive the manifest (§7.6), so the sink bounds
+/// them by refusing new transfer IDs while it is full: a peer cannot add
+/// more across sessions, and room returns as tombstones expire.
+#[test]
+fn tombstones_are_bounded_across_sessions() -> TestResult {
+    let fixture = fixture()?;
+    let mut sink = MemorySink::new();
+    sink.set_tombstone_limit(64);
+    let mut next = 0;
+    let mut sink = Some(sink);
+    for session in 0..3 {
+        let mut link = Link::new(
+            &fixture,
+            if session % 2 == 0 {
+                Which::First
+            } else {
+                Which::Second
+            },
+            (MemorySource::new(), MemorySource::new()),
+            (MemorySink::new(), sink.take().ok_or("sink")?),
+            (config(16)?, config(16)?),
+        )?;
+        link.settle()?;
+        let result = loop {
+            let id = flood_id(next)?;
+            next += 1;
+            let start = ManifestStart::new(id, [1; 32], 108)?.encode();
+            let result = link
+                .b
+                .handle_frame(FrameType::MANIFEST_START, &start, link.now);
+            if result.is_err() {
+                break result;
+            }
+            let cancel =
+                todoke_proto::transfer::Cancel::new(id, [1; 32], [2; 16], CancelReason::User)?;
+            link.b
+                .handle_frame(FrameType::CANCEL, &cancel.encode(), link.now)?;
+            if next > 10_000 {
+                return Err("tombstones were not bounded".into());
+            }
+        };
+        assert_eq!(session_failure(result), Some(FailureCode::Limit));
+        assert_eq!(link.b.sink().tombstone_count(), 64);
+        sink = Some(link.b.into_parts().1);
+    }
+    // Once the tombstones expire (manifest lifetime at most 7 days, plus
+    // 120 seconds), new transfers are accepted again.
+    let mut link = Link::new(
+        &fixture,
+        Which::First,
+        (MemorySource::new(), MemorySource::new()),
+        (MemorySink::new(), sink.take().ok_or("sink")?),
+        (config(16)?, config(16)?),
+    )?;
+    link.now += Duration::from_secs(7 * 86_400 + 121);
+    link.settle()?;
+    let start = ManifestStart::new(flood_id(next)?, [1; 32], 108)?.encode();
+    link.b
+        .handle_frame(FrameType::MANIFEST_START, &start, link.now)?;
+    assert!(link.b.sink().tombstone_count() < 64);
+    Ok(())
+}
+
+/// Manifest parts still in flight for refused transfers are bounded in
+/// aggregate, not per refused ID: an honest sender has at most two offers
+/// in flight (8 MiB of manifest); a third declared manifest beyond that
+/// closes the session with `LIMIT`.
+#[test]
+fn late_manifest_bytes_are_bounded_in_aggregate() -> TestResult {
+    let fixture = fixture()?;
+    let mut link = ready_with(&fixture, 16, 4_194_304)?;
+    let full = 4_194_304;
+    // One assembling, one refused (only one incomplete manifest at a time)
+    // whose parts are still allowed to arrive.
+    for index in 0..2 {
+        let start = ManifestStart::new(flood_id(index)?, [1; 32], full)?.encode();
+        link.b
+            .handle_frame(FrameType::MANIFEST_START, &start, link.now)?;
+    }
+    assert!(sent_transfer_error(&mut link, false, ErrorCode::LIMIT));
+    // Parts that arrive use up the allowance and make room again.
+    let part = ManifestPart::new(flood_id(1)?, 0, &vec![0; 60_000])?.encode();
+    link.b
+        .handle_frame(FrameType::MANIFEST_PART, &part, link.now)?;
+    let start = ManifestStart::new(flood_id(2)?, [1; 32], 108)?.encode();
+    link.b
+        .handle_frame(FrameType::MANIFEST_START, &start, link.now)?;
+    // 8 MiB - 60000 + 108 bytes are in flight now; 60000 more do not fit.
+    let start = ManifestStart::new(flood_id(3)?, [1; 32], 60_000)?.encode();
+    let result = link
+        .b
+        .handle_frame(FrameType::MANIFEST_START, &start, link.now);
+    assert_eq!(session_failure(result), Some(FailureCode::Limit));
+    assert!(sent_session_error(&mut link, false, ErrorCode::LIMIT));
+    // Straight away, a third manifest beyond the two in flight.
+    let mut link = ready_with(&fixture, 16, 4_194_304)?;
+    for index in 0..2 {
+        let start = ManifestStart::new(flood_id(index)?, [1; 32], full)?.encode();
+        link.b
+            .handle_frame(FrameType::MANIFEST_START, &start, link.now)?;
+    }
+    let start = ManifestStart::new(flood_id(2)?, [1; 32], 108)?.encode();
+    let result = link
+        .b
+        .handle_frame(FrameType::MANIFEST_START, &start, link.now);
+    assert_eq!(session_failure(result), Some(FailureCode::Limit));
+    Ok(())
+}

@@ -34,9 +34,9 @@ use crate::events::{
 };
 use crate::gate::{ConsentGate, GateRefusal};
 use crate::limits::{
-    CHUNK_REQUEST_TIMEOUT, CONSENT_PROMPT_TIMEOUT, MANIFEST_ASSEMBLY_TIMEOUT,
-    MAX_ACTIVE_INCOMING_FILES, MAX_INCOMING_TRANSFERS, MAX_INCOMPLETE_MANIFESTS,
-    REVALIDATION_BUDGET, TOMBSTONE_GRACE_SECONDS,
+    CHUNK_REQUEST_TIMEOUT, CONSENT_PROMPT_TIMEOUT, LATE_MANIFEST_BUDGET, MANIFEST_ASSEMBLY_TIMEOUT,
+    MAX_ACTIVE_INCOMING_FILES, MAX_INCOMING_TRANSFER_IDS, MAX_INCOMING_TRANSFERS,
+    MAX_INCOMPLETE_MANIFESTS, REVALIDATION_BUDGET, TOMBSTONE_GRACE_SECONDS,
 };
 use crate::storage::{ReceiveSink, Retained, SendSource, SinkError, SinkRefusal};
 
@@ -245,6 +245,18 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         }
         let negotiated = self.negotiated_ready()?;
         let wall = self.wall(now);
+        // §13: bound what a peer can make this side keep. Each new ID adds a
+        // record for the session (and can add a tombstone through a later
+        // Cancel), and its manifest parts may arrive even if it is refused.
+        if self.incoming.len() >= MAX_INCOMING_TRANSFER_IDS
+            || !self.sink.tombstone_room(wall)
+            || self
+                .manifest_bytes_in_flight()
+                .saturating_add(u64::from(start.total_len()))
+                > LATE_MANIFEST_BUDGET
+        {
+            return Err(violation(FailureCode::Limit));
+        }
         let assembling = self
             .incoming
             .values()
@@ -269,6 +281,21 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             );
         }
         Ok(())
+    }
+
+    /// Manifest bytes that may still arrive: the rest of the manifest being
+    /// assembled and the parts allowed for transfers ended before theirs
+    /// was complete.
+    fn manifest_bytes_in_flight(&self) -> u64 {
+        self.incoming
+            .values()
+            .map(|transfer| match transfer {
+                Incoming::Assembling(assembly) => u64::from(assembly.start.total_len())
+                    .saturating_sub(u64::try_from(assembly.buffer.len()).unwrap_or(u64::MAX)),
+                Incoming::Ended(ended) => ended.late.manifest_bytes,
+                Incoming::Offered(_) | Incoming::Receiving(_) => 0,
+            })
+            .fold(0, u64::saturating_add)
     }
 
     pub(super) fn on_manifest_part(&mut self, body: &[u8], now: Duration) -> Handled {
