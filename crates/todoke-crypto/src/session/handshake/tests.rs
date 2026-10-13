@@ -653,3 +653,49 @@ fn a_share_with_the_wrong_role_byte_aborts() -> TestResult {
     );
     Ok(())
 }
+
+/// Randomness that fails while `CPace` draws its scalar ends the attempt
+/// with a local randomness error on either side, before any share or PSK.
+#[test]
+fn cpace_randomness_failure_fails_closed() -> TestResult {
+    let inputs = CodeInputs::new()?;
+    let gate = crate::pairing::UnauditedCodePairing::acknowledge_not_production_ready();
+    let code = HumanCode::parse("0123456789")?;
+    let (mut initiator, client_record) = HandshakeDriver::initiator(
+        GATE,
+        InitiatorPlan::code_pairing(gate, inputs.pairing_id, code.clone(), inputs.code_offer),
+        &NoiseStaticKey::generate()?,
+        inputs.client_nonce,
+        Entropy::scripted(Vec::new()),
+        T,
+    )?;
+    let client = read_client_hello(body(&client_record)?)?;
+    let mut plan = ResponderPlan::code_pairing(gate, code);
+    plan.bind_code_offer(inputs.code_offer)?;
+    let (mut responder, server_record) = HandshakeDriver::responder(
+        GATE,
+        client,
+        plan,
+        &NoiseStaticKey::generate()?,
+        inputs.server_nonce,
+        Entropy::scripted(Vec::new()),
+        T,
+    )?;
+    assert_eq!(
+        initiator.receive(body(&server_record)?, T),
+        Err(SessionError::Random)
+    );
+    assert!(initiator.psk.is_none());
+    // A valid share A for the responder, from a working initiator.
+    let (mut working, _, server_record) = inputs.drivers([0x0a; 64], [0x0b; 64])?;
+    let share_a = working.receive(body(&server_record)?, T)?;
+    let [share_a] = share_a.as_slice() else {
+        return Err("one CodeShareA record".into());
+    };
+    assert_eq!(
+        responder.receive(body(share_a)?, T),
+        Err(SessionError::Random)
+    );
+    assert!(responder.psk.is_none());
+    Ok(())
+}

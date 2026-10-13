@@ -255,6 +255,17 @@ fn randomness_failures_and_overdraws_fail_closed() -> TestResult {
 }
 
 #[test]
+fn errors_render_fixed_messages() {
+    // `Unavailable` exists only in builds without the backend.
+    let messages: Vec<String> = [CpaceError::Abort, CpaceError::Random]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    crate::identity::test_support::assert_distinct_messages(&messages);
+    assert_eq!(messages[0], "CPace aborted");
+}
+
+#[test]
 fn debug_is_redacted() -> TestResult {
     let (_, initiator) = start(PRS, b"", b"", b"", &Entropy::Os)?;
     assert_eq!(format!("{initiator:?}"), "cpace::Initiator { .. }");
