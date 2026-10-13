@@ -29,6 +29,7 @@ use super::transport::{Frame, Limits, SessionCore};
 use super::{
     ErrorCode, HANDSHAKE_TIMEOUT, LocalIdentity, Role, SessionError, UnauditedSuite0001, WallClock,
 };
+use crate::consent::SessionBinding;
 use crate::identity::contacts::PairOutcome;
 use crate::identity::{BlobStorage, ContactStore, KeyStore, Sealer, VerifiedDeviceBinding};
 use crate::pairing::{
@@ -868,6 +869,28 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
         &self.core.info().peer_binding
     }
 
+    /// What a transfer binds to this session: the session ID, both full
+    /// device keys, and when the ratchet gate opened (§7.3, §7.7). Signed
+    /// `Accept` and `DeliveryReceipt` records are verified against it
+    /// ([`crate::consent`]); it can only be obtained from an established
+    /// session.
+    #[must_use]
+    pub fn transfer_binding(&self) -> SessionBinding {
+        let info = self.core.info();
+        SessionBinding::new(
+            info.session_id,
+            info.local_device,
+            *info.peer_binding.device_public(),
+            info.established_at,
+        )
+    }
+
+    /// The session's monotonic time, from its [`Timer`].
+    #[must_use]
+    pub fn now(&self) -> Duration {
+        self.conn.now()
+    }
+
     /// Writes queued records. Each write is bounded by the session's close
     /// deadline (idle, Pong, binding/24-hour lifetime): a peer that stops
     /// reading closes the session with [`SessionError::Timeout`].
@@ -951,6 +974,35 @@ impl<IO: AsyncRead + AsyncWrite + Unpin, T: Timer> Session<IO, T> {
             let received = self.core.receive(&record, self.conn.now());
             if let Some(frame) = self.after(received).await? {
                 return Ok(frame);
+            }
+        }
+    }
+
+    /// Like [`Self::recv`], but returns `Ok(None)` once the monotonic
+    /// `deadline` passes without a frame for the caller, so that a caller
+    /// with its own timers (such as the transfer engine's §13 deadlines) can
+    /// run them between frames. Waiting is cancelled only while no record
+    /// is partly processed: a partly read record stays buffered for the
+    /// next call, and replies are always written in full first.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::recv`].
+    pub async fn recv_until(&mut self, deadline: Duration) -> Result<Option<Frame>, SessionError> {
+        loop {
+            self.conn.usable()?;
+            let polled = self.core.poll(self.conn.now());
+            self.after(polled).await?;
+            if self.conn.now() >= deadline {
+                return Ok(None);
+            }
+            let read_deadline = self.core.next_deadline().min(deadline);
+            let Some(record) = self.conn.read(Framing::Transport, read_deadline).await? else {
+                continue;
+            };
+            let received = self.core.receive(&record, self.conn.now());
+            if let Some(frame) = self.after(received).await? {
+                return Ok(Some(frame));
             }
         }
     }

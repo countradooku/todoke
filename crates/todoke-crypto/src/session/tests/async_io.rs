@@ -389,6 +389,42 @@ fn contact_session_over_a_byte_pipe() -> TestResult {
     Ok(())
 }
 
+/// The transfer binding names this session from each side, and
+/// `recv_until` returns at its deadline without losing a later frame.
+#[test]
+fn transfer_binding_and_bounded_receive() -> TestResult {
+    let (alice, bob, mut alice_store, mut bob_store) = contacts()?;
+    let timer = ManualTimer::at(START);
+    let (mut a, mut b) = contact_sessions(&alice, &bob, &mut alice_store, &mut bob_store, &timer)?;
+    let (from_a, from_b) = (a.transfer_binding(), b.transfer_binding());
+    assert_eq!(from_a.session_id(), a.session_id());
+    assert_eq!(from_a.session_id(), from_b.session_id());
+    assert_eq!(from_a.local_device(), &alice.key());
+    assert_eq!(from_a.peer_device(), &bob.key());
+    assert_eq!(from_b.local_device(), &bob.key());
+    assert_eq!(from_b.peer_device(), &alice.key());
+    assert_eq!(from_a.established_at().seconds(), WALL);
+    assert_eq!(a.now(), START);
+    // A deadline already reached returns at once.
+    assert!(block_on(b.recv_until(START))??.is_none());
+    // A frame that is waiting is returned before the deadline.
+    block_on(a.send(FrameType::CAPABILITIES, b"caps"))??;
+    let frame = block_on(b.recv_until(START + Duration::from_secs(1)))??.ok_or("frame")?;
+    assert_eq!(frame.body(), b"caps");
+    // Nothing waiting: the clock passes the deadline and nothing is lost.
+    let waiting = b.recv_until(START + Duration::from_secs(2));
+    let advance = async {
+        timer.advance(Duration::from_secs(2));
+    };
+    let (received, ()) = join(waiting, advance)?;
+    assert!(received?.is_none());
+    block_on(a.send(FrameType::CAPABILITIES, b"later"))??;
+    let frame = block_on(b.recv_until(START + Duration::from_secs(3)))??.ok_or("frame")?;
+    assert_eq!(frame.body(), b"later");
+    assert!(!b.is_closed());
+    Ok(())
+}
+
 /// Real QR pairing over the pipe: the displayer offers, the scanner reads
 /// the QR text, the displayer reserves its offer for the incoming Hello,
 /// and both create the contact.

@@ -659,10 +659,13 @@ pub fn transport_records(data: &[u8]) {
     } else {
         Limits { byte_budget: 4096 }
     };
-    let (target_split, peer_split, peer_party) = if selector & 1 == 0 {
-        (split_i, split_r, responder)
+    let (target_split, peer_split, local_party, peer_party) = if selector & 1 == 0 {
+        (split_i, split_r, initiator, responder)
     } else {
-        (split_r, split_i, initiator)
+        (split_r, split_i, responder, initiator)
+    };
+    let Some(established_at) = UnixTime::new(WALL) else {
+        return;
     };
     let info = SessionInfo {
         role: target_split.role,
@@ -671,6 +674,8 @@ pub fn transport_records(data: &[u8]) {
         session_id: target_split.session_id,
         peer_static: target_split.peer_static,
         peer_binding: peer_party.binding.clone(),
+        local_device: *local_party.binding.device_public(),
+        established_at,
     };
     let mut now = START;
     let mut target = SessionCore::new(

@@ -448,6 +448,8 @@ impl Establishment {
             session_id: self.session_id,
             peer_static: self.peer_static,
             peer_binding: peer,
+            local_device: *local.binding().device_public(),
+            established_at: self.wall.at(now),
         };
         Ok(SessionCore::new(
             self.transport,

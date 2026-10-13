@@ -60,7 +60,7 @@ pub use storage::{BlobStorage, FileStorage, MemoryStorage};
 pub use crate::rng::RandomError;
 
 /// Lowercase hex for `Debug` output of public values.
-struct Hex<'a>(&'a [u8]);
+pub(crate) struct Hex<'a>(pub(crate) &'a [u8]);
 
 impl fmt::Debug for Hex<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

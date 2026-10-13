@@ -27,14 +27,18 @@
 //! closes (`docs/adr/0002-cpace.md`). The per-file content layer (see
 //! [`content`]) implements the §8 key schedule, both content AEADs,
 //! strictly verified Bao 0.13.1 segments, and resume tracking; it needs an
-//! [`AcceptedFile`](content::AcceptedFile), which only the future
-//! verified-Accept path may create (unit tests and the non-default
-//! `insecure-content-without-accept` feature aside). Capabilities,
-//! manifests, Accept, and transfers are not implemented yet.
+//! [`AcceptedFile`](content::AcceptedFile), which only the
+//! verified-Accept path in [`consent`] creates (unit tests and the
+//! non-default `insecure-content-without-accept` feature aside). The
+//! [`consent`] module holds the canonical manifest and its hash, and issues
+//! and verifies the signed `Accept` and `DeliveryReceipt` against the
+//! session they belong to (§7.1–§7.3, §7.7). The transfer state machines
+//! are in the `todoke-transfer` crate.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
 #![forbid(unsafe_code)]
 
+pub mod consent;
 pub mod content;
 pub mod identity;
 pub mod pairing;

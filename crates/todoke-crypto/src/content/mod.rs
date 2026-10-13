@@ -1,10 +1,10 @@
 //! Per-file content encryption and verified segments (PROTOCOL §6, §7.4,
 //! §7.5, §8).
 //!
-//! This is the cryptographic content layer only. Manifests, `Accept`,
-//! `FileKey`/`ChunkRequest`/`Chunk`/`ResumeQuery` wire handling, and the
-//! transfer state machines belong to the transfer layer and are not
-//! implemented here.
+//! This is the cryptographic content layer only. Manifests and the signed
+//! `Accept` are in [`crate::consent`]; `ChunkRequest`/`Chunk`/
+//! `ResumeQuery` wire handling and the transfer state machines are in the
+//! `todoke-transfer` crate.
 //!
 //! # Layers
 //!
@@ -21,11 +21,11 @@
 //!
 //! # Consent
 //!
-//! Sealing and opening require an [`AcceptedFile`]. Only the transfer
-//! layer's verified-Accept path may create one, through the crate-private
-//! `AcceptedFile::from_verified_accept`, which nothing calls yet: the
-//! signed Accept (§7.2, §7.3) is not implemented. Until it is, the only
-//! other constructor is
+//! Sealing and opening require an [`AcceptedFile`]. Only the
+//! verified-Accept path in [`crate::consent`] creates one, through the
+//! crate-private `AcceptedFile::from_verified_accept`, after verifying a
+//! signed Accept (§7.2, §7.3) against the session, the canonical manifest,
+//! its expiry, and the selection. The only other constructor is
 //! `AcceptedFile::assume_accepted_without_verification`, which exists in
 //! this crate's unit tests and with the non-default
 //! `insecure-content-without-accept` feature (benchmarks and fuzzing). CI

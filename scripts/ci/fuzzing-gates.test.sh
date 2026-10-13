@@ -13,7 +13,9 @@
 #   `unaudited-code-pairing`.
 # - `identity::fuzzing` and `pairing::fuzzing` only decode (local storage
 #   plaintext, a fixed-key envelope, binding signatures, QR payloads, typed
-#   codes), so plain `--cfg fuzzing` is enough.
+#   codes), and `consent::fuzzing` only verifies manifests, Accepts, and
+#   receipts against fixed public fixture keys, so plain `--cfg fuzzing` is
+#   enough.
 #
 # The cfg goes to todoke-crypto only (`cargo rustc`/`cargo rustdoc` pass
 # trailing flags to the final crate), and the module list comes from the
@@ -78,14 +80,15 @@ session=session/fuzzing/index.html
 code=session/fuzzing/fn.code_pairing_records.html
 identity=identity/fuzzing/index.html
 pairing=pairing/fuzzing/index.html
+consent=consent/fuzzing/index.html
 
-expect "" "$identity" "$pairing" -- "$content" "$session"
-expect unaudited-suite-0001 "$identity" "$pairing" "$session" -- "$content" "$code"
-expect unaudited-code-pairing "$identity" "$pairing" "$session" "$code" -- "$content"
-expect insecure-content-without-accept "$identity" "$pairing" "$content" -- "$session"
+expect "" "$identity" "$pairing" "$consent" -- "$content" "$session"
+expect unaudited-suite-0001 "$identity" "$pairing" "$consent" "$session" -- "$content" "$code"
+expect unaudited-code-pairing "$identity" "$pairing" "$consent" "$session" "$code" -- "$content"
+expect insecure-content-without-accept "$identity" "$pairing" "$consent" "$content" -- "$session"
 # The fuzz workspace's features (fuzz/Cargo.toml): every harness module.
 expect unaudited-code-pairing,insecure-content-without-accept \
-    "$identity" "$pairing" "$content" "$session" "$code"
+    "$identity" "$pairing" "$consent" "$content" "$session" "$code"
 
 if [[ $failures -ne 0 ]]; then
     echo "${failures} fuzzing gate test(s) failed." >&2
