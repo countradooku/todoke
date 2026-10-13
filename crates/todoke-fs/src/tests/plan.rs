@@ -473,3 +473,144 @@ proptest! {
         }
     }
 }
+
+/// Two siblings whose names each needed a suffix, and whose suffixed names
+/// are cut to the same text by the component limit, still get different
+/// names: the later one takes the next suffix.
+#[test]
+fn siblings_whose_shortened_suffixes_meet_are_kept_apart() -> TestResult {
+    let stem_lower = "x".repeat(251);
+    let stem_upper = "X".repeat(251);
+    let plan = plan(&[
+        file(&format!("{stem_lower}a"), 0),
+        file(&format!("{stem_upper}A"), 0),
+        file(&format!("{stem_lower}b"), 0),
+        file(&format!("{stem_upper}B"), 0),
+    ])?;
+    assert_eq!(
+        locals(&plan),
+        [
+            format!("{stem_lower}a"),
+            format!("{stem_upper} (2)"),
+            format!("{stem_lower}b"),
+            format!("{stem_upper} (3)"),
+        ]
+    );
+    let keys: BTreeSet<String> = plan
+        .entries()
+        .iter()
+        .map(|entry| collision_key(entry.local().as_str()))
+        .collect();
+    assert_eq!(keys.len(), 4);
+    Ok(())
+}
+
+/// `" (1001)"` is the last suffix tried: free, it is used; taken too, the
+/// entry is rejected.
+#[test]
+fn the_last_suffix_is_tried_before_rejecting() -> TestResult {
+    let manifest = manifest(ID, &[file("x", 0)])?;
+    let plan = DestinationPlan::new(&manifest, &FsProfile::host(), 1, &mut |name| {
+        name != "x (1001)"
+    });
+    assert_eq!(locals(&plan), ["x (1001)"]);
+    assert_eq!(plan.entry(1).and_then(crate::PlannedEntry::rejection), None);
+    let mut asked = Vec::new();
+    let plan = DestinationPlan::new(&manifest, &FsProfile::host(), 1, &mut |name| {
+        asked.push(name.to_owned());
+        true
+    });
+    assert_eq!(
+        plan.entry(1).and_then(crate::PlannedEntry::rejection),
+        Some(Rejection::NoFreeName)
+    );
+    assert_eq!(asked.len(), 1001);
+    assert_eq!(asked.last().map(String::as_str), Some("x (1001)"));
+    Ok(())
+}
+
+/// The same manifest against the same destination always gives the same
+/// plan.
+#[test]
+fn plans_are_deterministic() -> TestResult {
+    let specs = [
+        file("a.txt", 0),
+        file("A.TXT", 0),
+        dir("Photos", 0),
+        file("x\u{202E}y.exe", 3),
+        file("X\u{202D}Y.EXE", 3),
+        file("Stra\u{DF}e", 0),
+        file("STRASSE", 0),
+    ];
+    let existing = ["a.txt", "photos", "a (2).txt"];
+    let first = plan_with(&specs, &FsProfile::host(), 10, &existing)?;
+    for _ in 0..3 {
+        assert_eq!(plan_with(&specs, &FsProfile::host(), 10, &existing)?, first);
+    }
+    Ok(())
+}
+
+#[test]
+fn warnings_cover_bundles_without_a_risky_extension_and_benign_labels() -> TestResult {
+    let mut readme = file("README", 0);
+    readme.mime = "image/png";
+    let mut installer = file("setup.exe", 0);
+    installer.mime = "application/x-msdownload";
+    let mut png = file("x.PNG", 0);
+    png.mime = "image/jpeg";
+    let mut octet = file("x.png", 0);
+    octet.mime = "application/octet-stream";
+    let plan = plan(&[
+        dir("Thing.framework", 0),
+        dir("Tool.app", 0),
+        readme,
+        installer,
+        png,
+        octet,
+    ])?;
+    let warnings: Vec<&[Warning]> = plan
+        .entries()
+        .iter()
+        .map(crate::PlannedEntry::warnings)
+        .collect();
+    let macos_executable = Warning::Risky(crate::ExtensionRisk {
+        kind: RiskKind::Executable,
+        platforms: Platforms::MACOS,
+    });
+    assert_eq!(warnings[0], [Warning::Bundle, macos_executable]);
+    assert_eq!(
+        warnings[1],
+        [
+            Warning::Bundle,
+            Warning::Risky(crate::extension_risk("app").ok_or("app")?)
+        ]
+    );
+    assert_eq!(warnings[2], []);
+    assert_eq!(
+        warnings[3],
+        [Warning::Risky(crate::extension_risk("exe").ok_or("exe")?)]
+    );
+    assert_eq!(warnings[4], [Warning::MimeMismatch]);
+    assert_eq!(warnings[5], []);
+    Ok(())
+}
+
+/// The long-path warning starts just above the limit, not at it.
+#[test]
+fn the_long_path_warning_starts_above_its_limit() -> TestResult {
+    let profile = FsProfile {
+        path: PathLimit::WINDOWS,
+        ..FsProfile::host()
+    };
+    // 120 UTF-16 units: the path is root + 1 + 120.
+    let name = "\u{1F600}".repeat(60);
+    let at = plan_with(&[file(&name, 0)], &profile, 138, &[])?;
+    assert!(at.entry(1).is_some_and(|e| e.warnings().is_empty()));
+    let above = plan_with(&[file(&name, 0)], &profile, 139, &[])?;
+    assert!(
+        above
+            .entry(1)
+            .is_some_and(|e| e.warnings() == [Warning::LongPath])
+    );
+    Ok(())
+}
