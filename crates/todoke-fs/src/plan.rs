@@ -370,10 +370,15 @@ impl DestinationPlan {
             .filter(|entry| entry.parent == 0 && entry.rejection.is_none())
             .map(|entry| entry.id)
             .collect();
+        // Names given to earlier top-level entries: two entries whose
+        // names both exist can otherwise pick the same suffixed name.
+        let mut chosen = BTreeSet::new();
         for id in ids {
             let mut found = None;
             for (n, candidate) in self.candidates(id) {
-                if !exists(&candidate) {
+                let key = collision_key(&candidate);
+                if !chosen.contains(&key) && !exists(&candidate) {
+                    chosen.insert(key);
                     found = Some((n, candidate));
                     break;
                 }

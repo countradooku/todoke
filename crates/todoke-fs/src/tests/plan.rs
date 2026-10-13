@@ -169,6 +169,28 @@ fn top_level_names_avoid_the_destination_and_each_other() -> TestResult {
     Ok(())
 }
 
+/// Found by fuzzing: two top-level names that both exist must not be
+/// given the same suffixed name (here the 16-byte limit cuts both to
+/// "invoice.pdf (2)").
+#[test]
+fn existing_names_never_share_a_suffix() -> TestResult {
+    let profile = FsProfile {
+        rules: crate::NameRules {
+            max_component_bytes: 16,
+            neutralize_shell_files: true,
+        },
+        ..FsProfile::host()
+    };
+    let plan = plan_with(
+        &[dir("invoice.pdf.exm", 0), dir("invoice.pdf", 0)],
+        &profile,
+        10,
+        &["invoice.pdf.exm", "invoice.pdf"],
+    )?;
+    assert_eq!(locals(&plan), ["invoice.pdf (2)", "invoice.pdf (3)"]);
+    Ok(())
+}
+
 #[test]
 fn a_destination_with_every_candidate_taken_rejects_the_entry() -> TestResult {
     let manifest = manifest(ID, &[file("x", 0), file("y", 0)])?;
