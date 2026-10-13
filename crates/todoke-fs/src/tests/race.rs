@@ -53,6 +53,9 @@ pub(crate) struct Hooks {
     pub(crate) fail_sync: Cell<bool>,
     /// What the sink last asked of `hold_root`.
     pub(crate) held: Cell<Option<bool>>,
+    /// `hold_root(true)` fails, as for a root that is gone or was
+    /// replaced by a junction.
+    pub(crate) fail_hold: Cell<bool>,
     /// Names `create_dir` reports as taken, as if something appeared there
     /// just before.
     pub(crate) taken: RefCell<std::collections::BTreeSet<String>>,
@@ -169,6 +172,9 @@ impl Destination for Hooked {
     }
     fn hold_root(&mut self, held: bool) -> Result<(), DestError> {
         self.hooks.held.set(Some(held));
+        if held && self.hooks.fail_hold.get() {
+            return Err(DestError::WrongKind);
+        }
         self.inner.hold_root(held)
     }
 }

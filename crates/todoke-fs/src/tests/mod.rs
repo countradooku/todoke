@@ -7,12 +7,16 @@ mod dest;
 #[cfg(any(unix, windows))]
 mod e2e;
 #[cfg(any(unix, windows))]
+mod gates;
+#[cfg(any(unix, windows))]
 mod lifecycle;
 mod plan;
 #[cfg(any(unix, windows))]
 pub(crate) mod race;
 #[cfg(any(unix, windows))]
 pub(crate) mod sink;
+#[cfg(any(unix, windows))]
+mod startup;
 #[cfg(any(unix, windows))]
 pub(crate) mod support;
 
