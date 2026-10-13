@@ -174,6 +174,22 @@ instead; a power loss can then lose recent segments, which §7.5 revalidation
 fetches again. Correctness never depends on segment durability: retained
 segments count only after they open under the new session's key.
 
+**Accepted deviation from §7.4 on Apple platforms.** §7.4 retires a request
+only after "durably storing" the chunk. With `Durability::EverySegment` on
+macOS and iOS each segment gets a plain `fsync`, which hands the data to the
+drive but does not flush the drive's own cache, so a power loss (not an app
+or kernel crash) can lose segments whose requests were already retired.
+This is accepted, deliberately and only for segments, because it cannot
+cause a wrong result: on resume every retained segment is revalidated under
+the new session's key before it counts (§7.5), and a lost or torn segment is
+simply requested again. Everything whose loss would change a decision gets
+`F_FULLFSYNC` (the standard library's `sync_all`/`sync_data` on Apple, and
+`fcntl_fullfsync` for destination directories): the journal header and
+every appended entry, the manifest, sealed masters, the tombstone list (and
+its directory) before `tombstone` returns, so before the engine reports the
+cancel, in both durability modes, and every published file and its
+directory before the file is journaled as published.
+
 ### 5. Content type detection
 
 After the whole-file check, the first 36 KiB are compared with a fixed table

@@ -782,3 +782,30 @@ fn a_tombstone_that_cannot_be_written_fails_closed_until_it_is() -> TestResult {
     assert!(harness.sink()?.is_tombstoned(&transfer_id, time(WALL + 1)?));
     Ok(())
 }
+
+/// In both durability modes the tombstone is on disk, through the synced
+/// atomic replacement, before `tombstone` returns (so before the engine
+/// reports the cancel).
+#[test]
+fn tombstones_are_on_disk_before_the_cancel_returns() -> TestResult {
+    for durability in [
+        Durability::EverySegment,
+        Durability::Periodic { bytes: 1 << 30 },
+    ] {
+        let (_, consented) = setup(18)?;
+        let mut harness = Harness::with_config(SinkConfig {
+            durability,
+            ..SinkConfig::default()
+        })?;
+        let transfer_id = *consented.manifest.transfer_id();
+        receive_all(harness.sink()?, &consented, &FILES)?;
+        let until = time(WALL + 7200)?;
+        harness.sink()?.tombstone(&transfer_id, until);
+        assert!(harness.sink()?.tombstones_durable());
+        let bytes = std::fs::read(harness.state.path().join("tombstones"))?;
+        let list = crate::quarantine::codec::decode_tombstones(&bytes).map_err(|_| "list")?;
+        assert_eq!(list, [(transfer_id, until.seconds())]);
+        assert!(!harness.state.path().join("tombstones.tmp").exists());
+    }
+    Ok(())
+}

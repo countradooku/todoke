@@ -35,6 +35,13 @@ pub enum Durability {
     /// Android, `FlushFileBuffers` on Windows, `fsync` on Apple platforms
     /// (whose drive-cache flush, `F_FULLFSYNC`, is kept for publication and
     /// state records). The default.
+    ///
+    /// On Apple platforms this is an accepted deviation from §7.4's
+    /// "durably storing": a power loss can lose segments whose requests
+    /// retired, which is harmless because retained segments are revalidated
+    /// on resume and lost ones are requested again (ADR 0006, §4). Tombstones
+    /// are fully synced before [`ReceiveSink::tombstone`] returns in every
+    /// mode.
     EverySegment,
     /// Segments are written at once (they survive a crash of the app) and
     /// synced after every `bytes` of them and before publication; a power
