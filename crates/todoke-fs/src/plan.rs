@@ -250,8 +250,9 @@ impl PlannedEntry {
 pub struct DestinationPlan {
     entries: Vec<PlannedEntry>,
     profile: FsProfile,
-    /// Collision keys of the top-level base names, to their entry IDs.
-    top_keys: BTreeMap<String, u32>,
+    /// Each entry's parent and the collision key of its base name, to its
+    /// ID.
+    sibling_keys: BTreeMap<(u32, String), u32>,
 }
 
 impl DestinationPlan {
@@ -306,7 +307,7 @@ impl DestinationPlan {
         for (index, entry) in entries.iter().enumerate() {
             groups.entry(entry.parent).or_default().push(index);
         }
-        let mut top_keys = BTreeMap::new();
+        let mut sibling_keys = BTreeMap::new();
         for (parent, members) in &groups {
             let reserved: BTreeSet<String> = members
                 .iter()
@@ -344,11 +345,9 @@ impl DestinationPlan {
                     None => entry.rejection = Some(Rejection::NoFreeName),
                 }
             }
-            if *parent == 0 {
-                for &index in members {
-                    if let Some(entry) = entries.get(index) {
-                        top_keys.insert(collision_key(&entry.base.0), entry.id);
-                    }
+            for &index in members {
+                if let Some(entry) = entries.get(index) {
+                    sibling_keys.insert((*parent, collision_key(&entry.base.0)), entry.id);
                 }
             }
         }
@@ -358,7 +357,7 @@ impl DestinationPlan {
         Self {
             entries,
             profile: *profile,
-            top_keys,
+            sibling_keys,
         }
     }
 
@@ -394,10 +393,10 @@ impl DestinationPlan {
         }
     }
 
-    /// The names a top-level entry may take, in order: its base name,
-    /// then suffixes `" (2)"` upward, skipping names that would collide
-    /// with another top-level entry. Paired with the suffix number (1 for
-    /// the base name).
+    /// The names entry `id` may take, in order: its base name (for a
+    /// top-level entry, before avoiding the destination's names), then
+    /// suffixes `" (2)"` upward, skipping names that would collide with a
+    /// sibling's. Paired with the suffix number (1 for the base name).
     pub(crate) fn candidates(&self, id: u32) -> impl Iterator<Item = (u32, String)> + '_ {
         let limit = self
             .profile
@@ -413,8 +412,8 @@ impl DestinationPlan {
                 with_suffix(&entry.base.0, n, entry.kind, limit)
             };
             let free = self
-                .top_keys
-                .get(&collision_key(&name))
+                .sibling_keys
+                .get(&(entry.parent, collision_key(&name)))
                 .is_none_or(|owner| *owner == id);
             free.then_some((n, name))
         })

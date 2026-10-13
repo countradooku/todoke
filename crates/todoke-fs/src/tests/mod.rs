@@ -3,6 +3,10 @@
 #[cfg(any(unix, windows))]
 mod dest;
 mod plan;
+#[cfg(any(unix, windows))]
+mod sink;
+#[cfg(any(unix, windows))]
+pub(crate) mod support;
 
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::manifest::{Manifest, ManifestEntry, ManifestHeader, ManifestLimits};

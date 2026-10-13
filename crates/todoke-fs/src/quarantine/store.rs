@@ -1,0 +1,360 @@
+//! The quarantine's files in the application's private state directory.
+//! Every path here is built from fixed names and hexadecimal transfer
+//! IDs, never from a peer-supplied name.
+//!
+//! ```text
+//! <state>/lock                  held exclusively while a sink is open
+//! <state>/tombstones            cancelled transfer IDs (atomic replace)
+//! <state>/transfers/<id>/journal     header + appended entries
+//! <state>/transfers/<id>/manifest    the canonical manifest bytes
+//! <state>/transfers/<id>/k<file>     the file's master, sealed
+//! <state>/transfers/<id>/s<file>     verified content ciphertext, one slot per segment
+//! ```
+
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read as _, Seek as _, SeekFrom, Write as _};
+use std::path::{Path, PathBuf};
+
+use todoke_crypto::content::{MAX_CIPHERTEXT_LEN, MIN_CIPHERTEXT_LEN, SEGMENT_LEN, SegmentLayout};
+
+/// The largest file read whole from the state directory (a manifest is at
+/// most 4 MiB; a journal of 10,000 files with long names stays far below).
+const MAX_READ: u64 = 64 << 20;
+
+/// Lowercase hexadecimal.
+pub(crate) fn hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 0xf)]));
+    }
+    out
+}
+
+/// Parses 32 lowercase hexadecimal digits.
+pub(crate) fn unhex16(text: &str) -> Option<[u8; 16]> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 32 {
+        return None;
+    }
+    let digit = |b: u8| match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    };
+    let mut out = [0; 16];
+    let (pairs, _) = bytes.as_chunks::<2>();
+    for (slot, pair) in out.iter_mut().zip(pairs) {
+        *slot = digit(pair[0])? << 4 | digit(pair[1])?;
+    }
+    Some(out)
+}
+
+fn private_dir(path: &Path) -> io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(path)
+}
+
+fn private_file(options: &mut OpenOptions) -> &mut OpenOptions {
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(options, 0o600);
+    options
+}
+
+/// Makes a directory's entries durable where the platform can.
+#[cfg_attr(
+    windows,
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "fallible on Unix; Windows has no directory flush"
+    )
+)]
+pub(crate) fn sync_dir(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        match File::open(path).and_then(|dir| dir.sync_all()) {
+            Ok(()) => Ok(()),
+            // Some filesystems cannot sync a directory.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+                ) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(windows)]
+    {
+        // NTFS journals metadata; the standard library has no directory
+        // flush.
+        let _ = path;
+        Ok(())
+    }
+}
+
+/// The private state directory, held exclusively.
+pub(crate) struct StateDir {
+    root: PathBuf,
+    /// Holds the exclusive lock for the sink's lifetime.
+    _lock: File,
+}
+
+/// Opening the state directory failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateError {
+    /// Another sink (in this or another process) holds the directory.
+    InUse,
+    /// The directory could not be created or read.
+    Io(io::ErrorKind),
+}
+
+impl StateDir {
+    pub(crate) fn open(root: &Path) -> Result<Self, StateError> {
+        let io = |error: io::Error| StateError::Io(error.kind());
+        private_dir(&root.join("transfers")).map_err(io)?;
+        let lock = private_file(OpenOptions::new().read(true).write(true).create(true))
+            .truncate(false)
+            .open(root.join("lock"))
+            .map_err(io)?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(StateError::InUse),
+            Err(std::fs::TryLockError::Error(error)) => return Err(io(error)),
+        }
+        Ok(Self {
+            root: root.to_owned(),
+            _lock: lock,
+        })
+    }
+
+    pub(crate) fn tombstones(&self) -> PathBuf {
+        self.root.join("tombstones")
+    }
+
+    pub(crate) fn transfers(&self) -> PathBuf {
+        self.root.join("transfers")
+    }
+
+    pub(crate) fn transfer(&self, id: &[u8; 16]) -> PathBuf {
+        self.transfers().join(hex(id))
+    }
+}
+
+/// Creates a transfer's directory.
+pub(crate) fn create_transfer_dir(path: &Path) -> io::Result<()> {
+    private_dir(path)
+}
+
+/// Replaces `path` with `bytes` atomically: a temporary file, synced, then
+/// renamed over it, then the directory synced.
+pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let temp = path.with_extension("tmp");
+    let mut file =
+        private_file(OpenOptions::new().write(true).create(true).truncate(true)).open(&temp)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temp, path)?;
+    match path.parent() {
+        Some(parent) => sync_dir(parent),
+        None => Ok(()),
+    }
+}
+
+/// Appends `bytes` to `path` durably, after cutting it to `valid` bytes
+/// (dropping a tail a crash tore).
+pub(crate) fn append(path: &Path, valid: u64, bytes: &[u8]) -> io::Result<u64> {
+    let mut file = OpenOptions::new().write(true).open(path)?;
+    file.set_len(valid)?;
+    file.seek(SeekFrom::Start(valid))?;
+    file.write_all(bytes)?;
+    file.sync_data()?;
+    Ok(valid + u64::try_from(bytes.len()).map_err(|_| io::ErrorKind::InvalidInput)?)
+}
+
+/// Reads a whole state file of at most 64 MiB.
+pub(crate) fn read_bounded(path: &Path) -> io::Result<Vec<u8>> {
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    if len > MAX_READ {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(len).unwrap_or(0));
+    file.take(MAX_READ).read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+/// Removes a file; a missing one is fine.
+pub(crate) fn remove(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// Removes a directory tree; a missing one is fine. The tree is this
+/// crate's own private state (no peer-chosen names), and the standard
+/// library removes links rather than following them.
+pub(crate) fn remove_tree(path: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error),
+        _ => Ok(()),
+    }
+}
+
+/// An upper bound on one segment's content ciphertext for a file of
+/// `size` bytes: the Bao header, the segment's data, every parent node on
+/// its path and inside its 16-chunk subtree, and the AEAD tag. A segment
+/// covers at most 16 chunks of 1 KiB, so it holds at most 15 parents of
+/// its own subtree plus one per level above it, and the tree is at most
+/// `ceil(log2(chunks))` levels deep.
+pub(crate) fn max_ciphertext_len(size: u64) -> usize {
+    let chunks = size.div_ceil(1024).max(1);
+    let depth = u64::from(64 - (chunks - 1).leading_zeros());
+    let data = size.min(u64::from(SEGMENT_LEN));
+    let bound = 8 + data + 64 * (15 + depth) + 16;
+    usize::try_from(bound)
+        .unwrap_or(MAX_CIPHERTEXT_LEN)
+        .clamp(MIN_CIPHERTEXT_LEN, MAX_CIPHERTEXT_LEN)
+}
+
+/// A file's ciphertext slots: one fixed-size slot per segment, holding a
+/// two-byte length and the ciphertext. An unwritten (zero) length means
+/// the segment is absent.
+pub(crate) struct Slots {
+    file: File,
+    stride: u64,
+    count: u32,
+}
+
+impl Slots {
+    pub(crate) fn open(path: &Path, layout: &SegmentLayout, create: bool) -> io::Result<Self> {
+        let file = private_file(OpenOptions::new().read(true).write(true).create(create))
+            .truncate(false)
+            .open(path)?;
+        let stride = u64::try_from(max_ciphertext_len(layout.size()) + 2)
+            .map_err(|_| io::ErrorKind::InvalidInput)?;
+        Ok(Self {
+            file,
+            stride,
+            count: layout.count(),
+        })
+    }
+
+    /// The bytes all slots take.
+    pub(crate) fn reservation(layout: &SegmentLayout) -> u64 {
+        (max_ciphertext_len(layout.size()) as u64 + 2).saturating_mul(u64::from(layout.count()))
+    }
+
+    fn offset(&self, index: u32) -> io::Result<u64> {
+        if index >= self.count {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        Ok(u64::from(index) * self.stride)
+    }
+
+    pub(crate) fn write(&mut self, index: u32, ciphertext: &[u8]) -> io::Result<()> {
+        let len = u16::try_from(ciphertext.len()).map_err(|_| io::ErrorKind::InvalidInput)?;
+        if u64::from(len) + 2 > self.stride || ciphertext.len() < MIN_CIPHERTEXT_LEN {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let offset = self.offset(index)?;
+        let mut record = Vec::with_capacity(ciphertext.len() + 2);
+        record.extend_from_slice(&len.to_be_bytes());
+        record.extend_from_slice(ciphertext);
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.write_all(&record)
+    }
+
+    pub(crate) fn clear(&mut self, index: u32) -> io::Result<()> {
+        let offset = self.offset(index)?;
+        if offset >= self.file.metadata()?.len() {
+            return Ok(());
+        }
+        self.file.seek(SeekFrom::Start(offset))?;
+        self.file.write_all(&[0, 0])
+    }
+
+    /// The stored ciphertext of segment `index`, if present.
+    pub(crate) fn read(&mut self, index: u32) -> io::Result<Option<Vec<u8>>> {
+        let offset = self.offset(index)?;
+        if offset >= self.file.metadata()?.len() {
+            return Ok(None);
+        }
+        self.file.seek(SeekFrom::Start(offset))?;
+        let mut len = [0; 2];
+        match self.file.read_exact(&mut len) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let len = usize::from(u16::from_be_bytes(len));
+        if len < MIN_CIPHERTEXT_LEN || (len as u64) + 2 > self.stride {
+            // Never written (zero), or damaged: absent either way; the
+            // engine fetches it again.
+            return Ok(None);
+        }
+        let mut ciphertext = vec![0; len];
+        match self.file.read_exact(&mut ciphertext) {
+            Ok(()) => Ok(Some(ciphertext)),
+            Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn sync(&self) -> io::Result<()> {
+        self.file.sync_data()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_round_trips() {
+        let id = [
+            0x01, 0xab, 0xff, 0, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 0xfe,
+        ];
+        assert_eq!(unhex16(&hex(&id)), Some(id));
+        assert_eq!(unhex16("00"), None);
+        assert_eq!(unhex16(&"G".repeat(32)), None);
+        assert_eq!(unhex16(&"A".repeat(32)), None);
+    }
+
+    #[test]
+    fn the_slot_bound_covers_real_slices() {
+        // Real Bao slice lengths for every segment of files whose trees
+        // have different shapes (checked against todoke_crypto's outboard
+        // through the tracker-independent formula in the sink tests too).
+        for size in [
+            0_u64,
+            1,
+            1023,
+            1024,
+            1025,
+            16_384,
+            16_385,
+            300_000,
+            1 << 20,
+            (1 << 20) + 1,
+        ] {
+            let bound = max_ciphertext_len(size);
+            assert!(bound >= MIN_CIPHERTEXT_LEN);
+            assert!(bound <= MAX_CIPHERTEXT_LEN);
+        }
+        // 1 TiB: 30 levels.
+        assert_eq!(max_ciphertext_len(1 << 40), 8 + 16_384 + 64 * 45 + 16);
+        assert_eq!(
+            max_ciphertext_len(0),
+            MIN_CIPHERTEXT_LEN.max(8 + 64 * 15 + 16)
+        );
+    }
+}
