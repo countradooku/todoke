@@ -99,7 +99,8 @@ fn suite_ids_bits_and_selection() -> TestResult {
     }
     assert_eq!((Aes.id(), XChaCha.id()), (1, 2));
     assert_eq!((Aes.nonce_len(), XChaCha.nonce_len()), (12, 24));
-    for bits in 0..=0b11 {
+    // §6: every v1 peer supports XChaCha (bit 1), with or without AES.
+    for bits in [0b10, 0b11] {
         assert_eq!(
             ContentSuites::from_bits(bits).map(ContentSuites::bits),
             Some(bits)
@@ -111,19 +112,15 @@ fn suite_ids_bits_and_selection() -> TestResult {
     let set = |bits| ContentSuites::from_bits(bits);
     let expected = [
         // (local, peer, selected)
-        (0b11, 0b11, Some(Aes)),
-        (0b11, 0b10, Some(XChaCha)),
-        (0b10, 0b11, Some(XChaCha)),
-        (0b10, 0b10, Some(XChaCha)),
-        (0b01, 0b01, Some(Aes)),
-        (0b01, 0b10, None),
-        (0b11, 0b00, None),
-        (0b00, 0b00, None),
+        (0b11, 0b11, Aes),
+        (0b11, 0b10, XChaCha),
+        (0b10, 0b11, XChaCha),
+        (0b10, 0b10, XChaCha),
     ];
     for (local, peer, selected) in expected {
         let (local, peer) = (set(local).ok_or("bits")?, set(peer).ok_or("bits")?);
-        assert_eq!(local.select(peer), selected);
-        assert_eq!(peer.select(local), selected);
+        assert_eq!(local.select(peer), Some(selected));
+        assert_eq!(peer.select(local), Some(selected));
     }
     let local = ContentSuites::local();
     assert!(local.contains(XChaCha));
@@ -133,6 +130,26 @@ fn suite_ids_bits_and_selection() -> TestResult {
     #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     assert!(local.contains(Aes), "Apple silicon has AES and PMULL");
     Ok(())
+}
+
+/// §6: "V1 implementations MUST support `XChaCha`", and "a peer advertising
+/// an unsupported version/suite MUST be rejected". A set without `XChaCha`
+/// (AES only, or empty) is refused when parsed, so it can never be selected
+/// against, and AES is never chosen with a peer that lacks `XChaCha`.
+#[test]
+fn a_suite_set_without_xchacha_is_rejected() {
+    use ContentSuite::{Aes256GcmStream as Aes, XChaCha20Poly1305Stream as XChaCha};
+    assert_eq!(ContentSuites::from_bits(0b01), None, "AES only");
+    assert_eq!(ContentSuites::from_bits(0b00), None, "no suite");
+    // Every set that does parse contains XChaCha, so selection with this
+    // device always succeeds.
+    for bits in 0..=u16::MAX {
+        if let Some(peer) = ContentSuites::from_bits(bits) {
+            assert!(peer.contains(XChaCha));
+            let selected = ContentSuites::local().select(peer);
+            assert!(matches!(selected, Some(Aes | XChaCha)));
+        }
+    }
 }
 
 #[test]

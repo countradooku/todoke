@@ -59,19 +59,22 @@ impl ContentSuite {
 }
 
 /// The Capabilities `content_suites` field (§6): bit 0 AES-256-GCM STREAM,
-/// bit 1 XChaCha20-Poly1305 STREAM, every other bit zero.
+/// bit 1 XChaCha20-Poly1305 STREAM, every other bit zero. A v1 set always
+/// contains `XChaCha`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ContentSuites(u16);
 
 impl ContentSuites {
     const DEFINED: u16 = 0b11;
 
-    /// Parses the field; `None` if a reserved bit is set. Whether a set
-    /// lacking `XChaCha` (which v1 peers MUST support) is acceptable is the
-    /// Capabilities validator's decision, not this parser's.
+    /// Parses the field; `None` if a reserved bit is set or the `XChaCha`
+    /// bit is clear. §6: "V1 implementations MUST support `XChaCha`", and a
+    /// peer advertising an unsupported suite set MUST be rejected (not
+    /// retried), so the Capabilities handler aborts the session on `None`.
     #[must_use]
     pub const fn from_bits(bits: u16) -> Option<Self> {
-        if bits & !Self::DEFINED == 0 {
+        let xchacha = ContentSuite::XChaCha20Poly1305Stream.bit();
+        if bits & !Self::DEFINED == 0 && bits & xchacha != 0 {
             Some(Self(bits))
         } else {
             None
@@ -111,7 +114,8 @@ impl ContentSuites {
 
     /// The §6 rule for a new file: AES if both advertise it, otherwise
     /// `XChaCha` if both advertise it, otherwise `None` (abort; there is no
-    /// fallback).
+    /// fallback). Every set from [`Self::from_bits`] or [`Self::local`]
+    /// contains `XChaCha`, so `None` does not occur between them.
     #[must_use]
     pub const fn select(self, peer: Self) -> Option<ContentSuite> {
         let common = Self(self.0 & peer.0);
