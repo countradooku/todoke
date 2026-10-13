@@ -628,6 +628,252 @@ mod tests {
         );
     }
 
+    /// Real headers of every recognized format (from each format's
+    /// specification, not from the table), so a missing, mistyped, or
+    /// shadowed signature is caught.
+    #[test]
+    fn every_format_is_recognized_from_a_real_header() {
+        use DetectedType as T;
+        let mut iso = vec![0; 0x8810];
+        iso[0x8801..0x8806].copy_from_slice(b"CD001");
+        let cases: &[(&[u8], DetectedType)] = &[
+            (b"MZ\x90\0\x03\0\0\0", T::WindowsExecutable),
+            (b"\x7fELF\x01\x01\x01\0", T::Elf),
+            (b"\xfe\xed\xfa\xce\0\0\0\x12", T::MachO),
+            (b"\xfe\xed\xfa\xcf\x01\0\0\x0c", T::MachO),
+            (b"\xce\xfa\xed\xfe\x07\0\0\0", T::MachO),
+            (b"\xca\xfe\xba\xbf\0\0\0\x02", T::MachO),
+            (b"\xca\xfe\xba\xbe", T::MachO),
+            (b"\xca\xfe\xba\xbe\0\0\0\x1d", T::MachO),
+            (b"\xca\xfe\xba\xbe\0\0\0\x1e", T::JavaClass),
+            (b"\xca\xfe\xba\xbe\0\0\0\x41", T::JavaClass),
+            (b"dex\n035\0", T::Dex),
+            (b"\0asm\x01\0\0\0", T::Wasm),
+            (b"#!/usr/bin/env python3\n", T::Shebang),
+            (
+                b"\x4c\0\0\0\x01\x14\x02\0\0\0\0\0\xc0\0\0\0\0\0\0\x46\x9b\0",
+                T::ShellLink,
+            ),
+            (b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1\0\0", T::CompoundFile),
+            (b"MSCF\0\0\0\0\x10\x27", T::Cabinet),
+            (b"xar!\0\x1c\0\x01", T::Xar),
+            (b"!<arch>\ndebian-binary   ", T::Deb),
+            (b"\xed\xab\xee\xdb\x03\0", T::Rpm),
+            (b"{\\rtf1\\ansi", T::Rtf),
+            (b"GIF87a\x01\0", T::Gif),
+            (b"GIF89a\x01\0", T::Gif),
+            (b"II*\0\x08\0\0\0", T::Tiff),
+            (b"MM\0*\0\0\0\x08", T::Tiff),
+            (b"BM\x36\0\x0c\0\0\0\0\0\x36\0", T::Bmp),
+            (b"\0\0\x02\0\x01\0\x20\x20", T::Icon),
+            (b"\0\0\0\x18ftypheix", T::Heif),
+            (b"\0\0\0\x18ftypmif1", T::Heif),
+            (b"\0\0\0\x18ftypmsf1", T::Heif),
+            (b"\0\0\0\x1cftypavif", T::Avif),
+            (b"\0\0\0\x1cftypavis", T::Avif),
+            (b"\0\0\0\x20ftypM4A ", T::M4a),
+            (b"\0\0\0\x20ftypM4B ", T::M4a),
+            (b"\0\0\0\x20ftypmp42", T::Mp4),
+            (b"ID3\x04\0\0", T::Mp3),
+            (b"\xff\xfb\x90\x64", T::Mp3),
+            (b"\xff\xf3\x90\x64", T::Mp3),
+            (b"\xff\xf2\x90\x64", T::Mp3),
+            (b"RIFF\x24\0\0\0AVI LIST", T::Avi),
+            (b"OggS\0\x02", T::Ogg),
+            (b"fLaC\0\0\0\x22", T::Flac),
+            (b"\x1a\x45\xdf\xa3\x01\0", T::Matroska),
+            (b"PK\x05\x06\0\0", T::Zip),
+            (b"PK\x07\x08\0\0", T::Zip),
+            (b"Rar!\x1a\x07\0", T::Rar),
+            (b"Rar!\x1a\x07\x01\0", T::Rar),
+            (b"7z\xbc\xaf\x27\x1c\0\x04", T::SevenZip),
+            (b"BZh91AY&SY", T::Bzip2),
+            (b"\xfd7zXZ\0\0\x04", T::Xz),
+            (b"\x28\xb5\x2f\xfd\x24\0", T::Zstd),
+            (b"SQLite format 3\0\x10\0", T::Sqlite),
+            (b"<html lang=en>", T::Html),
+            (b"\n\t <?xml version=\"1.0\"?><html>", T::Html),
+            (b"<SVG viewBox=\"0 0 1 1\">", T::Svg),
+            (&iso, T::Iso9660),
+        ];
+        for (data, expected) in cases {
+            assert_eq!(detect(data), Some(*expected), "{expected:?}");
+        }
+        for unknown in [
+            &b"BM\x36\0\x0c\0\x01\0\0\0"[..],
+            b"\0\0\x03\0\x01\0",
+            b"\0\0\x02\0\0\0",
+            b"\xff\xfa\x90",
+            b"PK\x01\x02",
+            b"Rar!\x1a",
+            b"\x7fEL",
+            b"<?xm",
+            b"<htm",
+            b"ftypisom",
+        ] {
+            assert_eq!(detect(unknown), None, "{unknown:?}");
+        }
+    }
+
+    /// PDF readers find the header anywhere in the first 1024 bytes: one
+    /// that ends at byte 1024 counts, one that ends after it does not.
+    #[test]
+    fn the_pdf_header_counts_only_within_its_first_kilobyte() {
+        for (offset, expected) in [(1019, Some(DetectedType::Pdf)), (1020, None)] {
+            let mut data = vec![b' '; offset];
+            data.extend_from_slice(b"%PDF-1.7");
+            assert_eq!(detect(&data), expected, "{offset}");
+        }
+    }
+
+    /// Each risky type is flagged with its risk, whatever it is called.
+    #[test]
+    fn every_risky_type_is_flagged() {
+        use DetectedType as T;
+        let mut iso = vec![0; 0x8010];
+        iso[0x8001..0x8006].copy_from_slice(b"CD001");
+        let cases: &[(&[u8], DetectedType, RiskKind, Platforms)] = &[
+            (
+                b"MZ",
+                T::WindowsExecutable,
+                RiskKind::Executable,
+                Platforms::WINDOWS,
+            ),
+            (
+                b"\x7fELF",
+                T::Elf,
+                RiskKind::Executable,
+                Platforms::LINUX.union(Platforms::ANDROID),
+            ),
+            (
+                b"\xcf\xfa\xed\xfe",
+                T::MachO,
+                RiskKind::Executable,
+                Platforms::MACOS.union(Platforms::IOS),
+            ),
+            (
+                b"\xca\xfe\xba\xbe\0\0\0\x34",
+                T::JavaClass,
+                RiskKind::Executable,
+                Platforms::DESKTOP,
+            ),
+            (b"dex\n", T::Dex, RiskKind::Executable, Platforms::ANDROID),
+            (b"\0asm", T::Wasm, RiskKind::Executable, Platforms::ALL),
+            (
+                b"#!/bin/sh",
+                T::Shebang,
+                RiskKind::Script,
+                Platforms::MACOS.union(Platforms::LINUX),
+            ),
+            (
+                b"\x4c\0\0\0\x01\x14\x02\0\0\0\0\0\xc0\0\0\0\0\0\0\x46",
+                T::ShellLink,
+                RiskKind::Shortcut,
+                Platforms::WINDOWS,
+            ),
+            (b"xar!", T::Xar, RiskKind::Installer, Platforms::MACOS),
+            (
+                b"!<arch>\ndebian",
+                T::Deb,
+                RiskKind::Installer,
+                Platforms::LINUX,
+            ),
+            (
+                b"\xed\xab\xee\xdb",
+                T::Rpm,
+                RiskKind::Installer,
+                Platforms::LINUX,
+            ),
+            (
+                b"MSCF\0\0\0\0",
+                T::Cabinet,
+                RiskKind::Installer,
+                Platforms::WINDOWS,
+            ),
+            (
+                &iso,
+                T::Iso9660,
+                RiskKind::DiskImage,
+                Platforms::WINDOWS.union(Platforms::MACOS),
+            ),
+            (b"<html>", T::Html, RiskKind::ActiveContent, Platforms::ALL),
+            (b"<svg>", T::Svg, RiskKind::ActiveContent, Platforms::ALL),
+        ];
+        for (data, kind, risk, platforms) in cases {
+            let report = assess(data, "renamed", "application/octet-stream");
+            assert_eq!(report.detected(), Some(*kind));
+            assert_eq!(
+                report.warnings(),
+                [ContentWarning::Risky(
+                    *kind,
+                    ExtensionRisk {
+                        kind: *risk,
+                        platforms: *platforms
+                    }
+                )],
+                "{kind:?}"
+            );
+        }
+        // Documents, media, and archives carry no risk of their own.
+        for data in [
+            &b"%PDF-1.7"[..],
+            b"\x89PNG\r\n\x1a\n",
+            b"PK\x03\x04",
+            b"<?xml?><a/>",
+        ] {
+            assert_eq!(
+                assess(data, "renamed", "application/octet-stream").warnings(),
+                []
+            );
+        }
+    }
+
+    /// The MIME label alone can make a mismatch; audio and video labels are
+    /// interchangeable for containers that hold either; SVG labels claim
+    /// active content.
+    #[test]
+    fn mime_labels_are_compared_by_category() {
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.png", "audio/mpeg").warnings(),
+            [ContentWarning::Mismatch(DetectedType::Png)]
+        );
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.png", "image/svg+xml").warnings(),
+            [ContentWarning::Mismatch(DetectedType::Png)]
+        );
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.png", "video/mp4").warnings(),
+            [ContentWarning::Mismatch(DetectedType::Png)]
+        );
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.png", "application/pdf").warnings(),
+            [ContentWarning::Mismatch(DetectedType::Png)]
+        );
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.png", "image/png").warnings(),
+            []
+        );
+        assert_eq!(
+            assess(b"\0\0\0\x18ftypisom", "x.mp4", "audio/mp4").warnings(),
+            []
+        );
+        assert_eq!(assess(b"OggS", "x.ogg", "audio/ogg").warnings(), []);
+        assert_eq!(assess(b"OggS", "x.ogg", "video/ogg").warnings(), []);
+        assert_eq!(assess(b"fLaC", "x.flac", "video/x-flac").warnings(), []);
+        assert_eq!(assess(b"%PDF-1.7", "x.pdf", "text/plain").warnings(), []);
+        let svg = assess(b"<svg>", "x.svg", "image/svg+xml");
+        assert!(
+            !svg.warnings()
+                .iter()
+                .any(|warning| matches!(warning, ContentWarning::Mismatch(_)))
+        );
+        // Unknown extensions and labels say nothing.
+        assert_eq!(
+            assess(b"\x89PNG\r\n\x1a\n", "x.custom", "application/x-thing").warnings(),
+            []
+        );
+    }
+
     #[test]
     fn every_type_is_consistent() {
         use DetectedType as T;
