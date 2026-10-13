@@ -172,11 +172,6 @@ version = "0.3.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
-[[exemptions.futures-sink]]
-version = "0.3.34"
-criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted on 2026-10-14 for flume (async mdns-sd events); imported audits cover only 0.3.31; replace with an audit or imported audit."
-
 [[exemptions.futures-task]]
 version = "0.3.21"
 criteria = "safe-to-deploy"

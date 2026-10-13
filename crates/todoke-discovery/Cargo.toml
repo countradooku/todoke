@@ -25,7 +25,9 @@ getrandom.workspace = true
 # mDNS (§9). Without the default `logging` feature, so nothing it does is
 # logged; `async` for awaiting browser events.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
-mdns-sd = { version = "=0.21.5", default-features = false, features = ["async"] }
+mdns-sd = { version = "=0.21.5", default-features = false }
+# The bounded queue between the browser thread and async callers.
+tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
 proptest.workspace = true
