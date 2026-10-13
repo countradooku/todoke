@@ -15,6 +15,10 @@
 //! The proof stand-in [`StubProof`] has an arbitrary Accept hash (from a
 //! two-value domain) and an arbitrary selection; the engine's real proof is
 //! a `VerifiedAccept`, whose only constructor verifies the signed record.
+//!
+//! These harnesses check the gate's admission rules only. That the engine
+//! passes every `FileKey` and `Chunk` through the gate is covered by the
+//! engine tests (`tests::basic`, `tests::adversarial`), not by them.
 
 use crate::gate::{AcceptProof, ConsentGate, GateRefusal};
 

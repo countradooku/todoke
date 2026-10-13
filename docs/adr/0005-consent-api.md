@@ -50,7 +50,7 @@ signature), nonce replay and conflicting Accepts within a session, when
 expiry pauses content, and revocation (the session layer closes revoked
 sessions). The transfer engine owns those.
 
-### 2. The receiver's consent gate, model-checked
+### 2. The receiver's consent gate: rules model-checked, routing tested
 
 In `todoke-transfer`, every incoming `FileKey` and `Chunk` passes a small
 `ConsentGate` before anything else: closed until a `VerifiedAccept` opens it
@@ -59,10 +59,17 @@ for keyed selected files, nothing after it closes. A key or chunk for a
 transfer without an open gate is refused from its transfer ID alone, before
 its body is decoded (§7.2: discard without processing; no `FileKey` is
 processed before consent). The gate is generic over the
-proof so that Kani harnesses can check it for every proof and operation
-sequence; the same harness bodies run exhaustively over short sequences in
-the unit tests, so the logic is exercised locally too. Below the gate the
-type system enforces the rest: decryption needs an `AcceptedFile`.
+proof so that Kani harnesses can check its admission rules against an
+independent model for every proof and operation sequence; the same harness
+bodies run exhaustively over short sequences in the unit tests, so the
+logic is exercised locally too. The proofs cover the gate, not the engine:
+that `on_file_key` and `on_chunk` consult the gate (and refuse a transfer
+without an open one) before anything else is covered by the engine's
+deterministic tests and adversarial proptests, not by model checking. A
+harness over the handlers themselves would need a stand-in for the session
+binding, the verified Accept, and the content opener, which only real
+sessions and cryptography produce today. Below the gate the type system
+enforces the rest: decryption needs an `AcceptedFile`.
 
 ### 3. A sans-IO engine per session, plus a thin async driver
 

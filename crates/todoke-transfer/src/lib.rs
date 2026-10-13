@@ -23,12 +23,23 @@
 //! The receiver's consent invariant lives in a small consent gate that
 //! every `FileKey` and `Chunk` passes before any processing: the transfer
 //! must be accepted by a verified Accept of this session, the file must be
-//! in its selection, and content needs that file's key first. Kani proof
-//! harnesses check the gate (`cargo kani -p todoke-transfer`, run in CI);
-//! the same harnesses also run exhaustively over short operation sequences
-//! in the unit tests. Below the gate, the type system enforces the rest:
-//! decryption needs an `AcceptedFile`, which only `todoke_crypto::consent`
-//! creates after verifying the signed Accept.
+//! in its selection, and content needs that file's key first.
+//!
+//! What is checked how:
+//!
+//! - **The gate's admission rules** are model-checked: Kani proof harnesses
+//!   compare the gate with an independent model for every proof and every
+//!   short operation sequence (`cargo kani`, run in CI), and the same
+//!   harness bodies run exhaustively over short sequences in the unit
+//!   tests.
+//! - **That the engine routes every key and chunk through the gate** is
+//!   not model-checked; it is covered by tests: deterministic scenarios
+//!   (keys and content before consent, outside the selection, under another
+//!   Accept, after cancel or expiry) and adversarial proptest state machines
+//!   that inject forged and replayed frames.
+//! - **Below the gate**, the type system enforces the rest: decryption
+//!   needs an `AcceptedFile`, which only `todoke_crypto::consent` creates
+//!   after verifying the signed Accept.
 //!
 //! # Scope
 //!
