@@ -14,6 +14,8 @@ mod plan;
 #[cfg(any(unix, windows))]
 pub(crate) mod race;
 #[cfg(any(unix, windows))]
+mod shared;
+#[cfg(any(unix, windows))]
 pub(crate) mod sink;
 #[cfg(any(unix, windows))]
 mod startup;
