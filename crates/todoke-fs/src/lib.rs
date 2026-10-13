@@ -13,9 +13,11 @@
 //! | --- | --- | --- |
 //! | [`sanitize_component`] | Rewrites one manifest name for local use, visibly and deterministically ([`name`] lists every rule) | §7.1 |
 //! | [`DestinationPlan`] | Before consent: every entry's exact local name, renames, warnings, and rejections, including filesystem collisions (case, Unicode normalization) and per-OS length limits | §7.1 |
+//! | [`detect`] | After verification: the content's real type from its signature, executables per platform, and mismatches with the claimed extension or MIME label, as UI warnings | §7.1 (MIME grants nothing) |
 
 #![forbid(unsafe_code)]
 
+pub mod detect;
 pub mod name;
 mod plan;
 
