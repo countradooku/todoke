@@ -16,6 +16,7 @@
 //! | [`detect`] | After verification: the content's real type from its signature, executables per platform, and mismatches with the claimed extension or MIME label, as UI warnings | §7.1 (MIME grants nothing) |
 //! | [`dest`] | The publication target: [`dest::Destination`] (link-refusing, exclusive, no-replace operations), [`dest::DirDestination`] for desktop filesystems, the Android SAF and iOS adapters' contract, and the origin-marker hook (Mark of the Web, `com.apple.quarantine`) | §7.7 |
 //! | `FsSink` | `todoke_transfer::ReceiveSink` on disk: the per-transfer quarantine (verified content ciphertext and sealed file masters only), journals, tombstones, quota, cleanup at start-up, and publication | §7.4–§7.7, §8 |
+//! | `SharedSink` | One `FsSink` (one writer per state directory, enforced by an OS file lock) shared by several sessions' engines | — |
 //! | `FsSource` | `todoke_transfer::SendSource` on disk: files held open from hashing on, outboards in private storage, mutation detection | §8 |
 //! | [`quarantine::codec`] | The quarantine's local journal and tombstone formats | — |
 
@@ -26,6 +27,8 @@ pub mod detect;
 pub mod name;
 mod plan;
 pub mod quarantine;
+#[cfg(any(unix, windows))]
+mod shared;
 #[cfg(any(unix, windows))]
 mod sink;
 #[cfg(any(unix, windows))]
@@ -40,6 +43,8 @@ pub use plan::{
     DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection,
     UntrustedName, Warning,
 };
+#[cfg(any(unix, windows))]
+pub use shared::SharedSink;
 #[cfg(any(unix, windows))]
 pub use sink::{Durability, FsSink, OpenError, SinkConfig};
 #[cfg(any(unix, windows))]

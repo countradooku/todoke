@@ -506,3 +506,28 @@ fn every_segment_seals_from_files_on_disk() -> TestResult {
     );
     Ok(())
 }
+
+/// Two sessions' engines share one sink through `SharedSink`.
+#[test]
+fn engines_share_one_sink() -> TestResult {
+    let fixture = fixture()?;
+    let (state, dest) = (TempDir::new()?, TempDir::new()?);
+    let shared = crate::SharedSink::new(open_sink(state.path(), dest.path())?);
+    let entries = vec![file_entry("x.txt", 0, content(1000, 2))];
+    let manifest = build_manifest(&fixture, [0x44; 16], &entries, 3600)?;
+    let consented = Consented::new(&fixture, &manifest, &entries, &[1], false, 4)?;
+    let (mut one, mut two) = (shared.clone(), shared.clone());
+    one.check_offer(&manifest).map_err(|r| format!("{r:?}"))?;
+    one.record_accept(&manifest, &consented.accept)?;
+    let file = consented.accept.file(1).ok_or("file")?;
+    two.record_file_key(&file, &consented.master(1)?)?;
+    let ciphertext = consented.ciphertext(1, 0)?;
+    two.store_segment(&consented.verified(1, 0, &ciphertext)?, &ciphertext)?;
+    assert_eq!(one.retained_segment(&[0x44; 16], 1, 0)?, Some(ciphertext));
+    one.publish(&manifest, 1)?;
+    assert!(two.published_intact(&manifest, 1));
+    assert!(shared.lock()?.published_path(&[0x44; 16], 1).is_some());
+    two.tombstone(&[0x44; 16], time(WALL + 7200)?);
+    assert!(one.is_tombstoned(&[0x44; 16], time(WALL)?));
+    Ok(())
+}
