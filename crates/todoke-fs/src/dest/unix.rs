@@ -208,25 +208,54 @@ fn place(
     // process, so Android starts with the hard link until P16 verifies it
     // on devices (docs/adr/0006-filesystem.md).
     #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    if let Some(done) = rename_new(dir, staged, temp, name)? {
+        return Ok(done);
+    }
+    if let Some(done) = link_new(dir, staged, temp, name)? {
+        return Ok(done);
+    }
+    copy_exclusive(dir, path, staged, name)?;
+    Ok(Atomicity::Copied)
+}
+
+/// Renames `temp` to `name` without replacing anything, then requires
+/// `name` to be the staged file with one link. `None` if the filesystem
+/// cannot rename without replacing.
+#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+fn rename_new(
+    dir: &Handle,
+    staged: &File,
+    temp: &str,
+    name: &str,
+) -> Result<Option<Atomicity>, DestError> {
     match rustix::fs::renameat_with(dir, temp, dir, name, rustix::fs::RenameFlags::NOREPLACE) {
         Ok(()) => {
             verify(dir, name, staged, 1)?;
-            return Ok(Atomicity::Atomic);
+            Ok(Some(Atomicity::Atomic))
         }
-        Err(errno) if unsupported(errno) => {}
-        Err(other) => return Err(error(other)),
+        Err(errno) if unsupported(errno) => Ok(None),
+        Err(other) => Err(error(other)),
     }
+}
+
+/// Links `temp` to `name` (a link never replaces), then requires `name` to
+/// be the staged file with exactly two links. `None` if the filesystem
+/// has no hard links.
+fn link_new(
+    dir: &Handle,
+    staged: &File,
+    temp: &str,
+    name: &str,
+) -> Result<Option<Atomicity>, DestError> {
     match rustix::fs::linkat(dir, temp, dir, name, AtFlags::empty()) {
         Ok(()) => {
             // Two names now: the temporary one goes in `release`.
             verify(dir, name, staged, 2)?;
-            return Ok(Atomicity::Atomic);
+            Ok(Some(Atomicity::Atomic))
         }
-        Err(errno) if unsupported(errno) => {}
-        Err(other) => return Err(error(other)),
+        Err(errno) if unsupported(errno) => Ok(None),
+        Err(other) => Err(error(other)),
     }
-    copy_exclusive(dir, path, staged, name)?;
-    Ok(Atomicity::Copied)
 }
 
 /// The last resort: an exclusive copy of the staged file (read through
@@ -290,7 +319,7 @@ pub(super) fn sync_dir(dir: &Handle) -> Result<(), DestError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{TempDir, TestResult};
+    use crate::tests::{AnyResult, TempDir, TestResult};
 
     use std::io::Write as _;
 
@@ -377,6 +406,168 @@ mod tests {
             publish(&dir, temp.path(), &file, ".t", "final"),
             Err(DestError::Replaced)
         );
+        assert!(!temp.path().join("final").exists());
+        Ok(())
+    }
+
+    fn links(path: &Path) -> AnyResult<u64> {
+        use std::os::unix::fs::MetadataExt as _;
+        Ok(std::fs::symlink_metadata(path)?.nlink())
+    }
+
+    /// The hard-link path (Android's first choice, and the fallback where
+    /// a filesystem cannot rename without replacing): the final name must
+    /// be the staged file with exactly two links, and an existing name is
+    /// never replaced.
+    #[test]
+    fn the_link_path_publishes_only_the_staged_file() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        std::fs::write(temp.path().join("taken"), b"theirs")?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        assert_eq!(link_new(&dir, &file, ".t", "taken"), Err(DestError::Exists));
+        assert_eq!(std::fs::read(temp.path().join("taken"))?, b"theirs");
+        assert_eq!(
+            link_new(&dir, &file, ".t", "final")?,
+            Some(Atomicity::Atomic)
+        );
+        assert_eq!(std::fs::read(temp.path().join("final"))?, b"payload");
+        assert_eq!(links(&temp.path().join("final"))?, 2);
+        release(&dir, temp.path(), file, ".t")?;
+        assert!(!temp.path().join(".t").exists());
+        assert_eq!(links(&temp.path().join("final"))?, 1);
+        Ok(())
+    }
+
+    /// A substitute under the temporary name is linked by the race, then
+    /// refused and left alone; so is a staged file someone else linked
+    /// first (three names after ours).
+    #[test]
+    fn the_link_path_refuses_substitutes_and_extra_links() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        std::fs::remove_file(temp.path().join(".t"))?;
+        std::fs::write(temp.path().join(".t"), b"planted")?;
+        assert_eq!(
+            link_new(&dir, &file, ".t", "final"),
+            Err(DestError::Replaced)
+        );
+        assert_eq!(std::fs::read(temp.path().join("final"))?, b"planted");
+        release(&dir, temp.path(), file, ".t")?;
+        assert_eq!(std::fs::read(temp.path().join(".t"))?, b"planted");
+        std::fs::remove_file(temp.path().join(".t"))?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        std::fs::hard_link(temp.path().join(".t"), temp.path().join("theirs"))?;
+        assert_eq!(
+            link_new(&dir, &file, ".t", "other"),
+            Err(DestError::Replaced)
+        );
+        Ok(())
+    }
+
+    /// The rename path requires the final name to be the staged file with
+    /// one link, and never replaces.
+    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[test]
+    fn the_rename_path_publishes_only_the_staged_file() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        std::fs::write(temp.path().join("taken"), b"theirs")?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        assert_eq!(
+            rename_new(&dir, &file, ".t", "taken"),
+            Err(DestError::Exists)
+        );
+        assert_eq!(std::fs::read(temp.path().join("taken"))?, b"theirs");
+        assert_eq!(
+            rename_new(&dir, &file, ".t", "final")?,
+            Some(Atomicity::Atomic)
+        );
+        assert!(!temp.path().join(".t").exists());
+        assert_eq!(links(&temp.path().join("final"))?, 1);
+        Ok(())
+    }
+
+    /// Identity is device, inode, and file type: a different device, a
+    /// different inode, a directory, or a missing name is not the file.
+    #[test]
+    fn identity_needs_device_inode_and_a_regular_file() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        let file = staged(&dir, temp.path(), b"payload")?;
+        let ours = rustix::fs::fstat(&file).map_err(error)?;
+        assert!(same(&dir, ".t", &ours)?);
+        let mut other_device = ours;
+        other_device.st_dev ^= 1;
+        assert!(!same(&dir, ".t", &other_device)?);
+        let mut other_inode = ours;
+        other_inode.st_ino ^= 1;
+        assert!(!same(&dir, ".t", &other_inode)?);
+        assert!(!same(&dir, "missing", &ours)?);
+        create_dir(&dir, temp.path(), "sub")?;
+        let sub = open_dir(&dir, temp.path(), "sub")?;
+        let directory = rustix::fs::fstat(&sub).map_err(error)?;
+        assert!(!same(&dir, "sub", &directory)?);
+        // One link was expected; with a second one the check refuses.
+        verify(&dir, ".t", &file, 1)?;
+        std::fs::hard_link(temp.path().join(".t"), temp.path().join("second"))?;
+        assert_eq!(verify(&dir, ".t", &file, 1), Err(DestError::Replaced));
+        verify(&dir, ".t", &file, 2)?;
+        Ok(())
+    }
+
+    /// Only "the filesystem cannot do that" moves on to the next, weaker
+    /// method; every other failure is reported.
+    #[test]
+    fn only_unsupported_operations_fall_back() {
+        for errno in [
+            Errno::NOTSUP,
+            Errno::OPNOTSUPP,
+            Errno::INVAL,
+            Errno::NOSYS,
+            Errno::PERM,
+            Errno::MLINK,
+        ] {
+            assert!(unsupported(errno), "{errno:?}");
+        }
+        for errno in [
+            Errno::EXIST,
+            Errno::NOENT,
+            Errno::ACCESS,
+            Errno::XDEV,
+            Errno::LOOP,
+            Errno::NOTDIR,
+            Errno::ROFS,
+            Errno::IO,
+            Errno::NOSPC,
+        ] {
+            assert!(!unsupported(errno), "{errno:?}");
+        }
+        assert_eq!(error(Errno::EXIST), DestError::Exists);
+        assert_eq!(error(Errno::NOENT), DestError::NotFound);
+        assert_eq!(error(Errno::LOOP), DestError::WrongKind);
+        assert_eq!(error(Errno::NOTDIR), DestError::WrongKind);
+        assert_eq!(
+            error(Errno::ACCESS),
+            DestError::Io(io::ErrorKind::PermissionDenied)
+        );
+    }
+
+    /// A copy that fails part way removes its own partial file.
+    #[test]
+    fn a_failed_copy_removes_its_partial_file() -> TestResult {
+        let temp = TempDir::new()?;
+        let dir = open_root(temp.path())?;
+        std::fs::write(temp.path().join(".w"), b"payload")?;
+        // Write-only: reading it for the copy fails.
+        let unreadable = std::fs::OpenOptions::new()
+            .write(true)
+            .open(temp.path().join(".w"))?;
+        assert!(matches!(
+            copy_exclusive(&dir, temp.path(), &unreadable, "final"),
+            Err(DestError::Io(_))
+        ));
         assert!(!temp.path().join("final").exists());
         Ok(())
     }
