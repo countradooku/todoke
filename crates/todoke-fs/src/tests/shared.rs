@@ -37,6 +37,7 @@ fn a_poisoned_shared_sink_fails_closed() -> TestResult {
     assert!(shared.retained(&transfer_id, now).is_some());
     shared.drop_segment(&transfer_id, 6, 0);
     assert_eq!(shared.retained_segment(&transfer_id, 6, 0)?, None);
+    shared.finish(&[0xc1; 16]);
     // A holder of the lock unwinds (a panic elsewhere), poisoning it.
     let holder = shared.clone();
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

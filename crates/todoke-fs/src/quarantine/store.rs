@@ -515,4 +515,68 @@ mod tests {
         }
         Ok(())
     }
+
+    /// What a slot read must return for slot `index` of `bytes`: absent
+    /// unless the slot holds a complete record of an allowed length.
+    fn expected_slot(bytes: &[u8], index: usize, stride: usize) -> Option<Vec<u8>> {
+        let at = index * (stride + 2);
+        let header = bytes.get(at..at + 2)?;
+        let len = usize::from(u16::from_be_bytes([header[0], header[1]]));
+        if len < MIN_CIPHERTEXT_LEN || len > stride {
+            return None;
+        }
+        bytes.get(at + 2..at + 2 + len).map(<[u8]>::to_vec)
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(128))]
+
+        /// Any slots file, whatever its bytes: each slot reads as absent or
+        /// as exactly the record it holds, and no index past the count is
+        /// read.
+        #[test]
+        fn any_slots_file_reads_as_its_records(
+            records in proptest::collection::vec(
+                (0_u16..20_000, proptest::collection::vec(proptest::prelude::any::<u8>(), 0..64), 0_usize..2),
+                1..3,
+            ),
+            tail in 0_usize..64,
+        ) {
+            let temp = TempDir::new().map_err(|e| proptest::test_runner::TestCaseError::fail(e.to_string()))?;
+            let path = temp.path().join("s1");
+            let size = u64::from(SEGMENT_LEN) + 1;
+            let layout = SegmentLayout::new(size).map_err(|e| proptest::test_runner::TestCaseError::fail(e.to_string()))?;
+            let stride = max_ciphertext_len(size);
+            // Each slot: a length, then filler up to that length (or not),
+            // padded to the stride; the last one possibly cut short.
+            let mut bytes = Vec::new();
+            for (len, fill, complete) in &records {
+                bytes.extend_from_slice(&len.to_be_bytes());
+                let body = if *complete == 1 { usize::from(*len) } else { fill.len() };
+                bytes.extend(fill.iter().copied().cycle().take(body));
+                bytes.resize(bytes.len().max(bytes.len().div_ceil(stride + 2) * (stride + 2)), 0);
+            }
+            bytes.truncate(bytes.len().saturating_sub(tail));
+            std::fs::write(&path, &bytes).map_err(|e| proptest::test_runner::TestCaseError::fail(e.to_string()))?;
+            let mut slots = Slots::open(&path, &layout, false).map_err(|e| proptest::test_runner::TestCaseError::fail(e.to_string()))?;
+            for index in 0..2_u32 {
+                let read = slots.read(index).map_err(|e| proptest::test_runner::TestCaseError::fail(e.to_string()))?;
+                proptest::prop_assert_eq!(read, expected_slot(&bytes, index as usize, stride));
+            }
+            proptest::prop_assert!(slots.read(2).is_err());
+        }
+
+        /// Transfer directory names: exactly 32 lowercase hexadecimal
+        /// digits, and every ID round-trips.
+        #[test]
+        fn transfer_directory_names_round_trip(id in proptest::prelude::any::<[u8; 16]>(), text in "[0-9a-fA-Fg -]{0,34}") {
+            proptest::prop_assert_eq!(unhex16(&hex(&id)), Some(id));
+            match unhex16(&text) {
+                Some(parsed) => proptest::prop_assert_eq!(hex(&parsed), text),
+                None => proptest::prop_assert!(
+                    text.len() != 32 || !text.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+                ),
+            }
+        }
+    }
 }
