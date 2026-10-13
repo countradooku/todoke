@@ -251,6 +251,32 @@ pub struct Capabilities {
 }
 
 impl Capabilities {
+    /// The protocol maximums of every limit, advertising only `XChaCha`
+    /// (bit 1), the suite every v1 device supports.
+    pub const PROTOCOL_MAXIMUMS: Self = Self {
+        content_suites: 0b10,
+        max_manifest_bytes: MAX_MANIFEST_BYTES,
+        max_entries: MAX_ENTRIES,
+        max_file_bytes: MAX_FILE_BYTES,
+        max_transfer_bytes: MAX_TRANSFER_BYTES,
+        max_outstanding_chunks: MAX_OUTSTANDING_CHUNKS,
+    };
+
+    /// The same limits with another `content_suites` value.
+    ///
+    /// # Errors
+    ///
+    /// [`DecodeError::Reserved`] for a bit other than 0 and 1.
+    pub const fn with_content_suites(self, content_suites: u16) -> Result<Self, DecodeError> {
+        if content_suites & !0b11 != 0 {
+            return Err(DecodeError::Reserved);
+        }
+        Ok(Self {
+            content_suites,
+            ..self
+        })
+    }
+
     /// Assembles a record, checking every §6 range.
     ///
     /// # Errors
