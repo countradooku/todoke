@@ -309,8 +309,21 @@ impl Slots {
         }
     }
 
+    /// Hands the written slots to the storage device: `fdatasync` on Linux
+    /// and Android, `FlushFileBuffers` on Windows, and `fsync` on Apple
+    /// platforms. Apple's `fsync` does not flush the drive's own cache
+    /// (`F_FULLFSYNC` does, at about 4 ms per call, which would cap
+    /// reception near 4 MB/s); publication and every state record use the
+    /// full flush.
     pub(crate) fn sync(&self) -> io::Result<()> {
-        self.file.sync_data()
+        #[cfg(target_vendor = "apple")]
+        {
+            rustix::fs::fsync(&self.file).map_err(io::Error::from)
+        }
+        #[cfg(not(target_vendor = "apple"))]
+        {
+            self.file.sync_data()
+        }
     }
 }
 

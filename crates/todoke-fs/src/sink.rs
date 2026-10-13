@@ -29,9 +29,12 @@ use crate::quarantine::store::{
 /// When stored segments reach the disk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Durability {
-    /// Each segment is synced before [`ReceiveSink::store_segment`]
-    /// returns (PROTOCOL §7.4: "durably storing" before the request
-    /// retires). The default.
+    /// Each segment is synced to the storage device before
+    /// [`ReceiveSink::store_segment`] returns (PROTOCOL §7.4: "durably
+    /// storing" before the request retires): `fdatasync` on Linux and
+    /// Android, `FlushFileBuffers` on Windows, `fsync` on Apple platforms
+    /// (whose drive-cache flush, `F_FULLFSYNC`, is kept for publication and
+    /// state records). The default.
     EverySegment,
     /// Segments are written at once (they survive a crash of the app) and
     /// synced after every `bytes` of them and before publication; a power
@@ -124,6 +127,9 @@ struct Transfer {
     keyed: BTreeSet<u32>,
     /// Open ciphertext slots of files being received.
     slots: BTreeMap<u32, Slots>,
+    /// Files known to have no slots file yet (saves a failed open per
+    /// requested segment).
+    no_slots: BTreeSet<u32>,
     /// The destination plan (computed when first needed).
     plan: Option<DestinationPlan>,
     /// Sizes of the selected files.
@@ -274,6 +280,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             accepted: BTreeMap::new(),
             keyed: BTreeSet::new(),
             slots: BTreeMap::new(),
+            no_slots: BTreeSet::new(),
             plan: None,
             sizes: BTreeMap::new(),
             reserved: 0,
@@ -599,13 +606,20 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             return Err(SinkError::Storage);
         }
         if !transfer.slots.contains_key(&file_id) {
+            if !create && transfer.no_slots.contains(&file_id) {
+                return Ok(None);
+            }
             let size = *transfer.sizes.get(&file_id).ok_or(SinkError::Storage)?;
             let layout = SegmentLayout::new(size).map_err(storage)?;
             match Slots::open(&path, &layout, create) {
                 Ok(slots) => {
+                    transfer.no_slots.remove(&file_id);
                     transfer.slots.insert(file_id, slots);
                 }
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    transfer.no_slots.insert(file_id);
+                    return Ok(None);
+                }
                 Err(_) => return Err(SinkError::Storage),
             }
         }
@@ -970,6 +984,7 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
                 accepted: BTreeMap::new(),
                 keyed: BTreeSet::new(),
                 slots: BTreeMap::new(),
+                no_slots: BTreeSet::new(),
                 plan: Some(plan),
                 sizes: sizes(manifest, accept.selection()),
                 reserved: needed,
