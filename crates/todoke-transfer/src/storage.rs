@@ -168,7 +168,8 @@ pub trait ReceiveSink {
     ///
     /// # Errors
     ///
-    /// [`SinkError::Storage`].
+    /// [`SinkError::Storage`]; the transfer then fails with the
+    /// transfer-scoped `STORAGE` error (§12).
     fn retained_segment(
         &mut self,
         transfer_id: &TransferId,

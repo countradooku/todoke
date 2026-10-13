@@ -7,4 +7,5 @@ mod basic;
 mod decisions;
 mod e2e;
 mod lifecycle;
+mod storage_scope;
 mod support;

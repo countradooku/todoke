@@ -453,14 +453,11 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
     }
 
     fn after(&mut self, result: Handled, now: Duration) -> Result<(), EngineError> {
-        let result = result.and_then(|()| {
-            if matches!(self.phase, Phase::Ready(_)) {
-                self.schedule(now)?;
-                self.publish_ready(now);
-                self.next_resume_query();
-            }
-            Ok(())
-        });
+        if result.is_ok() && matches!(self.phase, Phase::Ready(_)) {
+            self.schedule(now);
+            self.publish_ready(now);
+            self.next_resume_query();
+        }
         match result {
             Ok(()) => Ok(()),
             Err(Violation(code)) => {

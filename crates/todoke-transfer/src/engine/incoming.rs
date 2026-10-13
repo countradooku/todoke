@@ -947,9 +947,9 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
     /// `min(own, peer)` outstanding, at most two active files, lowest
     /// missing segment first; retained segments are revalidated under this
     /// session's key instead of requested (§7.5).
-    pub(super) fn schedule(&mut self, now: Duration) -> Handled {
+    pub(super) fn schedule(&mut self, now: Duration) {
         let Phase::Ready(negotiated) = &self.phase else {
-            return Ok(());
+            return;
         };
         let mut pass = Pass {
             limit: negotiated.request_limit(),
@@ -958,6 +958,7 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             budget: REVALIDATION_BUDGET,
             requests: Vec::new(),
             events: Vec::new(),
+            failed: Vec::new(),
             pending: false,
             stop: false,
             now,
@@ -982,8 +983,8 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             }
             let file_ids: Vec<u32> = receiving.files.keys().copied().collect();
             for file_id in file_ids {
-                schedule_file(&mut self.sink, transfer_id, receiving, file_id, &mut pass)?;
-                if pass.stop {
+                schedule_file(&mut self.sink, transfer_id, receiving, file_id, &mut pass);
+                if pass.stop || pass.failed.contains(transfer_id) {
                     break;
                 }
             }
@@ -992,13 +993,19 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             }
         }
         self.revalidation_pending = pass.pending;
-        for request in pass.requests {
-            self.queue(FrameType::CHUNK_REQUEST, request);
+        for (transfer_id, request) in pass.requests {
+            if !pass.failed.contains(&transfer_id) {
+                self.queue(FrameType::CHUNK_REQUEST, request);
+            }
         }
         for event in pass.events {
             self.event(event);
         }
-        Ok(())
+        // §12: STORAGE is transfer-scoped; a local storage failure ends
+        // only its own transfer.
+        for transfer_id in pass.failed {
+            self.fail_incoming(&transfer_id, FailureCode::Storage);
+        }
     }
 
     /// Publishes complete files and, once every selected file is
@@ -1161,8 +1168,11 @@ struct Pass {
     active: Vec<(TransferId, u32)>,
     /// Retained segments this pass may still revalidate.
     budget: u32,
-    requests: Vec<Vec<u8>>,
+    requests: Vec<(TransferId, Vec<u8>)>,
     events: Vec<TransferEvent>,
+    /// Transfers whose retained data could not be read: they fail with
+    /// `STORAGE` after the pass, and their requests from it are not sent.
+    failed: Vec<TransferId>,
     /// Revalidation stopped at the budget and continues next call.
     pending: bool,
     /// A session-wide limit was reached: no more requests in this pass.
@@ -1179,9 +1189,9 @@ fn schedule_file<R: ReceiveSink>(
     receiving: &mut Receiving,
     file_id: u32,
     pass: &mut Pass,
-) -> Handled {
+) {
     let Some(accept_hash) = receiving.accept().map(|accept| *accept.accept_hash()) else {
-        return Ok(());
+        return;
     };
     let key = (*transfer_id, file_id);
     while let Some(FileState::Receiving(file)) = receiving.files.get_mut(&file_id) {
@@ -1226,7 +1236,8 @@ fn schedule_file<R: ReceiveSink>(
             }
             Ok(None) => {}
             Err(SinkError::Storage | SinkError::Integrity) => {
-                return Err(violation(FailureCode::Storage));
+                pass.failed.push(*transfer_id);
+                return;
             }
         }
         if file.tracker.can_record(index) != Ok(true) {
@@ -1252,11 +1263,11 @@ fn schedule_file<R: ReceiveSink>(
             },
         );
         file.cursor = index.saturating_add(1);
-        pass.requests.push(request.encode().to_vec());
+        pass.requests
+            .push((*transfer_id, request.encode().to_vec()));
         pass.outstanding += 1;
         if !is_active {
             pass.active.push(key);
         }
     }
-    Ok(())
 }
