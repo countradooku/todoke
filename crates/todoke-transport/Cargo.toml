@@ -26,7 +26,7 @@ futures-io.workspace = true
 # Dual-stack listening (IPV6_V6ONLY off on every platform) and socket
 # options; tokio's `net` feature already depends on it.
 socket2 = "=0.6.5"
-tokio = { workspace = true, features = ["net", "time", "rt"] }
+tokio = { workspace = true, features = ["net", "time", "rt", "sync"] }
 
 [dev-dependencies]
 proptest.workspace = true
@@ -38,5 +38,5 @@ todoke-crypto = { workspace = true, features = ["unaudited-suite-0001"] }
 todoke-transfer.workspace = true
 # A valid ML-KEM-768 public credential for test device bindings.
 libcrux-ml-kem.workspace = true
-tokio = { workspace = true, features = ["net", "time", "rt", "macros", "test-util", "io-util"] }
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros", "test-util", "io-util"] }
 zeroize.workspace = true

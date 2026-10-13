@@ -9,6 +9,7 @@ use core::task::Poll;
 use core::time::Duration;
 use std::net::SocketAddr;
 
+use futures_io::{AsyncRead as _, AsyncWrite as _};
 use todoke_crypto::content::ContentSuites;
 use todoke_crypto::discovery::DiscoveryTable;
 use todoke_crypto::identity::{
@@ -21,6 +22,7 @@ use todoke_crypto::session::{
     Accepted, IncomingSession, LocalIdentity, NoiseStaticKey, Session, SessionError, SessionMode,
     UnauditedSuite0001,
 };
+use todoke_proto::session::{Hello, PreludeKind, encode_prelude_record};
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::EntryKind;
 use todoke_proto::transfer::{Capabilities, ManifestLimits};
@@ -32,7 +34,9 @@ use zeroize::Zeroizing;
 
 use crate::LinkKind;
 use crate::link::LinkInfo;
-use crate::manager::{ConnectError, Established, Incoming, MigrationPolicy, TransportManager};
+use crate::manager::{
+    ConnectError, Established, Incoming, MigrationPolicy, OutgoingClaim, TransportManager,
+};
 use crate::race::Candidate;
 use crate::sim::{Answer, Path, SimConnector, SimLink};
 use crate::timer::TokioTimer;
@@ -176,11 +180,21 @@ async fn connect(
     connector: &SimConnector,
     candidates: &[Candidate],
 ) -> AnyResult<(Established<SimLink>, Established<SimLink>)> {
+    let claim = alice_manager.claim_outgoing(bob.key())?;
+    connect_claimed(claim, alice, bob, bob_manager, connector, candidates).await
+}
+
+/// As [`connect`], from a claim Alice already holds.
+async fn connect_claimed(
+    claim: OutgoingClaim<'_>,
+    alice: &mut Device,
+    bob: &mut Device,
+    bob_manager: &TransportManager,
+    connector: &SimConnector,
+    candidates: &[Candidate],
+) -> AnyResult<(Established<SimLink>, Established<SimLink>)> {
     let (alice_table, bob_table) = (alice.table()?, bob.table()?);
-    let connected = alice_manager
-        .claim_outgoing(bob.key())?
-        .connect(connector, candidates)
-        .await?;
+    let connected = claim.connect(connector, candidates).await?;
     let (_, far) = connector.accepted().pop().ok_or("no link opened")?;
     let (alice_local, alice_store) = alice.parts()?;
     let (bob_local, bob_store) = bob.parts()?;
@@ -190,8 +204,9 @@ async fn connect(
             return Err::<_, Box<dyn std::error::Error>>("expected a contact Hello".into());
         };
         Ok(incoming
-            .claim(&bob_table)?
-            .respond(bob_store, &bob_local, wall()?)
+            .claim(&bob_table, wall()?)
+            .await?
+            .respond(&bob_table, bob_store, &bob_local, wall()?)
             .await?)
     };
     let (initiated, responded) = tokio::join!(initiate, respond);
@@ -267,16 +282,43 @@ async fn contact_sessions_run_over_the_winning_link() -> TestResult {
     Ok(())
 }
 
-/// A Hello whose locator names no contact (here: one from before the last
-/// ratchet, as a replay would carry) is refused before any handshake.
+/// A `ClientHello` as anyone who saw (or guessed) a locator can send it.
+fn forged_hello(locator: [u8; 16]) -> AnyResult<Vec<u8>> {
+    let hello = Hello::client(SessionMode::Contact, 1, locator, [0x5e; 16])?;
+    Ok(encode_prelude_record(
+        PreludeKind::ClientHello,
+        &hello.encode(),
+    )?)
+}
+
+async fn write_all(link: &mut SimLink, mut data: &[u8]) -> std::io::Result<()> {
+    while !data.is_empty() {
+        let written = core::future::poll_fn(|cx| Pin::new(&mut *link).poll_write(cx, data)).await?;
+        data = &data[written..];
+    }
+    Ok(())
+}
+
+/// A link carrying a forged Hello, its far end for `accept`.
+async fn forged_link(locator: [u8; 16], from: u8) -> AnyResult<(SimLink, SimLink)> {
+    let (mut near, far) =
+        crate::sim::link(Path::new(MS), address(from), address(99), u64::from(from));
+    write_all(&mut near, &forged_hello(locator)?).await?;
+    Ok((near, far))
+}
+
+/// A table from before the last committed session is refused locally,
+/// before anything is sent; a replayed Hello with a locator from before
+/// that session is refused before any handshake.
 #[tokio::test(start_paused = true)]
-async fn hellos_for_unknown_locators_are_refused() -> TestResult {
+async fn stale_tables_and_old_locators_are_refused() -> TestResult {
     let (mut alice, mut bob) = paired().await?;
     let (alice_manager, bob_manager) = (alice.manager(), bob.manager());
     let connector = SimConnector::default();
     connector.answer(address(11), fast());
     let candidates = [Candidate::new(LinkKind::Simulated, address(11))];
-    let alice_old = alice.table()?;
+    let (alice_old, bob_old) = (alice.table()?, bob.table()?);
+    let old_locator = alice_old.locator(&bob.key()).ok_or("locator")?;
     // One session moves both sides to a new generation.
     drop(
         connect(
@@ -289,29 +331,94 @@ async fn hellos_for_unknown_locators_are_refused() -> TestResult {
         )
         .await?,
     );
+    // Alice with the old table: refused before a byte is sent.
     let connected = alice_manager
         .claim_outgoing(bob.key())?
         .connect(&connector, &candidates)
         .await?;
-    let (_, far) = connector.accepted().pop().ok_or("link")?;
+    let (_, mut far) = connector.accepted().pop().ok_or("link")?;
     let (alice_local, alice_store) = alice.parts()?;
-    let bob_table = bob.table()?;
-    let initiate = connected.initiate(&alice_old, alice_store, &alice_local, wall()?);
-    let respond = async {
-        let Incoming::Contact(incoming) = bob_manager.accept(far).await? else {
-            return Err::<(), Box<dyn std::error::Error>>("expected a contact Hello".into());
-        };
-        match incoming.claim(&bob_table) {
-            Err(ConnectError::UnknownPeer) => Ok(()),
-            other => Err(format!("{other:?}").into()),
-        }
+    let initiated = connected
+        .initiate(&alice_old, alice_store, &alice_local, wall()?)
+        .await;
+    assert!(matches!(initiated, Err(ConnectError::StaleTable)));
+    let mut byte = [0];
+    let read = core::future::poll_fn(|cx| Pin::new(&mut far).poll_read(cx, &mut byte)).await?;
+    assert_eq!(read, 0, "nothing may be sent with a stale table");
+    // A replay of the old Hello at Bob: no contact matches it now.
+    let (_held, link) = forged_link(old_locator, 40).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
     };
-    let (initiated, responded) = tokio::join!(initiate, respond);
-    responded?;
-    // The refused attempt ends Alice's handshake without a journal: her
-    // pairing stays usable.
-    assert!(initiated.is_err());
+    assert!(matches!(
+        incoming.claim(&bob.table()?, wall()?).await,
+        Err(ConnectError::UnknownPeer)
+    ));
+    // Bob's own old table is refused once the epoch moves on.
+    let (_held, link) = forged_link(old_locator, 41).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let later = time(WALL + 3 * todoke_proto::discovery::EPOCH_SECONDS)?;
+    assert!(matches!(
+        incoming.claim(&bob_old, later).await,
+        Err(ConnectError::StaleTable)
+    ));
     assert!(matches!(alice.store.availability(&bob.key()), Ok(Ok(_))));
+    Ok(())
+}
+
+/// R1: a replayed Hello must not cost the larger device its own outgoing
+/// session. The replay waits; the real session completes; the replay is
+/// refused, and nothing is discarded or blocked.
+#[tokio::test(start_paused = true)]
+async fn a_replayed_hello_never_displaces_an_outgoing_attempt() -> TestResult {
+    let (alice, bob) = paired().await?;
+    let (mut small, mut large) = if alice.key() < bob.key() {
+        (alice, bob)
+    } else {
+        (bob, alice)
+    };
+    let (small_manager, large_manager) = (small.manager(), large.manager());
+    let (small_table, large_table) = (small.table()?, large.table()?);
+    let locator = small_table.locator(&large.key()).ok_or("locator")?;
+    let connector = SimConnector::default();
+    connector.answer(address(50), fast());
+    let connected = large_manager
+        .claim_outgoing(small.key())?
+        .connect(
+            &connector,
+            &[Candidate::new(LinkKind::Simulated, address(50))],
+        )
+        .await?;
+    let (_, at_small) = connector.accepted().pop().ok_or("link")?;
+    // The replay arrives while the larger device's attempt is under way.
+    let (_held, replay) = forged_link(locator, 51).await?;
+    let Incoming::Contact(replayed) = large_manager.accept(replay).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let (large_local, large_store) = large.parts()?;
+    let (small_local, small_store) = small.parts()?;
+    let replay_claim = replayed.claim(&large_table, wall()?);
+    let outgoing = connected.initiate(&large_table, large_store, &large_local, wall()?);
+    let responding = async {
+        let Incoming::Contact(incoming) = small_manager.accept(at_small).await? else {
+            return Err::<_, Box<dyn std::error::Error>>("expected a contact Hello".into());
+        };
+        Ok(incoming
+            .claim(&small_table, wall()?)
+            .await?
+            .respond(&small_table, small_store, &small_local, wall()?)
+            .await?)
+    };
+    let (claimed, initiated, responded) = tokio::join!(replay_claim, outgoing, responding);
+    let (mut at_large, mut at_small) = (initiated?, responded?);
+    assert!(matches!(claimed, Err(ConnectError::Busy)));
+    assert_eq!(
+        at_large.session().session_id(),
+        at_small.session().session_id()
+    );
+    assert!(large_manager.is_busy(&small.key()));
     Ok(())
 }
 
@@ -360,7 +467,7 @@ async fn simultaneous_attempts_keep_one_connection() -> TestResult {
             let Incoming::Contact(incoming) = small_manager.accept(at_small).await? else {
                 return Err::<(), Box<dyn std::error::Error>>("expected a contact Hello".into());
             };
-            match incoming.claim(&small_table) {
+            match incoming.claim(&small_table, wall()?).await {
                 Err(ConnectError::Busy) => Ok(()),
                 other => Err(format!("{other:?}").into()),
             }
@@ -377,14 +484,26 @@ async fn simultaneous_attempts_keep_one_connection() -> TestResult {
             let Incoming::Contact(incoming) = large_manager.accept(at_large).await? else {
                 return Err::<_, Box<dyn std::error::Error>>("expected a contact Hello".into());
             };
-            Ok(incoming.claim(&large_table)?)
+            Ok(incoming.claim(&large_table, wall()?).await?)
         };
         let (own, claimed) = tokio::join!(
             large_out.initiate(&large_table, &mut *large_store, &large_local, wall()?),
             take
         );
-        assert!(own.is_err(), "the larger device's own attempt must fail");
-        let responded = claimed?.respond(large_store, &large_local, wall()?).await?;
+        // Refused at its Hello by the smaller device: the stream closes
+        // before the Noise handshake, so nothing was journaled.
+        assert!(
+            matches!(
+                own,
+                Err(ConnectError::Session(
+                    SessionError::Closed | SessionError::Io(_)
+                ))
+            ),
+            "{own:?}"
+        );
+        let responded = claimed?
+            .respond(&large_table, large_store, &large_local, wall()?)
+            .await?;
         Ok::<_, Box<dyn std::error::Error>>(responded)
     };
     let (small_result, large_result) = tokio::join!(small_side, large_side);
@@ -442,11 +561,85 @@ async fn the_unauthenticated_attempt_budget_applies() -> TestResult {
     let refused = manager.accept(far_ends.next().ok_or("link")?).await;
     assert!(matches!(
         refused,
-        Err(SessionError::Pairing(PairingError::RateLimited))
+        Err(ConnectError::Session(SessionError::Pairing(
+            PairingError::RateLimited
+        )))
     ));
-    // The silent ones time out at the handshake deadline.
-    assert!(matches!(first.await, Err(SessionError::Timeout)));
+    // The silent ones give up after the first-record deadline, well before
+    // the 30-second handshake bound.
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        first.await,
+        Err(ConnectError::Session(SessionError::Timeout))
+    ));
+    assert!(started.elapsed() <= crate::manager::FIRST_RECORD_TIMEOUT);
     drop(held);
+    Ok(())
+}
+
+/// R1: 20 attempt starts a minute (§13) is a sliding window on one clock:
+/// after a burst the manager refuses for a minute, then accepts again. With
+/// a clock per link the window never slid and 20 connections locked the
+/// device out for good.
+#[tokio::test(start_paused = true)]
+async fn the_start_budget_window_slides() -> TestResult {
+    let bob = Device::new(0x42)?;
+    let manager = bob.manager();
+    let closed = |n: u8| {
+        let (near, far) = crate::sim::link(Path::new(MS), address(n), address(99), u64::from(n));
+        drop(near);
+        far
+    };
+    let refused = |result: &Result<Incoming<'_, SimLink>, ConnectError>| {
+        matches!(
+            result,
+            Err(ConnectError::Session(SessionError::Pairing(
+                PairingError::RateLimited
+            )))
+        )
+    };
+    for n in 0..20_u8 {
+        let result = manager.accept(closed(n)).await;
+        assert!(result.is_err() && !refused(&result), "start {n}");
+    }
+    assert!(refused(&manager.accept(closed(20)).await));
+    tokio::time::sleep(Duration::from_secs(30)).await;
+    assert!(refused(&manager.accept(closed(21)).await));
+    tokio::time::sleep(Duration::from_secs(31)).await;
+    let again = manager.accept(closed(22)).await;
+    assert!(
+        again.is_err() && !refused(&again),
+        "the window did not slide"
+    );
+    Ok(())
+}
+
+/// At most two unauthenticated attempts from one address at a time.
+#[tokio::test(start_paused = true)]
+async fn one_source_cannot_take_every_attempt() -> TestResult {
+    let bob = Device::new(0x42)?;
+    let manager = bob.manager();
+    let mut held = Vec::new();
+    let mut from_one = Vec::new();
+    for n in 0..3_u8 {
+        let (near, far) = crate::sim::link(Path::new(MS), address(60), address(99), u64::from(n));
+        held.push(near);
+        from_one.push(far);
+    }
+    let mut from_one = from_one.into_iter();
+    let mut first = pin!(manager.accept(from_one.next().ok_or("link")?));
+    let mut second = pin!(manager.accept(from_one.next().ok_or("link")?));
+    assert!(start(first.as_mut()).await.is_none());
+    assert!(start(second.as_mut()).await.is_none());
+    assert!(matches!(
+        manager.accept(from_one.next().ok_or("link")?).await,
+        Err(ConnectError::SourceBusy)
+    ));
+    // Another address still gets in.
+    let (other_near, other) = crate::sim::link(Path::new(MS), address(61), address(99), 9);
+    let mut other_accept = pin!(manager.accept(other));
+    assert!(start(other_accept.as_mut()).await.is_none());
+    drop((held, other_near));
     Ok(())
 }
 
@@ -614,6 +807,8 @@ async fn receive<'k>(
 
 /// The first leg of a migration: what is left after the slow session ends.
 struct Interrupted {
+    /// Alice's session on the slow link, which Bob closed.
+    session: Established<SimLink>,
     resumed: OutgoingOffer,
     source: MemorySource,
     sink: MemorySink,
@@ -686,6 +881,7 @@ async fn interrupted_on_the_slow_link(
     let (_, sink) = received.0.engine.into_parts();
     Ok((
         Interrupted {
+            session: at_alice,
             resumed,
             source,
             sink,
@@ -725,18 +921,16 @@ async fn a_transfer_migrates_to_a_faster_link() -> TestResult {
         },
     );
     let fast = [Candidate::new(LinkKind::Simulated, address(FAST))];
-    let fast_info = LinkInfo::new(LinkKind::Simulated).with_latency(MS * 2);
+    // Probe it (a connection, no session) and compare measured latencies.
+    let probe = crate::race::race(&connector, &fast, &crate::race::RaceConfig::default()).await?;
+    let fast_info = *crate::link::Link::info(&probe);
+    drop((probe, connector.accepted()));
     assert!(MigrationPolicy::default().should_migrate(&left.slow, &fast_info));
-    // A fresh session on the fast link, and a fresh Accept.
-    let (mut at_alice, mut at_bob) = connect(
-        &mut alice,
-        &mut bob,
-        &alice_manager,
-        &bob_manager,
-        &connector,
-        &fast,
-    )
-    .await?;
+    assert!(!MigrationPolicy::default().should_migrate(&fast_info, &left.slow));
+    // Break before make: the old session is closed and its slot reused.
+    let claim = alice_manager.migrate(left.session)?;
+    let (mut at_alice, mut at_bob) =
+        connect_claimed(claim, &mut alice, &mut bob, &bob_manager, &connector, &fast).await?;
     assert_eq!(at_alice.link().remote(), Some(address(FAST)));
     assert_eq!(at_alice.session().mode(), SessionMode::Contact);
     let alice_engine = engine(

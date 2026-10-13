@@ -26,83 +26,126 @@ fn manager(local: Ed25519PublicKey) -> TransportManager {
     TransportManager::new(GATE, local, PairingOffers::new())
 }
 
+fn taken(claim: Result<Claim, ConnectError>) -> Result<SlotGuard, Box<dyn std::error::Error>> {
+    match claim? {
+        Claim::Taken(slot) => Ok(slot),
+        Claim::Wait(_) => Err("expected the slot, got a wait".into()),
+    }
+}
+
+fn busy(claim: &Result<Claim, ConnectError>) -> bool {
+    matches!(claim, Err(ConnectError::Busy))
+}
+
 #[test]
 fn one_attempt_or_session_per_device_pair() -> TestResult {
     let (local, peer) = two_keys()?;
     let manager = manager(local);
-    let first = manager.claim(peer, Direction::Outgoing)?;
+    let first = taken(manager.claim(peer, Direction::Outgoing))?;
     assert!(manager.is_busy(&peer));
-    assert!(matches!(
-        manager.claim(peer, Direction::Outgoing),
-        Err(ConnectError::Busy)
-    ));
+    assert!(busy(&manager.claim(peer, Direction::Outgoing)));
     first.activate()?;
     // An established session blocks both directions.
-    assert!(matches!(
-        manager.claim(peer, Direction::Incoming),
-        Err(ConnectError::Busy)
-    ));
+    assert!(busy(&manager.claim(peer, Direction::Incoming)));
     drop(first);
     assert!(!manager.is_busy(&peer));
-    let incoming = manager.claim(peer, Direction::Incoming)?;
-    assert!(matches!(
-        manager.claim(peer, Direction::Outgoing),
-        Err(ConnectError::Busy)
-    ));
-    assert!(matches!(
-        manager.claim(peer, Direction::Incoming),
-        Err(ConnectError::Busy)
-    ));
+    let incoming = taken(manager.claim(peer, Direction::Incoming))?;
+    assert!(busy(&manager.claim(peer, Direction::Outgoing)));
+    assert!(busy(&manager.claim(peer, Direction::Incoming)));
     drop(incoming);
     assert!(!manager.is_busy(&peer));
     Ok(())
 }
 
-/// §4: the smaller key keeps its outgoing attempt, the larger its incoming.
+/// §4: the smaller key keeps its outgoing attempt; the larger keeps its
+/// incoming one, but only after its own outgoing attempt has failed: an
+/// incoming Hello (unauthenticated) never displaces anything.
 #[test]
-fn simultaneous_attempts_follow_the_key_order() -> TestResult {
+fn simultaneous_attempts_follow_the_key_order_without_displacement() -> TestResult {
     let (small, large) = two_keys()?;
     // The smaller device refuses the larger's incoming attempt.
     let at_small = manager(small);
-    let outgoing = at_small.claim(large, Direction::Outgoing)?;
-    assert!(matches!(
-        at_small.claim(large, Direction::Incoming),
-        Err(ConnectError::Busy)
-    ));
+    let outgoing = taken(at_small.claim(large, Direction::Outgoing))?;
+    assert!(busy(&at_small.claim(large, Direction::Incoming)));
     outgoing.activate()?;
-    // The larger device takes the smaller's incoming attempt over its own
-    // outgoing one, which can then never become the session.
+    // The larger device: the incoming attempt waits; only one may.
     let at_large = manager(large);
-    let own = at_large.claim(small, Direction::Outgoing)?;
-    let theirs = at_large.claim(small, Direction::Incoming)?;
-    assert!(matches!(own.activate(), Err(ConnectError::Superseded)));
-    theirs.activate()?;
-    // The superseded attempt ending does not free the winner's slot.
+    let own = taken(at_large.claim(small, Direction::Outgoing))?;
+    let Claim::Wait(id) = at_large.claim(small, Direction::Incoming)? else {
+        return Err("the incoming attempt must wait".into());
+    };
+    assert_eq!(id, own.id);
+    assert!(busy(&at_large.claim(small, Direction::Incoming)));
+    // Its own attempt failed: the incoming one now gets the slot.
+    at_large.stop_waiting(&small, id);
     drop(own);
-    assert!(at_large.is_busy(&small));
-    assert!(matches!(
-        at_large.claim(small, Direction::Incoming),
-        Err(ConnectError::Busy)
-    ));
+    let theirs = taken(at_large.claim(small, Direction::Incoming))?;
+    theirs.activate()?;
     drop(theirs);
-    assert!(!at_large.is_busy(&small));
-    assert_eq!(lock(&at_large.slots).superseded.len(), 0);
+    // Its own attempt succeeded: the waiting incoming one is refused.
+    let own = taken(at_large.claim(small, Direction::Outgoing))?;
+    assert!(matches!(
+        at_large.claim(small, Direction::Incoming)?,
+        Claim::Wait(_)
+    ));
+    own.activate()?;
+    assert!(busy(&at_large.claim(small, Direction::Incoming)));
+    assert!(at_large.is_busy(&small));
     Ok(())
 }
 
-/// Once the larger device's outgoing session is established, a late
-/// incoming attempt is refused like any other.
+/// A stale guard (an outgoing attempt that lost its slot) cannot activate
+/// another attempt's slot, and dropping it frees nothing that is not its.
 #[test]
-fn an_established_session_is_never_superseded() -> TestResult {
-    let (small, large) = two_keys()?;
-    let at_large = manager(large);
-    let own = at_large.claim(small, Direction::Outgoing)?;
-    own.activate()?;
+fn guards_only_touch_their_own_slot() -> TestResult {
+    let (local, peer) = two_keys()?;
+    let manager = manager(local);
+    let first = taken(manager.claim(peer, Direction::Outgoing))?;
+    let stale = SlotGuard {
+        state: Arc::clone(&manager.state),
+        peer,
+        id: first.id.wrapping_add(100),
+    };
+    assert!(matches!(stale.activate(), Err(ConnectError::Busy)));
+    drop(stale);
+    assert!(manager.is_busy(&peer));
+    drop(first);
+    assert!(!manager.is_busy(&peer));
+    Ok(())
+}
+
+/// At most two unauthenticated attempts from one source address; others
+/// are counted separately; dropping a guard frees its place.
+#[test]
+fn attempts_per_source_are_bounded() -> TestResult {
+    let (local, _) = two_keys()?;
+    let manager = manager(local);
+    let host: IpAddr = "192.168.1.9".parse()?;
+    let other: IpAddr = "192.168.1.10".parse()?;
+    let first = manager.source(Some(host))?;
+    let second = manager.source(Some(host))?;
     assert!(matches!(
-        at_large.claim(small, Direction::Incoming),
-        Err(ConnectError::Busy)
+        manager.source(Some(host)),
+        Err(ConnectError::SourceBusy)
     ));
-    own.activate()?;
+    let elsewhere = manager.source(Some(other))?;
+    drop(first);
+    let third = manager.source(Some(host))?;
+    drop((second, third, elsewhere));
+    assert_eq!(lock(&manager.state).sources.len(), 0);
+    // A link without an address is not counted.
+    let _unknown = manager.source(None)?;
+    assert_eq!(lock(&manager.state).sources.len(), 0);
+    Ok(())
+}
+
+#[test]
+fn debug_output_names_no_device() -> TestResult {
+    let (local, peer) = two_keys()?;
+    let manager = manager(local);
+    let slot = taken(manager.claim(peer, Direction::Outgoing))?;
+    let shown = format!("{manager:?} {slot:?} {:?}", lock(&manager.state));
+    assert!(!shown.contains(&format!("{peer:?}")), "{shown}");
     Ok(())
 }
 
