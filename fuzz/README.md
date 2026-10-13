@@ -25,10 +25,16 @@ re-encoding reproduces it exactly, so accepted encodings are canonical.
 | `crypto_content_bao_slice` | Strict Bao 0.13.1 slice verification (the receiver's parser for decrypted content): fuzzer bytes as the slice of a chosen segment of a known file of up to five and a half segments; an accepted slice must yield exactly that segment's bytes (PROTOCOL §7.4) |
 | `crypto_content_segment` | `ContentOpener::open_segment`: ciphertext length, AEAD authentication (either suite), then Bao verification, for a chosen segment of a known file; only the honest ciphertext may open (PROTOCOL §7.4, §8) |
 | `crypto_content_file_key` | `FileKeyBody::decode`: exactly 86 bytes, nonzero transfer and file IDs, suite 1 or 2; accepted bodies re-encode to the input (PROTOCOL §8) |
+| `proto_transfer_records` | `Capabilities`, `ManifestStart`, `ManifestPart`, `Accept`, `Reject`, `ChunkRequest`, `Chunk` (and its transfer-ID peek), `ResumeQuery`, `ResumeStatus`, `Cancel`/`CancelAck`, `Complete`, and `DeliveryReceipt` decoders, selected by the first byte; accepted records re-encode exactly and keep their range and ordering rules (PROTOCOL §6, §7) |
+| `proto_transfer_manifest` | `Manifest::decode` with the protocol limits or small receiver limits: header, consecutive IDs, preceding-directory parents, NFC names and reserved characters, MIME labels, sizes, roots, suites, depth, and path length; accepted manifests re-encode exactly (PROTOCOL §7.1) |
+| `crypto_consent_manifest` | `CanonicalManifest::parse`: the schema plus Ed25519 key validation and the empty-file root; an accepted manifest keeps the exact input and its hash (PROTOCOL §7.1) |
+| `crypto_consent_accept` | `verify_accept` against the committed fixture's session, manifest, and keys: only the fixture Accept may verify (PROTOCOL §7.3) |
+| `crypto_consent_receipt` | `verify_receipt` against that Accept: only the receipt signed at start-up with the fixture's public receiver seed may verify (PROTOCOL §7.7) |
 
 The `crypto_*` targets call `todoke_crypto::identity::fuzzing`,
-`todoke_crypto::pairing::fuzzing`, `todoke_crypto::session::fuzzing`, or
-`todoke_crypto::content::fuzzing`, which exist only under `--cfg fuzzing` (set
+`todoke_crypto::pairing::fuzzing`, `todoke_crypto::session::fuzzing`,
+`todoke_crypto::content::fuzzing`, or `todoke_crypto::consent::fuzzing`,
+which exist only under `--cfg fuzzing` (set
 by cargo-fuzz). Each of their functions wraps the same decoder or state
 machine that production code uses. Because anyone can pass `--cfg fuzzing`
 through `RUSTFLAGS`, a module that bypasses a gate also needs that gate's
@@ -40,8 +46,9 @@ feature:
 - `content::fuzzing` stands in for a verified Accept through
   `AcceptedFile::assume_accepted_without_verification`, so it needs
   `insecure-content-without-accept`. It uses fixed public keys and files.
-- `identity::fuzzing` and `pairing::fuzzing` only decode, so the cfg alone
-  is enough.
+- `identity::fuzzing` and `pairing::fuzzing` only decode, and
+  `consent::fuzzing` only verifies records against fixed public fixture
+  keys, so the cfg alone is enough.
 
 `fuzz/Cargo.toml` therefore enables `todoke-crypto`'s `unaudited-code-pairing`
 (which implies `unaudited-suite-0001`) and `insecure-content-without-accept`
@@ -50,7 +57,11 @@ checks this), and `scripts/ci/fuzzing-gates.test.sh` checks that `--cfg
 fuzzing` without a feature exposes no module behind it.
 
 Committed seeds live in `fuzz/seeds/<target>/`: small valid and malformed
-inputs built from public RFC 8032 test keys and fixed bytes. `fuzz/corpus/` is
+inputs built from public RFC 8032 test keys and fixed bytes. The transfer
+and consent seeds come from the committed `manifest-hash.json` and
+`accept-signature.json` fixtures, a small folder manifest, one valid record
+of each type, and a delivery receipt signed with the fixtures' public
+receiver seed (the same one `consent::fuzzing` signs at start-up). `fuzz/corpus/` is
 generated and ignored by git. `scripts/ci/fuzz-smoke.sh` passes both
 directories, with the generated corpus first, so libFuzzer writes new inputs
 there and only reads the seeds.
