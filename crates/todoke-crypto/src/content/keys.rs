@@ -83,9 +83,9 @@ impl FileMaster {
     pub fn open_sealed<S: Sealer + ?Sized>(
         sealer: &S,
         context: &[u8],
-        sealed: &[u8],
+        blob: &[u8],
     ) -> Result<Self, SealError> {
-        let opened = sealer.open(context, sealed)?;
+        let opened = sealer.open(context, blob)?;
         let mut master = Zeroizing::new([0; 32]);
         if opened.len() != master.len() {
             return Err(SealError);
