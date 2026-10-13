@@ -172,3 +172,53 @@ fn debug_output_hides_addresses() -> TestResult {
         Ok::<_, Box<dyn std::error::Error>>(())
     })
 }
+
+/// R3: a candidate of another link kind is refused before any packet,
+/// even at an address the policy allows.
+#[tokio::test]
+async fn only_lan_candidates_are_connected() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    let listener = LanListener::bind(0, policy)?;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, listener.port()?));
+    let refused = TcpConnector::new(policy)
+        .connect(Candidate::new(LinkKind::Simulated, address))
+        .await;
+    assert_eq!(
+        refused.map(|_| ()).map_err(|error| error.kind()),
+        Err(io::ErrorKind::Unsupported)
+    );
+    let accepted = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+    assert!(accepted.is_err(), "a refused candidate was connected");
+    Ok(())
+}
+
+/// R3: vectored writes reach the far end in order.
+#[tokio::test]
+async fn vectored_writes_carry_every_slice() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    let listener = LanListener::bind(0, policy)?;
+    let candidate = Candidate::new(
+        LinkKind::Lan,
+        SocketAddr::from((Ipv4Addr::LOCALHOST, listener.port()?)),
+    );
+    let connector = TcpConnector::new(policy);
+    let (client, server) = tokio::join!(connector.connect(candidate), listener.accept());
+    let (mut client, mut server) = (client?, server?);
+    let expected = b"vectored write".to_vec();
+    let (mut first, mut second): (&[u8], &[u8]) = (b"vectored ", b"write");
+    while !first.is_empty() || !second.is_empty() {
+        let slices = [io::IoSlice::new(first), io::IoSlice::new(second)];
+        let written =
+            core::future::poll_fn(|cx| Pin::new(&mut client).poll_write_vectored(cx, &slices))
+                .await?;
+        assert_ne!(written, 0);
+        let from_first = written.min(first.len());
+        first = &first[from_first..];
+        second = &second[written - from_first..];
+    }
+    core::future::poll_fn(|cx| Pin::new(&mut client).poll_flush(cx)).await?;
+    let mut out = vec![0; expected.len()];
+    read_exact(&mut server, &mut out).await?;
+    assert_eq!(out, expected);
+    Ok(())
+}

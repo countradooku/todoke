@@ -159,6 +159,24 @@ fn candidate_debug_output_hides_the_address() {
     assert!(!shown.contains("192.168"), "{shown}");
 }
 
+#[test]
+fn race_errors_have_distinct_messages() {
+    let messages: Vec<String> = [
+        RaceError::NoCandidates,
+        RaceError::Failed(vec![std::io::ErrorKind::ConnectionRefused]),
+        RaceError::Timeout,
+    ]
+    .iter()
+    .map(ToString::to_string)
+    .collect();
+    for (index, message) in messages.iter().enumerate() {
+        assert_ne!(message, "");
+        assert!(!messages[..index].contains(message), "{message}");
+    }
+    // The count of failures, never their addresses.
+    assert!(messages.get(1).is_some_and(|m| m.contains("(1)")));
+}
+
 proptest! {
     /// Ordering keeps a subset of the input without duplicates, bounded,
     /// alternating families while both remain.

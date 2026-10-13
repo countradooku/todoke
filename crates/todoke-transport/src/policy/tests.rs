@@ -131,6 +131,18 @@ fn local_network_interfaces_are_recognised() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn refusals_have_distinct_messages() {
+    let messages: Vec<String> = [Refusal::NotLocal, Refusal::PrivilegedPort, Refusal::NoScope]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    for (index, message) in messages.iter().enumerate() {
+        assert_ne!(message, "");
+        assert!(!messages[..index].contains(message), "{message}");
+    }
+}
+
 proptest! {
     /// An allowed IPv4 peer is private or link-local, not loopback, on an
     /// unprivileged port; whatever the policy allows as a peer, it also

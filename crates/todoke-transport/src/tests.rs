@@ -982,3 +982,346 @@ async fn a_transfer_migrates_to_a_faster_link() -> TestResult {
     );
     Ok(())
 }
+
+// --- R3: paths the tests above do not reach ------------------------------
+
+/// The larger and the smaller of two paired devices.
+async fn ordered() -> AnyResult<(Device, Device)> {
+    let (alice, bob) = paired().await?;
+    Ok(if alice.key() < bob.key() {
+        (alice, bob)
+    } else {
+        (bob, alice)
+    })
+}
+
+/// R3: on the larger device, an incoming attempt waits for its own
+/// outgoing attempt to the same peer at most `SIMULTANEOUS_WAIT`, then is
+/// refused; the wait is released, so the next incoming attempt may wait
+/// again, and it takes the slot once the outgoing attempt is dropped.
+#[tokio::test(start_paused = true)]
+async fn an_incoming_attempt_waits_at_most_the_simultaneous_wait() -> TestResult {
+    let (small, large) = ordered().await?;
+    let manager = large.manager();
+    let (small_table, large_table) = (small.table()?, large.table()?);
+    let locator = small_table.locator(&large.key()).ok_or("locator")?;
+    let own = manager.claim_outgoing(small.key())?;
+    let (_held, link) = forged_link(locator, 70).await?;
+    let Incoming::Contact(incoming) = manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    assert!(!format!("{incoming:?}").contains("192.168"));
+    let started = tokio::time::Instant::now();
+    assert!(matches!(
+        incoming.claim(&large_table, wall()?).await,
+        Err(ConnectError::Busy)
+    ));
+    assert_eq!(started.elapsed(), crate::manager::SIMULTANEOUS_WAIT);
+    // The next one waits again (the first wait was released) and gets the
+    // slot when the outgoing attempt ends.
+    let (_held, link) = forged_link(locator, 71).await?;
+    let Incoming::Contact(incoming) = manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let mut claim = pin!(incoming.claim(&large_table, wall()?));
+    assert!(start(claim.as_mut()).await.is_none(), "it did not wait");
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    drop(own);
+    let claimed = claim.await?;
+    assert!(!format!("{claimed:?}").contains("192.168"));
+    assert!(manager.is_busy(&small.key()));
+    drop(claimed);
+    assert!(!manager.is_busy(&small.key()));
+    Ok(())
+}
+
+/// R3: pairing Hellos and code offer requests are handed to the pairing
+/// flow, not resolved as contacts.
+#[tokio::test(start_paused = true)]
+async fn pairing_streams_go_to_the_pairing_flow() -> TestResult {
+    let bob = Device::new(0x42)?;
+    let manager = bob.manager();
+    let hello = Hello::client(SessionMode::Qr, 0, [0x77; 16], [0x5e; 16])?;
+    let (mut near, far) = crate::sim::link(Path::new(MS), address(80), address(99), 80);
+    write_all(
+        &mut near,
+        &encode_prelude_record(PreludeKind::ClientHello, &hello.encode())?,
+    )
+    .await?;
+    let accepted = manager.accept(far).await?;
+    assert!(matches!(accepted, Incoming::Pairing(_)));
+    assert_eq!(format!("{accepted:?}"), "Incoming::Pairing");
+    let request = todoke_proto::pairing::CodeOfferRequest::new([7; 8])?;
+    let (mut near, far) = crate::sim::link(Path::new(MS), address(81), address(99), 81);
+    write_all(
+        &mut near,
+        &encode_prelude_record(PreludeKind::CodeOfferRequest, &request.encode())?,
+    )
+    .await?;
+    let accepted = manager.accept(far).await?;
+    assert!(matches!(accepted, Incoming::CodeOfferRequest(_)));
+    assert_eq!(format!("{accepted:?}"), "Incoming::CodeOfferRequest");
+    let (mut near, far) = crate::sim::link(Path::new(MS), address(82), address(99), 82);
+    write_all(&mut near, &forged_hello([0x42; 16])?).await?;
+    let accepted = manager.accept(far).await?;
+    assert_eq!(format!("{accepted:?}"), "Incoming::Contact");
+    Ok(())
+}
+
+/// R3: a table that went stale between the claim and the handshake is
+/// refused on both sides before anything is sent, a peer missing from the
+/// table is unknown, and a contact that became unavailable after its table
+/// was built is refused by the store; every refusal frees the slot.
+#[tokio::test(start_paused = true)]
+async fn tables_are_checked_again_at_the_handshake() -> TestResult {
+    let (mut alice, mut bob) = paired().await?;
+    let (alice_manager, bob_manager) = (alice.manager(), bob.manager());
+    let (alice_table, bob_table) = (alice.table()?, bob.table()?);
+    let later = time(WALL + todoke_proto::discovery::EPOCH_SECONDS)?;
+    // Responder: claimed in one epoch, responding in the next.
+    let locator = alice_table.locator(&bob.key()).ok_or("locator")?;
+    let (_held, link) = forged_link(locator, 90).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_table, wall()?).await?;
+    let (bob_local, bob_store) = bob.parts()?;
+    assert!(matches!(
+        claimed
+            .respond(&bob_table, bob_store, &bob_local, later)
+            .await,
+        Err(ConnectError::StaleTable)
+    ));
+    assert!(!bob_manager.is_busy(&alice.key()));
+    // Initiator: a link the caller opened, then a stale table.
+    let (near, mut far) = crate::sim::link(Path::new(MS), address(91), address(92), 91);
+    let connected = alice_manager.claim_outgoing(bob.key())?.with_link(near);
+    assert_eq!(connected.link().kind(), LinkKind::Simulated);
+    assert_eq!(connected.link().remote(), Some(address(92)));
+    assert!(!format!("{connected:?}").contains("192.168"));
+    let (alice_local, alice_store) = alice.parts()?;
+    assert!(matches!(
+        connected
+            .initiate(&alice_table, alice_store, &alice_local, later)
+            .await,
+        Err(ConnectError::StaleTable)
+    ));
+    let mut byte = [0];
+    let read = core::future::poll_fn(|cx| Pin::new(&mut far).poll_read(cx, &mut byte)).await?;
+    assert_eq!(read, 0, "nothing may be sent with a stale table");
+    assert!(!alice_manager.is_busy(&bob.key()));
+    // The contact became unavailable after the table was built.
+    alice.store.mark_ratchet_uncertain(&bob.key())?;
+    let (near, _far) = crate::sim::link(Path::new(MS), address(93), address(94), 93);
+    let connected = alice_manager.claim_outgoing(bob.key())?.with_link(near);
+    let (alice_local, alice_store) = alice.parts()?;
+    let refused = connected
+        .initiate(&alice_table, alice_store, &alice_local, wall()?)
+        .await;
+    assert!(
+        matches!(refused, Err(ConnectError::Session(_))),
+        "{refused:?}"
+    );
+    // A table built since then no longer has the peer.
+    let current = alice.table()?;
+    let (near, _far) = crate::sim::link(Path::new(MS), address(95), address(96), 95);
+    let connected = alice_manager.claim_outgoing(bob.key())?.with_link(near);
+    let (alice_local, alice_store) = alice.parts()?;
+    assert!(matches!(
+        connected
+            .initiate(&current, alice_store, &alice_local, wall()?)
+            .await,
+        Err(ConnectError::UnknownPeer)
+    ));
+    assert!(!alice_manager.is_busy(&bob.key()));
+    Ok(())
+}
+
+/// R3: a responder handshake that fails (the initiator went away after its
+/// Hello) frees the slot and the source's attempt, and leaves the pairing
+/// usable.
+#[tokio::test(start_paused = true)]
+async fn a_failed_responder_handshake_frees_everything() -> TestResult {
+    let (alice, mut bob) = paired().await?;
+    let bob_manager = bob.manager();
+    let (alice_table, bob_table) = (alice.table()?, bob.table()?);
+    let locator = alice_table.locator(&bob.key()).ok_or("locator")?;
+    let (held, link) = forged_link(locator, 100).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_table, wall()?).await?;
+    drop(held);
+    let (bob_local, bob_store) = bob.parts()?;
+    let failed = claimed
+        .respond(&bob_table, bob_store, &bob_local, wall()?)
+        .await;
+    assert!(
+        matches!(failed, Err(ConnectError::Session(_))),
+        "{failed:?}"
+    );
+    assert!(!bob_manager.is_busy(&alice.key()));
+    assert!(matches!(bob.store.availability(&alice.key()), Ok(Ok(_))));
+    // The source's two attempts are both free again, and only two.
+    let mut kept = Vec::new();
+    for _ in 0..2 {
+        let (held, link) = forged_link(locator, 100).await?;
+        kept.push((held, bob_manager.accept(link).await?));
+    }
+    let (_held, link) = forged_link(locator, 100).await?;
+    assert!(matches!(
+        bob_manager.accept(link).await,
+        Err(ConnectError::SourceBusy)
+    ));
+    drop(kept);
+    Ok(())
+}
+
+/// R3: when no link opens, the attempt ends with the race's error and
+/// frees its slot; `with_race` sets the race's timing.
+#[tokio::test(start_paused = true)]
+async fn failed_races_free_the_slot() -> TestResult {
+    let (alice, bob) = paired().await?;
+    let config = crate::race::RaceConfig {
+        deadline: Duration::from_secs(1),
+        ..crate::race::RaceConfig::default()
+    };
+    let manager = alice.manager().with_race(config);
+    let connector = SimConnector::default();
+    let none = manager
+        .claim_outgoing(bob.key())?
+        .connect(&connector, &[])
+        .await;
+    assert!(matches!(
+        none,
+        Err(ConnectError::Race(crate::race::RaceError::NoCandidates))
+    ));
+    assert!(!manager.is_busy(&bob.key()));
+    let started = tokio::time::Instant::now();
+    let silent = manager
+        .claim_outgoing(bob.key())?
+        .connect(
+            &connector,
+            &[Candidate::new(LinkKind::Simulated, address(9))],
+        )
+        .await;
+    assert!(matches!(
+        silent,
+        Err(ConnectError::Race(crate::race::RaceError::Timeout))
+    ));
+    assert_eq!(started.elapsed(), Duration::from_secs(1));
+    assert!(!manager.is_busy(&bob.key()));
+    Ok(())
+}
+
+/// R3: an established session's debug output names no address.
+#[tokio::test(start_paused = true)]
+async fn established_sessions_hide_their_addresses() -> TestResult {
+    let (mut alice, mut bob) = paired().await?;
+    let (alice_manager, bob_manager) = (alice.manager(), bob.manager());
+    let connector = SimConnector::default();
+    connector.answer(address(11), fast());
+    let candidates = [Candidate::new(LinkKind::Simulated, address(11))];
+    let (at_alice, at_bob) = connect(
+        &mut alice,
+        &mut bob,
+        &alice_manager,
+        &bob_manager,
+        &connector,
+        &candidates,
+    )
+    .await?;
+    let shown = format!("{at_alice:?} {at_bob:?}");
+    assert!(!shown.contains("192.168"), "{shown}");
+    Ok(())
+}
+
+/// R3: the manager keeps one clock from its creation; a fresh timer starts
+/// at zero; a deadline too far to represent never fires.
+#[tokio::test(start_paused = true)]
+async fn the_manager_keeps_one_clock() -> TestResult {
+    let bob = Device::new(0x42)?;
+    let manager = bob.manager();
+    tokio::time::sleep(Duration::from_secs(10)).await;
+    assert_eq!(timer_now(&manager.timer()), Duration::from_secs(10));
+    assert_eq!(timer_now(&TokioTimer::default()), Duration::ZERO);
+    let timer = TokioTimer::new();
+    let never = todoke_crypto::session::Timer::sleep_until(&timer, Duration::MAX);
+    let three_years = Duration::from_hours(3 * 365 * 24);
+    assert!(tokio::time::timeout(three_years, never).await.is_err());
+    let soon = todoke_crypto::session::Timer::sleep_until(&timer, Duration::from_secs(5));
+    let started = tokio::time::Instant::now();
+    soon.await;
+    assert_eq!(started.elapsed(), Duration::ZERO, "the deadline had passed");
+    Ok(())
+}
+
+/// R3: what is known about a link, and only its kind and metrics in debug
+/// output.
+#[test]
+fn link_information_is_kept_and_addresses_are_not_shown() {
+    let (local, remote) = (address(1), address(2));
+    let info = LinkInfo::new(LinkKind::Lan)
+        .with_addresses(local, remote)
+        .with_latency(MS * 3)
+        .with_bandwidth(12_345);
+    assert_eq!(info.local(), Some(local));
+    assert_eq!(info.remote(), Some(remote));
+    assert_eq!(info.latency(), Some(MS * 3));
+    assert_eq!(info.bandwidth(), Some(12_345));
+    let bare = LinkInfo::new(LinkKind::Lan);
+    assert_eq!((bare.local(), bare.bandwidth()), (None, None));
+    let shown = format!("{info:?}");
+    assert!(!shown.contains("192.168"), "{shown}");
+    assert!(shown.contains("12345"), "{shown}");
+}
+
+/// R3: the responder's store decides after the claim: a Hello for another
+/// pair generation is refused locally (§4.4), and so is a contact that
+/// became unavailable after the table was built; both free the slot.
+#[tokio::test(start_paused = true)]
+async fn the_responder_store_decides_after_the_claim() -> TestResult {
+    let (alice, mut bob) = paired().await?;
+    let bob_manager = bob.manager();
+    let (alice_table, bob_table) = (alice.table()?, bob.table()?);
+    let locator = alice_table.locator(&bob.key()).ok_or("locator")?;
+    let hello = Hello::client(SessionMode::Contact, 99, locator, [0x5e; 16])?;
+    let (mut near, far) = crate::sim::link(Path::new(MS), address(110), address(99), 110);
+    write_all(
+        &mut near,
+        &encode_prelude_record(PreludeKind::ClientHello, &hello.encode())?,
+    )
+    .await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(far).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_table, wall()?).await?;
+    let (bob_local, bob_store) = bob.parts()?;
+    let refused = claimed
+        .respond(&bob_table, bob_store, &bob_local, wall()?)
+        .await;
+    assert!(
+        matches!(
+            refused,
+            Err(ConnectError::Session(SessionError::GenerationMismatch))
+        ),
+        "{refused:?}"
+    );
+    assert!(!bob_manager.is_busy(&alice.key()));
+    let (_held, link) = forged_link(locator, 111).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_table, wall()?).await?;
+    bob.store.mark_ratchet_uncertain(&alice.key())?;
+    let (bob_local, bob_store) = bob.parts()?;
+    let refused = claimed
+        .respond(&bob_table, bob_store, &bob_local, wall()?)
+        .await;
+    assert!(
+        matches!(refused, Err(ConnectError::Session(_))),
+        "{refused:?}"
+    );
+    assert!(!bob_manager.is_busy(&alice.key()));
+    Ok(())
+}
