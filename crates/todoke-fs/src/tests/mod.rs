@@ -3,6 +3,8 @@
 #[cfg(any(unix, windows))]
 mod dest;
 #[cfg(any(unix, windows))]
+mod e2e;
+#[cfg(any(unix, windows))]
 mod lifecycle;
 mod plan;
 #[cfg(any(unix, windows))]

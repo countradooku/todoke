@@ -228,6 +228,15 @@ impl SendSource for FsSource {
         if !prepared.unchanged() {
             return Err(SourceError::Io(io::ErrorKind::Other));
         }
-        Ok((&prepared.file, &prepared.outboard))
+        // Readers start at the beginning, like a fresh handle: the slice
+        // extractor positions itself relative to where it starts.
+        let (mut content, mut outboard) = (&prepared.file, &prepared.outboard);
+        content
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| SourceError::Io(error.kind()))?;
+        outboard
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| SourceError::Io(error.kind()))?;
+        Ok((content, outboard))
     }
 }
