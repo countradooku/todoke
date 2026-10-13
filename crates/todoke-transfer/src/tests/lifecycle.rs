@@ -751,11 +751,30 @@ fn receipts_outside_the_window_or_with_wrong_totals_leave_delivery_unconfirmed()
         link.b.accept(&transfer_id, vec![6], link.now)?;
         run_until(&mut link, false, FrameType::DELIVERY_RECEIPT)?;
         if !skewed_clock {
-            // completed_count (offset 202) no longer equals the selection.
+            // completed_count (offset 202) altered in transit: the signature no
+            // longer matches, so the receipt is a forgery. That is reported as
+            // AUTHENTICATION and closes the session (§12) instead of merely
+            // leaving delivery unconfirmed; delivery is never confirmed.
+            // Genuinely signed receipts with wrong totals are covered by
+            // todoke-crypto's receipt_time_window_and_totals.
             let OutgoingFrame::Frame { body, .. } = link.to_a.front_mut().ok_or("receipt")? else {
                 return Err("not a frame".into());
             };
             body[204] ^= 1;
+            let delivered = link.deliver(false).ok_or("deliver")?;
+            assert!(
+                matches!(
+                    &delivered,
+                    Err(crate::EngineError::Session(failure))
+                        if failure.code == crate::FailureCode::Authentication
+                ),
+                "{delivered:?}"
+            );
+            assert!(!has(&link.a_events, |e| matches!(
+                e,
+                TransferEvent::DeliveryConfirmed { .. }
+            )));
+            continue;
         }
         link.deliver(false).ok_or("deliver")??;
         link.settle()?;

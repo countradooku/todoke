@@ -790,6 +790,22 @@ fn receipt_time_window_and_totals() -> TestResult {
         verify_receipt(&forged.encode(), &sender_session, &sender_accept, now).err(),
         Some(ReceiptError::Signature)
     );
+    // A forgery that also has a bad time or bad totals is still reported as a
+    // forgery: the signature is checked before the values.
+    for (completed, counts) in [(now.seconds() + 121, None), (T0 + 15, Some((2, 6)))] {
+        let body = *DeliveryReceipt::decode(&resign(completed, counts)?)?.body();
+        let forged = DeliveryReceipt::new(
+            body,
+            FixedKeys::new(0x33)
+                .sign(&id, SigningDomain::DeliveryReceipt, &body.encode())?
+                .to_bytes(),
+        );
+        assert_eq!(
+            verify_receipt(&forged.encode(), &sender_session, &sender_accept, now).err(),
+            Some(ReceiptError::Signature),
+            "completed_at {completed}, counts {counts:?}"
+        );
+    }
     Ok(())
 }
 

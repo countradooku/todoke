@@ -185,6 +185,17 @@ fn check_body(
     accept: &VerifiedAccept,
     now: UnixTime,
 ) -> Result<(), ReceiptError> {
+    check_identity(body, side, session, accept)?;
+    check_values(body, session, accept, now)
+}
+
+/// The session, transfer, manifest, Accept, and both parties.
+fn check_identity(
+    body: &ReceiptBody,
+    side: Side,
+    session: &SessionBinding,
+    accept: &VerifiedAccept,
+) -> Result<(), ReceiptError> {
     if body.session_id() != session.session_id()
         || body.session_id() != accept.session_id()
         || body.transfer_id() != accept.transfer_id()
@@ -197,6 +208,17 @@ fn check_body(
     if body.sender_public() != sender.as_bytes() || body.receiver_public() != receiver.as_bytes() {
         return Err(ReceiptError::Parties);
     }
+    Ok(())
+}
+
+/// The totals and the completion-time window. Checked only after the
+/// signature, so a forged receipt is always reported as a forgery.
+fn check_values(
+    body: &ReceiptBody,
+    session: &SessionBinding,
+    accept: &VerifiedAccept,
+    now: UnixTime,
+) -> Result<(), ReceiptError> {
     if body.completed_count() != accept.selected_count()
         || body.total_plaintext_bytes() != accept.selected_bytes()
     {
@@ -219,7 +241,10 @@ fn check(
     accept: &VerifiedAccept,
     now: UnixTime,
 ) -> Result<VerifiedReceipt, ReceiptError> {
-    check_body(receipt.body(), side, session, accept, now)?;
+    // Identity, then signature, then values: a receipt that is not genuinely
+    // from this session's receiver is always reported as a forgery, never as
+    // a mere time or totals mismatch that would leave the session open.
+    check_identity(receipt.body(), side, session, accept)?;
     let (_, receiver) = side.keys(session);
     receiver
         .verify(
@@ -228,5 +253,6 @@ fn check(
             &Signature::from_bytes(*receipt.signature()),
         )
         .map_err(|_| ReceiptError::Signature)?;
+    check_values(receipt.body(), session, accept, now)?;
     Ok(VerifiedReceipt { receipt: *receipt })
 }
