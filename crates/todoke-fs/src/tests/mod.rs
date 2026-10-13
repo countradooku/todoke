@@ -19,6 +19,10 @@ pub(crate) mod sink;
 mod startup;
 #[cfg(any(unix, windows))]
 pub(crate) mod support;
+#[cfg(any(unix, windows))]
+mod tombstones;
+#[cfg(any(unix, windows))]
+mod vectors;
 
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::manifest::{Manifest, ManifestEntry, ManifestHeader, ManifestLimits};
