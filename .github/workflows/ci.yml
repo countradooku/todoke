@@ -115,6 +115,30 @@ jobs:
       - name: Run each benchmark once (criterion test mode)
         run: cargo test --manifest-path bench/Cargo.toml --locked --benches
 
+  # Kani proof harnesses for the receiver's consent gate (todoke-transfer's
+  # gate_proofs module; docs/adr/0005-consent-api.md). Installed as Kani's
+  # install guide describes (cargo install kani-verifier, then cargo kani
+  # setup, which downloads Kani's own pinned nightly toolchain), at an exact
+  # release. Kani supports x86_64 Linux hosts.
+  kani:
+    name: Kani proofs (consent gate)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      KANI_VERSION: 0.68.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Install Kani
+        run: |
+          cargo install --locked kani-verifier --version "$KANI_VERSION"
+          cargo kani setup
+      - name: Check the consent-gate harnesses
+        run: cargo kani -p todoke-transfer
+
   cross:
     name: Check ${{ matrix.target }}
     strategy:

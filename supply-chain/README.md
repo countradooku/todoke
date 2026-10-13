@@ -513,3 +513,26 @@ the root and fuzz stores, `safe-to-run` in `bench/`) and the imported
 `unicode-normalization` audit to each `imports.lock`; the notes follow the
 existing "Not yet reviewed" format. `fuzz/Cargo.lock` and `bench/Cargo.lock`
 gained both packages at the root lock's versions.
+
+The transfer engine (`todoke-transfer`, PROTOCOL §6, §7) adds no package
+to any lock. Its runtime dependencies are `todoke-proto`, `todoke-crypto`
+(no gate feature: the guard keeps `unaudited-suite-0001`,
+`unaudited-code-pairing`, and `insecure-content-without-accept` out of its
+shipped graph), `blake3` (the in-memory sink's whole-file check before
+publication, §7.7), `futures-io` (trait bounds of the async driver), and
+`zeroize`. `futures-io 0.3.34` moved to `[workspace.dependencies]`
+because `todoke-crypto` and `todoke-transfer` both name it, and so did the
+`todoke-proto` and `todoke-crypto` path dependencies, which now have more
+than one dependent (cargo-deny `workspace-duplicate` with
+`include-path-dependencies`). Its development dependencies are `proptest`,
+`libcrux-ml-kem` (a valid ML-KEM public credential for test device
+bindings), and `todoke-crypto` with `unaudited-suite-0001`, so that tests run
+real suite 0x0001 sessions; that feature is allowed in development graphs,
+like the crate's own unit tests and the fuzz workspace.
+
+CI's new `kani` job installs the Kani model checker as its install guide
+describes, `cargo install --locked kani-verifier --version 0.68.0` (the
+latest release, 2026-09-16) and `cargo kani setup`, which downloads Kani's
+own toolchain. Kani is a tool, not a dependency of any todoke graph, so it is
+not in a lock or a vet store. It was not run locally (see
+`docs/adr/0005-consent-api.md`).

@@ -1184,6 +1184,15 @@ version = "0.1.0"
 [[package]]
 name = "todoke-transfer"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+ "futures-io",
+ "libcrux-ml-kem",
+ "proptest",
+ "todoke-crypto",
+ "todoke-proto",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-transport"
