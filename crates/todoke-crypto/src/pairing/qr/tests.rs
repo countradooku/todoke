@@ -81,6 +81,50 @@ fn committed_vector_round_trips_byte_for_byte() -> TestResult {
     Ok(())
 }
 
+/// The fixture's remaining fields: its header values match the runtime's
+/// constants and the payload bytes, and each public key is the one its
+/// published seed derives (Ed25519 and the device ID through the runtime's
+/// `DeviceId`, X25519 through the runtime's `NoiseStaticKey`; ML-KEM
+/// through libcrux, since the runtime has no static ML-KEM key generation).
+#[test]
+fn committed_vector_keys_follow_from_its_seeds() -> TestResult {
+    let vector = load("qr-payload.json")?;
+    let binary = fixture_binary()?;
+    assert_eq!(
+        json_at(&vector, "/protocol_version")?.as_u64(),
+        Some(u64::from(PROTOCOL_VERSION))
+    );
+    assert_eq!(
+        json_at(&vector, "/hybrid_suite")?.as_u64(),
+        Some(u64::from(HYBRID_SUITE))
+    );
+    assert_eq!(binary[4..6], PROTOCOL_VERSION.to_be_bytes());
+    assert_eq!(binary[6..8], HYBRID_SUITE.to_be_bytes());
+    let payload = QrPayload::from_bytes(&binary, at(CREATED)?)?;
+
+    let mut device = [0; 32];
+    libcrux_ed25519::secret_to_public(
+        &mut device,
+        &hex_array_at::<32>(&vector, "/device_ed25519_seed_hex")?,
+    );
+    assert_eq!(payload.device_public().as_bytes(), &device);
+    assert_eq!(
+        crate::identity::DeviceId::of(payload.device_public()).as_bytes(),
+        &hex_array_at::<16>(&vector, "/device_id_hex")?
+    );
+    let noise = crate::session::NoiseStaticKey::from_secret(Zeroizing::new(hex_array_at::<32>(
+        &vector,
+        "/noise_x25519_seed_hex",
+    )?))?;
+    assert_eq!(payload.noise_static(), noise.public_key());
+    let kem = libcrux_ml_kem::mlkem768::generate_key_pair(hex_array_at::<64>(
+        &vector,
+        "/mlkem768_keygen_seed_hex",
+    )?);
+    assert_eq!(payload.kem_static().as_slice(), kem.public_key().as_slice());
+    Ok(())
+}
+
 #[test]
 fn text_checks_length_prefix_and_base45() -> TestResult {
     let text = fixture_text()?;
