@@ -26,7 +26,7 @@ pub const DISCOVERY_TOKEN_LEN: usize = 8;
 pub const EPOCH_SECONDS: u64 = 900;
 /// The mDNS service type (§9).
 pub const MDNS_SERVICE: &str = "_todoke._tcp.local.";
-/// The mDNS TXT key, including the `=` (§9).
+/// The mDNS TXT key; the TXT string is the key, `=`, and the record in hex (§9).
 pub const MDNS_TXT_KEY: &str = "v1";
 /// Length of the mDNS TXT string `v1=` plus 38 lowercase hex characters.
 pub const MDNS_TXT_LEN: usize = 3 + 2 * DISCOVERY_RECORD_LEN;
