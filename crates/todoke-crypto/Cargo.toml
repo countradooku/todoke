@@ -30,6 +30,13 @@ unaudited-code-pairing = [
     "dep:pakery-crypto",
     "dep:rand_core",
 ]
+# Exposes `content::AcceptedFile::assume_accepted_without_verification()`
+# outside this crate's own unit tests, so that benchmarks can seal and open
+# content without a signed Accept. That bypasses the PROTOCOL §7.2 consent
+# gate, so only benchmark and test builds may enable it;
+# scripts/ci/deny-exceptions-dev-only.sh fails if any shipped graph does.
+# Not a default feature.
+insecure-content-without-accept = []
 
 # Versions are the reviewed vector-tool pins (workspace dependencies). Fixture use
 # is not production approval: zeroization and cargo-vet evidence remain open (O6).
