@@ -1,6 +1,7 @@
 # ADR 0006: Filesystem access, quarantine, and publication
 
-- **Status:** proposed (P08), for the maintainer's review.
+- **Status:** accepted by the maintainer on 2026-10-13, including the
+  documented Apple per-segment `fsync` deviation (§4).
 - **Date:** 2026-10-13
 - **Scope:** how `todoke-fs` maps peer names onto local names, keeps
   partial transfers at rest, publishes verified files, detects content
