@@ -297,7 +297,8 @@ impl DestinationPlan {
     /// long (in `profile.path` units). `exists` reports whether a name is
     /// already taken in the destination root (filesystem semantics,
     /// without following links); it is asked only about top-level names,
-    /// at most [`MAX_LOOKUPS`] times.
+    /// at most 20,000 times in all (entries it cannot settle within that
+    /// are rejected with [`Rejection::NoFreeName`]).
     pub fn new(
         manifest: &Manifest,
         profile: &FsProfile,
