@@ -1,6 +1,7 @@
 # ADR 0004: Content AEAD libraries and AES advertisement
 
-- **Status:** proposed (needs maintainer approval).
+- **Status:** accepted by the maintainer on 2026-10-13. Android and iOS
+  advertise XChaCha only until libcrux-platform detects AES on those targets.
 - **Date:** 2026-10-13
 - **Scope:** the libraries behind content suites 1 (AES-256-GCM STREAM) and
   2 (XChaCha20-Poly1305 STREAM), and when a device advertises AES in
