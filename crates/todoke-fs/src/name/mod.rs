@@ -19,7 +19,7 @@
 //! | Files Explorer processes when it merely lists the folder (`.lnk`, `.url`, `.scf`, `.library-ms`, `desktop.ini`, …) | `.txt` appended | [`Change::ShellFileNeutralized`] |
 //! | Windows device names beyond §7.1 (Microsoft's `COM¹`–`COM³` and `LPT¹`–`LPT³`, a device stem with trailing spaces such as `CON .txt`, and conservatively `COM0`, `LPT0`, `CONIN$`, `CONOUT$`, `CLOCK$`), NTFS metafile names, and todoke's own temporary-name prefix | `_` prefixed | [`Change::ReservedName`] |
 //! | Names shaped like an NTFS 8.3 short name (`REPORT~1.PDF`), which can alias another file | `~` becomes `_` | [`Change::ShortNameAlias`] |
-//! | Components longer than the filesystem allows | Truncated at a character boundary, extension kept | [`Change::Truncated`] |
+//! | Components longer than the filesystem allows: more than 255 UTF-8 bytes, or more than 255 UTF-16 units decomposed (HFS+, some SMB and NFS servers) | Truncated at a character boundary, extension kept | [`Change::Truncated`] |
 //!
 //! Collisions are resolved by [`crate::DestinationPlan`], with a
 //! `" (2)"`-style suffix. Alternate data streams cannot be named: `:` is
@@ -38,6 +38,33 @@ use extension::{extension_risk, final_extension, is_benign, is_known, is_shell_p
 /// stores: ext4, APFS, and Android's f2fs allow 255 bytes; NTFS and exFAT
 /// allow 255 UTF-16 code units, never fewer than the UTF-8 bytes.
 pub const MAX_COMPONENT_BYTES: usize = 255;
+
+/// The longest component in UTF-16 code units of its canonical
+/// decomposition (NFD). HFS+ stores names that way and refuses more than
+/// 255 units, and so do some SMB and NFS servers that hand names to Apple
+/// clients. A precomposed character can need more units decomposed than
+/// bytes in UTF-8 (U+1F82 is 3 bytes and 4 units), so a name within
+/// [`MAX_COMPONENT_BYTES`] can still be too long there. Both limits apply.
+pub const MAX_COMPONENT_NFD_UNITS: usize = 255;
+
+/// The length of `text`'s canonical decomposition in UTF-16 code units.
+/// Canonical reordering moves marks but never adds or removes any, so this
+/// is the sum over the characters.
+pub(crate) fn nfd_utf16_units(text: &str) -> usize {
+    text.chars().map(char_nfd_units).sum()
+}
+
+fn char_nfd_units(c: char) -> usize {
+    let mut units = 0;
+    unicode_normalization::char::decompose_canonical(c, |part| units += part.len_utf16());
+    units
+}
+
+/// Whether `text` fits `bytes` UTF-8 bytes and the decomposed UTF-16
+/// limit.
+fn fits(text: &str, bytes: usize) -> bool {
+    text.len() <= bytes && nfd_utf16_units(text) <= MAX_COMPONENT_NFD_UNITS
+}
 
 /// The prefix of todoke's temporary files in a destination directory.
 pub(crate) const TEMP_PREFIX: &str = ".todoke-";
@@ -218,7 +245,7 @@ fn sanitize_once(name: &str, kind: Kind, rules: &NameRules) -> (String, Vec<Chan
         note(Change::ShortNameAlias);
     }
     let limit = rules.max_component_bytes.clamp(16, MAX_COMPONENT_BYTES);
-    if name.len() > limit {
+    if !fits(&name, limit) {
         name = truncate_keeping_extension(&name, limit);
         note(Change::Truncated);
     }
@@ -244,7 +271,8 @@ pub(crate) fn with_suffix(name: &str, n: u32, kind: Kind, limit: usize) -> Strin
         format!("{suffix}.{extension}")
     };
     let room = limit.saturating_sub(tail.len());
-    let stem = trim_trailing(cut(stem, room));
+    let units = MAX_COMPONENT_NFD_UNITS.saturating_sub(nfd_utf16_units(&tail));
+    let stem = trim_trailing(cut(stem, room, units));
     let stem = if stem.is_empty() { "_" } else { stem };
     let mut out = String::with_capacity(stem.len() + tail.len());
     out.push_str(stem);
@@ -427,16 +455,25 @@ fn looks_like_short_name(name: &str) -> bool {
         && digits.bytes().all(|b| b.is_ascii_digit())
 }
 
-/// The longest prefix of `text` of at most `limit` bytes that ends at a
-/// character boundary and does not separate a character from the
-/// combining marks, joiners, or selectors that follow it.
-fn cut(text: &str, limit: usize) -> &str {
-    if text.len() <= limit {
+/// The longest prefix of `text` of at most `limit` bytes and `units`
+/// decomposed UTF-16 units that ends at a character boundary and does not
+/// separate a character from the combining marks, joiners, or selectors
+/// that follow it.
+fn cut(text: &str, limit: usize, units: usize) -> &str {
+    if text.len() <= limit && nfd_utf16_units(text) <= units {
         return text;
     }
-    let mut end = limit;
+    let mut end = limit.min(text.len());
     while !text.is_char_boundary(end) {
         end -= 1;
+    }
+    let mut used = nfd_utf16_units(&text[..end]);
+    while used > units {
+        let Some(last) = text[..end].chars().next_back() else {
+            break;
+        };
+        end -= last.len_utf8();
+        used -= char_nfd_units(last);
     }
     while end > 0 {
         let next = text[end..].chars().next();
@@ -464,12 +501,13 @@ fn truncate_keeping_extension(name: &str, limit: usize) -> String {
     match final_extension(name) {
         Some(extension) if extension.len() + 2 <= limit / 2 => {
             let stem = &name[..name.len() - extension.len() - 1];
-            let stem = trim_trailing(cut(stem, limit - extension.len() - 1));
+            let units = MAX_COMPONENT_NFD_UNITS.saturating_sub(nfd_utf16_units(extension) + 1);
+            let stem = trim_trailing(cut(stem, limit - extension.len() - 1, units));
             let stem = if stem.is_empty() { "_" } else { stem };
             format!("{stem}.{extension}")
         }
         _ => {
-            let kept = trim_trailing(cut(name, limit));
+            let kept = trim_trailing(cut(name, limit, MAX_COMPONENT_NFD_UNITS));
             if kept.is_empty() {
                 "_".to_owned()
             } else {
@@ -504,12 +542,13 @@ fn finalize(name: &str, note: &mut impl FnMut(Change)) -> String {
 }
 
 /// Whether a local name passes the §7.1 component rules, the reserved
-/// names, and contains no character the sanitizer replaces.
+/// names, both component length limits, and contains no character the
+/// sanitizer replaces.
 pub(crate) fn acceptable(name: &str) -> bool {
     todoke_proto::transfer::manifest::validate_name(name.as_bytes()).is_ok()
         && !is_reserved(name)
         && !name.chars().any(|c| chars::classify(c) == Class::Hidden)
-        && name.len() <= MAX_COMPONENT_BYTES
+        && fits(name, MAX_COMPONENT_BYTES)
 }
 
 #[cfg(test)]

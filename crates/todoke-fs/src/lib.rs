@@ -101,7 +101,9 @@ mod source;
 mod tests;
 
 pub use name::extension::{ExtensionRisk, Platforms, RiskKind, extension_risk};
-pub use name::{Change, Kind, MAX_COMPONENT_BYTES, NameRules, sanitize_component};
+pub use name::{
+    Change, Kind, MAX_COMPONENT_BYTES, MAX_COMPONENT_NFD_UNITS, NameRules, sanitize_component,
+};
 pub use plan::{
     DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection,
     UntrustedName, Warning,

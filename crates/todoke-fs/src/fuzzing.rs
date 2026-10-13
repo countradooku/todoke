@@ -39,6 +39,7 @@ pub fn name_mapping(data: &[u8]) {
         let (local, _) = sanitize_component(&name, kind, &rules);
         assert!(acceptable(&local));
         assert!(local.len() <= rules.max_component_bytes.clamp(16, 255));
+        assert!(crate::name::nfd_utf16_units(&local) <= crate::name::MAX_COMPONENT_NFD_UNITS);
         assert_eq!(sanitize_component(&local, kind, &rules).0, local);
     }
     plan_tree(flags, &names, rules);

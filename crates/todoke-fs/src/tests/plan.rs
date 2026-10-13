@@ -272,6 +272,27 @@ fn windows_paths_are_measured_in_utf16_and_warn_above_max_path() -> TestResult {
     Ok(())
 }
 
+/// A name §7.1 accepts (255 UTF-8 bytes) that HFS+ and some SMB and NFS
+/// servers would refuse (340 UTF-16 units decomposed) is shortened in the
+/// plan, before consent, and the change is shown.
+#[test]
+fn names_too_long_decomposed_are_shortened_before_consent() -> TestResult {
+    let long = "\u{1F82}".repeat(85);
+    let other = format!("{}b", "\u{1F82}".repeat(84));
+    let plan = plan(&[file(&long, 0), dir(&other, 0), file(&long, 2)])?;
+    for entry in plan.entries() {
+        assert!(entry.changes().contains(&Change::Truncated), "{entry:?}");
+        assert!(crate::name::nfd_utf16_units(entry.local().as_str()) <= 255);
+        assert!(acceptable(entry.local().as_str()));
+    }
+    // The file and the directory collide after shortening: separated.
+    assert_ne!(
+        plan.entry(1).map(|e| collision_key(e.local().as_str())),
+        plan.entry(2).map(|e| collision_key(e.local().as_str()))
+    );
+    Ok(())
+}
+
 #[test]
 fn warnings_point_out_risky_entries() -> TestResult {
     let mut jpeg_exe = file("holiday.exe", 0);

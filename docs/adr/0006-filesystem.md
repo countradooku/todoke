@@ -104,7 +104,13 @@ superscript forms, device stems followed by spaces, and conservatively
 `COM0`, `LPT0`, `CONIN$`, `CONOUT$`, `CLOCK$`), NTFS metafile names, and this
 crate's `.todoke-` prefix get `_` prepended; names shaped like 8.3 short names
 have `~` replaced; overlong components are truncated at a grapheme-safe
-boundary keeping the extension. The function is idempotent.
+boundary keeping the extension. A component must fit two limits: 255 UTF-8
+bytes (ext4, APFS, f2fs; NTFS and exFAT count 255 UTF-16 units, never
+fewer) and 255 UTF-16 units of its canonical decomposition (HFS+, and some
+SMB and NFS servers, store names as NFD UTF-16; U+1F82 is 3 bytes but 4
+units). Both are checked in the plan, before consent, so a name the
+manifest allows is shortened visibly rather than failing with
+`ENAMETOOLONG` after consent. The function is idempotent.
 
 `DestinationPlan` then separates siblings whose collision keys match (NFD,
 each character upper- then lower-cased twice, NFD: a superset of NTFS, APFS,

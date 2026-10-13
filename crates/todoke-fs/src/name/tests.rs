@@ -16,6 +16,10 @@ fn file(name: &str) -> (String, Vec<Change>) {
 fn check_output(input: &str, output: &str) {
     assert!(acceptable(output), "{input:?} -> {output:?}");
     assert!(output.len() <= MAX_COMPONENT_BYTES, "{input:?}");
+    assert!(
+        nfd_utf16_units(output) <= MAX_COMPONENT_NFD_UNITS,
+        "{input:?}"
+    );
     assert!(!output.contains(['/', '\\', ':', '\0']), "{input:?}");
     assert!(output != "." && output != "..", "{input:?}");
     assert!(
@@ -317,6 +321,52 @@ fn overlong_components_are_truncated_keeping_the_extension() {
     assert_eq!(with_suffix("a.tar.gz", 2, Kind::File, 255), "a.tar (2).gz");
 }
 
+/// HFS+ (and some SMB and NFS servers) store a name as its canonical
+/// decomposition in UTF-16 and refuse more than 255 units. Precomposed
+/// characters can need more units decomposed than bytes in UTF-8: U+1F82
+/// (Greek alpha with psili, varia, and ypogegrammeni) is 3 bytes and 4
+/// units, U+0390 is 2 bytes and 3 units. Such names are shortened before
+/// consent, visibly, instead of failing with ENAMETOOLONG afterwards.
+#[test]
+fn components_fit_the_decomposed_utf16_limit_too() {
+    let alpha = "\u{1F82}";
+    assert_eq!(nfd_utf16_units(alpha), 4);
+    assert_eq!(nfd_utf16_units("\u{390}"), 3);
+    assert_eq!(nfd_utf16_units("\u{1EC7}"), 3);
+    assert_eq!(nfd_utf16_units("\u{AC01}"), 3);
+    // 85 of them: 255 bytes, which §7.1 allows, but 340 units.
+    let over = alpha.repeat(85);
+    assert!(validate_name(over.as_bytes()).is_ok());
+    assert!(!acceptable(&over));
+    let (output, changes) = file(&over);
+    assert!(changes.contains(&Change::Truncated));
+    assert_eq!(output, alpha.repeat(63));
+    check_output(&over, &output);
+    // At the limit: 63 are 252 units and stay; 64 are 256 and do not.
+    assert_eq!(file(&alpha.repeat(63)), (alpha.repeat(63), Vec::new()));
+    assert_eq!(file(&alpha.repeat(64)).0, alpha.repeat(63));
+    // Three-byte characters that decompose to three units fill both
+    // limits exactly and are unchanged.
+    let viet = "\u{1EC7}".repeat(85);
+    assert_eq!(nfd_utf16_units(&viet), 255);
+    assert_eq!(file(&viet), (viet.clone(), Vec::new()));
+    let hangul = format!("{}.txt", "\u{AC01}".repeat(83));
+    assert_eq!(file(&hangul), (hangul.clone(), Vec::new()));
+    // The extension is kept.
+    let named = format!("{}.txt", alpha.repeat(70));
+    let (output, changes) = file(&named);
+    assert!(changes.contains(&Change::Truncated));
+    assert_eq!(output, format!("{}.txt", alpha.repeat(62)));
+    check_output(&named, &output);
+    // Suffixes respect it too.
+    let suffixed = with_suffix(&alpha.repeat(63), 2, Kind::File, MAX_COMPONENT_BYTES);
+    assert!(suffixed.ends_with(" (2)"), "{suffixed:?}");
+    check_output(&alpha.repeat(63), &suffixed);
+    let suffixed = with_suffix(&format!("{}.txt", alpha.repeat(62)), 1001, Kind::File, 255);
+    assert!(suffixed.ends_with(" (1001).txt"), "{suffixed:?}");
+    check_output("suffix", &suffixed);
+}
+
 #[test]
 fn ordinary_names_are_unchanged() {
     for name in [
@@ -353,6 +403,8 @@ fn any_name() -> impl Strategy<Value = String> {
             Just("~1".to_owned()),
             Just("\u{435}".to_owned()),
             Just("\u{301}".to_owned()),
+            Just("\u{1F82}".repeat(9)),
+            Just("\u{390}".repeat(9)),
             Just("\u{3000}".to_owned()),
             Just("/".to_owned()),
             Just("..".to_owned()),
