@@ -70,31 +70,45 @@ CARGO_BUILD_JOBS=4 cargo bench --manifest-path bench/Cargo.toml --locked --bench
   --warm-up-time 1 --measurement-time 3
 ```
 
-### Results
+Results: [RESULTS.md](RESULTS.md#content-layer).
 
-**aarch64 (measured 2026-10-13).** Apple M5 Pro, 48 GB, macOS 27.0.1;
-rustc 1.99.0; revision `9cf0b5c` plus the `feat/content-layer` changes;
-the command above, with no other heavy work running. Ranges are criterion's
-95% confidence intervals:
+## LAN (`benches/lan.rs`)
 
-| Benchmark | Time per segment | Throughput |
-| --- | --- | --- |
-| seal, AES-256-GCM | 30.6–31.5 µs | 496–511 MiB/s |
-| open, AES-256-GCM | 33.2–33.5 µs | 466–471 MiB/s |
-| seal, XChaCha20-Poly1305 | 46.6–47.6 µs | 328–335 MiB/s |
-| open, XChaCha20-Poly1305 | 49.5–51.2 µs | 305–315 MiB/s |
-| outboard, 1 MiB | 884–904 µs | 1.08–1.10 GiB/s |
+PROTOCOL §5 on a TCP link from `todoke-transport`: raw TCP, then an
+authenticated suite 0x0001 session (QR pairing, then data frames of the
+largest body, 65515 bytes, with transport encryption and the automatic
+rekey every GiB). The receiver acknowledges every 4 MiB and the sender
+stays at most 16 MiB ahead, as the transfer engine's pipelined requests
+would keep it, so both ends read and write throughout and keepalives work
+at any speed. Each size is sent once per phase; the clock stops when the
+receiver confirms the last byte. `cargo test --benches` (CI) sends 1 MiB
+instead. No manifest, consent, content
+encryption, or disk I/O: this is the transport and session ceiling.
 
-Bao hashing dominates: the `bao` crate hashes one 1024-byte chunk at a time
-(about 1.1 GiB/s here), and both seal and open hash the whole slice once.
-These are single-thread numbers for one segment; a transfer may seal or
-open several segments in parallel.
+The sessions need `todoke-crypto/unaudited-suite-0001` (PROTOCOL §16 keeps
+the suite out of production), which, like the content bypass, is enabled
+only in this isolated workspace.
 
-**x86_64: not measured.** This machine cannot run x86_64 benchmarks
-natively, and emulated numbers would be meaningless. Run the command above
-on an x86_64 machine with AVX2 and AES-NI (for example a CI runner or a
-developer PC) and add the results here with the same details. Without those
-CPU features AES is not advertised and is skipped.
+On one machine (both ends over loopback, each on its own thread):
+
+```sh
+CARGO_BUILD_JOBS=4 cargo bench --manifest-path bench/Cargo.toml --locked --bench lan
+```
+
+On two machines on the same network (the receiver first; the sender then
+pairs with the receiver's in-band QR offer, throwaway identities, in the
+clear, which is acceptable only for a benchmark):
+
+```sh
+cargo bench --manifest-path bench/Cargo.toml --locked --bench lan -- --listen 47100
+cargo bench --manifest-path bench/Cargo.toml --locked --bench lan -- --connect 192.168.1.20:47100
+```
+
+`--bytes 1G --bytes 10G` (the default) chooses the sizes. The receiver's
+address must be private or link-local (the LAN policy), and its firewall
+must allow the port.
+
+Results: [RESULTS.md](RESULTS.md#lan).
 
 ## Future measurements
 
