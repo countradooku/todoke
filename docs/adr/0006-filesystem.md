@@ -1,0 +1,211 @@
+# ADR 0006: Filesystem access, quarantine, and publication
+
+- **Status:** proposed (P08), for the maintainer's review.
+- **Date:** 2026-10-13
+- **Scope:** how `todoke-fs` maps peer names onto local names, keeps
+  partial transfers at rest, publishes verified files, detects content
+  types, and abstracts platform storage (PROTOCOL §7.1, §7.4–§7.7, §8,
+  §14.2), and which libraries it uses for that.
+
+## Context
+
+PROTOCOL §7.1 makes names untrusted display data and leaves the receiver to
+detect collisions its own filesystem imposes (case folding, Unicode
+normalization) before consent, resolving them "by a locally authorized
+destination mapping or reject", never by silent overwrite. §7.7 requires
+publication "through filesystem operations that prevent path escape,
+symlink/race substitution, and unintended overwrite", atomic per file where
+the platform allows, and durable before the receipt. §7.5 and §8 limit what
+may be retained (verified partial content and encrypted key state; masters
+sealed by the platform's approved secret storage), §7.6 requires deletion of
+cancelled temporary data without promising physical erasure, and §14.2
+forbids logging paths and names.
+
+The maintainer's binding decisions for P08: no NFC repair (the manifest
+decoder already rejects non-NFC names); a local mapping computed before
+consent, shown to the user, deterministic and visible; ciphertext and sealed
+masters only at rest; never auto-open or set execute bits; a capability-style
+API evaluated against rustix; no `unsafe` in `todoke-fs`; desktop storage
+implemented, Android SAF and the iOS sandbox as trait contracts.
+
+## Decision
+
+### 1. Filesystem API: rustix on Unix, the standard library on Windows
+
+Every destination operation is relative to a directory handle and takes one
+component that the destination plan produced:
+
+| Need | Linux, Android, macOS, iOS (rustix 1.1.5) | Windows (std only) |
+| --- | --- | --- |
+| Walk below the root without following links | `openat(O_DIRECTORY \| O_NOFOLLOW)` per component | `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-directory; every handle from the root down held without `FILE_SHARE_DELETE` while the operation runs |
+| Create without touching an existing entry | `mkdirat`; `openat(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode `0666` (umask applies, never execute bits) | `CreateDirectoryW`; `CREATE_NEW` |
+| Publish without replacing | `renameat2(RENAME_NOREPLACE)` on Linux, `renameatx_np(RENAME_EXCL)` on Apple platforms; if the filesystem refuses, `linkat` then `unlinkat`; if hard links are refused too, an exclusive copy | `CreateHardLinkW` then delete the temporary name (`std::fs::rename` always replaces); if hard links are refused (FAT, exFAT, some shares), an exclusive copy |
+| Read back for re-verification | `openat(O_NOFOLLOW \| O_NONBLOCK)`, then `fstat` must say regular file (a planted FIFO cannot block) | `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-file |
+| Durability | `fsync` of the file (`F_FULLFSYNC` on Apple) and of the directory | `FlushFileBuffers` of the file; NTFS journals the directory (the standard library has no directory flush) |
+
+Windows paths are the canonical verbatim (`\\?\`) form of the root plus
+components, so Win32 name munging (device names, trailing dots and spaces)
+does not apply and long paths work.
+
+**Residual risks, stated honestly.**
+
+- *Windows:* there is no `openat` in the standard library, so each call
+  re-resolves a path. During an operation every directory from the root to
+  the entry is pinned (it cannot be renamed, deleted, or replaced while held),
+  so only the root's own ancestors could be swapped, which needs local rights
+  over the user's profile. Between operations only a root handle that allows
+  renaming is kept, so the user can still move their Downloads folder. A
+  fully handle-relative implementation needs `NtCreateFile` with a root
+  directory handle, which is `unsafe` FFI and would belong in
+  `todoke-sys-windows`.
+- *Exclusive-copy fallback:* nothing is overwritten, but the final name
+  exists while the copy runs, and a crash leaves a truncated file there. Only
+  filesystems with neither rename-without-replace nor hard links reach it.
+- *Android:* bionic uses `renameat2` only since Android 14, and I could not
+  confirm that the app seccomp policy of every supported release allows it (a
+  disallowed call kills the process). Android therefore starts with the hard
+  link. Verify on devices in P16 and enable `renameat2` where it is allowed.
+- *Crash between publication and journaling:* the file is published, the
+  journal does not know, and a resume publishes it again under the next
+  suffix. Nothing is lost or overwritten; the user may see a duplicate.
+
+**Alternatives.** `cap-std`/`cap-fs-ext` 4.0.3 (Bytecode Alliance, used by
+Wasmtime) give the same sandboxing on all three systems without `unsafe` in
+this crate, but add about 35 packages, three `windows-sys` and two
+`io-lifetimes` versions (new duplicate-version exceptions, against the
+latest-version policy), and still have no rename-without-replace. Linux
+`openat2(RESOLVE_BENEATH)` is Linux-only and unnecessary when every lookup is a
+single component. Direct `libc` calls would need `unsafe` here. rustix keeps
+`todoke-fs` at `#![forbid(unsafe_code)]`; its `unsafe` is inside the crate,
+which the Bytecode Alliance maintains (imported orgs trust its publisher; it
+has an exact-version cargo-vet exemption, see `supply-chain/README.md`).
+
+### 2. Names: one portable rule set, the plan computed before consent
+
+`sanitize_component` applies the same rules on every platform, so names stay
+safe when files are copied elsewhere. Each rewrite is recorded as a `Change`:
+bidi controls (U+061C, U+200E, U+200F, U+202A–U+202E, U+2066–U+2069), C1
+controls, zero-width and other default-ignorable or invisible characters, tags,
+and noncharacters become U+FFFD (joiners and variation selectors are kept
+inside non-ASCII text, where emoji sequences and Persian or Indic scripts need
+them); a full-stop look-alike before a known extension, look-alike letters in
+the final extension, and document extensions in front of a risky one become
+`_`; spaces padding the final extension away are removed; files the Windows
+shell processes when it merely lists a folder (`.lnk`, `.url`, `.scf`,
+`.library-ms`, `.searchConnector-ms`, `.settingcontent-ms`, `.website`,
+`desktop.ini`, `autorun.inf`, `folder.htt`) get `.txt` appended, because
+displaying the folder can leak NTLM credentials to a remote icon or target
+(for example CVE-2025-24054); Windows device names beyond §7.1 (Microsoft's
+superscript forms, device stems followed by spaces, and conservatively
+`COM0`, `LPT0`, `CONIN$`, `CONOUT$`, `CLOCK$`), NTFS metafile names, and this
+crate's `.todoke-` prefix get `_` prepended; names shaped like 8.3 short names
+have `~` replaced; overlong components are truncated at a grapheme-safe
+boundary keeping the extension. The function is idempotent.
+
+`DestinationPlan` then separates siblings whose collision keys match (NFD,
+each character upper- then lower-cased twice, NFD: a superset of NTFS, APFS,
+HFS+, exFAT, and FAT equivalences, so "ß"/"SS", "ı"/"I", and the Greek sigmas
+collide) with `" (n)"` suffixes, avoids names the destination root already
+holds, checks the per-OS path limit (4095 bytes on Linux and Android, 1023 on
+Apple platforms, 32,760 UTF-16 units on Windows, warning above 259), and adds
+warnings: risky extensions per platform, macOS bundle directories, hidden
+names, and MIME labels that do not fit the extension. Rejected entries
+(path too long, no free name) can be deselected; an offer with no storable
+file is refused as an unsupported destination. The peer's name stays
+available as `UntrustedName`; `Debug` prints no names.
+
+### 3. Quarantine: verified ciphertext and sealed masters only
+
+Each accepted transfer gets a private directory in application storage with
+the canonical manifest, a journal, one sealed master per keyed file, and one
+slot file per file. Slots hold the content ciphertext exactly as received
+(already AEAD-encrypted under the file's master, §8), at a fixed stride per
+file: a two-byte length and the ciphertext. The stride is an upper bound on
+the Bao slice for the file's tree depth (`8 + data + 64 × (15 + depth) + 16`),
+about 1.5% over the real size.
+
+This needs the file master in the sink, which the P07 trait did not pass.
+`ReceiveSink::record_file_key` (new) hands the sink the master and this
+session's `AcceptedFile` when the `FileKey` passes the consent gate, before
+any segment of the file is stored or revalidated. `FileMaster::seal` /
+`open_sealed` (new, in `todoke-crypto`) pass the master's bytes only to the
+`Sealer`, under a context binding the transfer, manifest hash, and file ID.
+This supersedes ADR 0005's note that the receiver keeps no masters across
+sessions: it keeps them sealed (§8 allows "encrypted local key state"), and a
+resumed transfer whose `FileKey` brings a different master discards that
+file's retained ciphertext. Publication opens the master, decrypts and
+re-verifies every segment through the content layer into the destination's
+temporary file, and checks length and whole-file BLAKE3.
+
+The journal (`TDKJ`, versioned, BLAKE3 check values) records the accepted
+selection and expiry, a secret salt from which temporary names are derived,
+top-level directories created, and files published; a torn tail is cut, a
+damaged header discards the transfer. Tombstones (`TDKT`) are a sorted,
+checked list replaced atomically; a damaged list fails closed at start-up.
+Cancel, revocation, expiry, and start-up clean-up delete the
+quarantine and leftover temporary files; deleting the sealed master leaves any
+ciphertext remnant unreadable. Physical erasure on flash is not promised
+(§7.6). A quota (default 64 GiB) bounds what transfers may reserve. One sink
+per state directory is enforced with an OS file lock; `SharedSink` shares it
+between sessions.
+
+### 4. Durability
+
+Records (journal header, appended entries, tombstones, sealed masters) and
+published files get the strongest sync the platform offers (`F_FULLFSYNC` on
+Apple). Each stored segment is synced before `store_segment` returns, as §7.4
+asks, but with `fsync` on Apple platforms rather than `F_FULLFSYNC`: measured
+on this Mac, 8 MiB of segments took 1.95 s with `F_FULLFSYNC` per segment
+(about 4 MB/s) and 22 ms with `fsync` (about 370 MB/s); without a per-segment
+sync, 4 ms. Linux and Android use `fdatasync`, Windows `FlushFileBuffers`
+(not measured here). `Durability::Periodic` syncs segments every N bytes
+instead; a power loss can then lose recent segments, which §7.5 revalidation
+fetches again. Correctness never depends on segment durability: retained
+segments count only after they open under the new session's key.
+
+### 5. Content type detection
+
+After the whole-file check, the first 36 KiB are compared with a fixed table
+of about 45 signatures (no parsing beyond fixed offsets), giving UI warnings:
+executables and installers per platform (PE, ELF, Mach-O, Java, DEX, Wasm,
+shebang scripts, shell links, MSI/OLE, cabinets, xar, deb, rpm, ISO 9660),
+active markup (HTML, SVG), and mismatches between the content and the
+extension or MIME label. It never gates consent (content exists only after
+Accept) and never opens or previews anything. A detection crate (for
+example `infer`) was not used: the table needed is small and bounded, and it
+avoids a new dependency.
+
+### 6. Platform storage
+
+`Destination` is the publication abstraction (root, exists, exclusive
+directory and file creation, publish without replacement, discard, open for
+re-verification, directory sync). `DirDestination` implements it for desktop
+filesystems and any POSIX directory on Android and iOS. The Android SAF
+adapter (P16) maps it onto `DocumentsContract` (providers choose free names
+and never overwrite; publication there is a copy, not atomic); the iOS adapter
+(P17) brackets security-scoped access and coordinates with
+`NSFileCoordinator` over the same POSIX calls. The quarantine always lives in
+app-private POSIX storage. `OriginMarker` is the hook for the Mark of the Web
+(Windows Attachment Services, `IAttachmentExecute::Save`) and
+`com.apple.quarantine` (`NSURLQuarantinePropertiesKey` with the
+`LSQuarantine.h` keys), applied to the staged file before it gets its final
+name; the platform crates implement it (P13).
+
+On the sending side, `FsSource` holds each offered file open from hashing on,
+keeps its Bao outboard in private storage, and refuses a file whose size,
+modification time, or identity changed; the content layer re-verifies every
+slice against the manifest root as well (§8).
+
+## Consequences
+
+- No peer-controlled name reaches a path outside the destination, follows a
+  link, or replaces an entry; foreign files are never modified.
+- Nothing but ciphertext and sealed masters is at rest before publication;
+  the temporary plaintext file exists in the destination only during
+  publication (and after a crash until the next start).
+- The `ReceiveSink` trait gained `record_file_key`; `todoke-crypto` gained
+  `FileMaster::seal`/`open_sealed`.
+- Windows protection against local races is weaker than on Unix, as
+  described above.
+- Shell-processed Windows files arrive renamed with `.txt`; legitimate
+  shortcuts need the user to rename them.

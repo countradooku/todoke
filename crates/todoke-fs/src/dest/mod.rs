@@ -98,20 +98,25 @@ pub enum Atomicity {
 
 /// Marks a received file with its origin before it gets its final name,
 /// so the platform treats it as downloaded from elsewhere. Implemented by
-/// the platform crates (P13):
+/// the platform crates (P13); not implemented here.
 ///
-/// - **Windows:** the Mark of the Web, an NTFS alternate data stream named
-///   `Zone.Identifier` containing `[ZoneTransfer]` and `ZoneId=3`
-///   (Internet zone), written through `IAttachmentExecute::Save` or the
-///   stream directly; `SmartScreen` and Office Protected View act on it.
-///   Volumes without alternate data streams (FAT, exFAT) cannot carry it.
-/// - **macOS:** the `com.apple.quarantine` extended attribute, set through
-///   `NSURL`'s `NSURLQuarantinePropertiesKey` resource value (Launch
-///   Services), never by writing the attribute's undocumented format by
-///   hand; Gatekeeper checks it when the file is opened.
+/// - **Windows:** the Mark of the Web through Attachment Services
+///   (`IAttachmentExecute`: `SetClientGuid`, `SetLocalPath`, then `Save`,
+///   which applies the zone policy and records the zone in the file's
+///   `Zone.Identifier` alternate data stream, the `[ZoneTransfer]` section
+///   with `ZoneId=3` for the Internet zone). `SmartScreen` and Office
+///   Protected View act on it. Use the API rather than writing the stream
+///   by hand; volumes without alternate data streams (FAT, exFAT) cannot
+///   carry the mark.
+/// - **macOS:** the `com.apple.quarantine` attribute through `NSURL`'s
+///   `NSURLQuarantinePropertiesKey` resource value, a dictionary with the
+///   `LSQuarantine.h` keys (`kLSQuarantineTypeKey` =
+///   `kLSQuarantineTypeOtherDownload`, `kLSQuarantineAgentNameKey`), never
+///   by writing the attribute's undocumented format by hand; Gatekeeper
+///   checks it when the file is opened. The keys are macOS-only.
 /// - **Linux:** no system-wide equivalent; desktop environments may read
 ///   the `user.xdg.origin.url` extended attribute (freedesktop.org shared
-///   metadata), which carries no enforcement.
+///   metadata), which carries no enforcement. **iOS, Android:** none.
 ///
 /// `path` is where the staged file is expected to be, for APIs that need
 /// a path; the file handle is authoritative. An implementation returns

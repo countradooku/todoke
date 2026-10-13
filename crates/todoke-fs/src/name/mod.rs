@@ -17,7 +17,7 @@
 //! | A final extension spelled with look-alike letters (`file.ехе`) | `_` for each non-ASCII letter | [`Change::ConfusableExtension`] |
 //! | A document or media extension in front of a risky one (`invoice.pdf.exe`) | Inner dots become `_` | [`Change::DoubleExtension`] |
 //! | Files Explorer processes when it merely lists the folder (`.lnk`, `.url`, `.scf`, `.library-ms`, `desktop.ini`, …) | `.txt` appended | [`Change::ShellFileNeutralized`] |
-//! | Windows device names beyond §7.1 (`COM0`, `LPT0`, `COM¹`–`COM³`, `LPT¹`–`LPT³`, `CONIN$`, `CONOUT$`, `CLOCK$`, a device stem with trailing spaces such as `CON .txt`), NTFS metafile names, and todoke's own temporary-name prefix | `_` prefixed | [`Change::ReservedName`] |
+//! | Windows device names beyond §7.1 (Microsoft's `COM¹`–`COM³` and `LPT¹`–`LPT³`, a device stem with trailing spaces such as `CON .txt`, and conservatively `COM0`, `LPT0`, `CONIN$`, `CONOUT$`, `CLOCK$`), NTFS metafile names, and todoke's own temporary-name prefix | `_` prefixed | [`Change::ReservedName`] |
 //! | Names shaped like an NTFS 8.3 short name (`REPORT~1.PDF`), which can alias another file | `~` becomes `_` | [`Change::ShortNameAlias`] |
 //! | Components longer than the filesystem allows | Truncated at a character boundary, extension kept | [`Change::Truncated`] |
 //!
@@ -112,11 +112,14 @@ pub enum Kind {
     Directory,
 }
 
-/// Windows device names (Microsoft, "Naming Files, Paths, and
-/// Namespaces"), matched ASCII-case-insensitively against the part before
-/// the first dot with trailing spaces removed, as Win32 path parsing does.
-/// The §7.1 list (CON, PRN, AUX, NUL, COM1–9, LPT1–9) is rejected
-/// earlier; these cover the rest.
+/// Windows device names, matched ASCII-case-insensitively against the part
+/// before the first dot with trailing spaces removed, as Win32 path
+/// parsing does. Microsoft's list ("Naming Files, Paths, and Namespaces")
+/// is CON, PRN, AUX, NUL, COM1–COM9, COM¹–COM³, LPT1–LPT9, and LPT¹–LPT³,
+/// also followed by an extension; §7.1 already rejects all but the
+/// superscript forms. COM0, LPT0 (NT namespace aliases), and the console
+/// and clock devices CONIN$, CONOUT$, and CLOCK$ are added
+/// conservatively.
 const DEVICES: &[&str] = &[
     "CON",
     "PRN",

@@ -126,4 +126,8 @@ them in memory.
   the establishment time), which the receipt check needs.
 - The receiver keeps no file masters across sessions: a resumed transfer
   gets its `FileKey`s again (the spec requires the same masters), and
-  retained segments count only after they open under them.
+  retained segments count only after they open under them. (Superseded in
+  part by [ADR 0006](0006-filesystem.md): the filesystem sink keeps each
+  master sealed through the platform `Sealer`, receiving it through
+  `ReceiveSink::record_file_key`; retained segments still count only after
+  they open under the new session's key.)

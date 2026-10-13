@@ -564,6 +564,15 @@ No new license, source, advisory, or duplicate-version exception was
 needed. `cargo vet` fetched the imported `errno` audits into
 `imports.lock`, and `cargo vet regenerate exemptions` added the three
 exemptions above to the root store with notes in the existing "Not yet
-reviewed" format, followed by `cargo vet fmt`. `unicode-normalization 0.1.25`
+reviewed" format, followed by `cargo vet fmt`. The fuzz workspace now
+depends on `todoke-fs` for its three `fs_*` harnesses: `fuzz/Cargo.lock`
+gained `todoke-fs`, `todoke-transfer`, and the four packages above at the
+root lock's versions, and `fuzz/supply-chain` got the same imported audits
+and exemptions (run from inside `fuzz/`). `bench/` does not depend on
+`todoke-fs`; its lock is unchanged. `todoke-fs`'s development dependencies
+(`todoke-crypto` with `unaudited-suite-0001`, `libcrux-ml-kem`,
+`futures-io`, `proptest`) are already in the root graph, as in
+`todoke-transfer`. `getrandom` (the secret salt of temporary names) is a
+runtime dependency of `todoke-fs` on Unix and Windows only. `unicode-normalization 0.1.25`
 moved to `[workspace.dependencies]`, since `todoke-proto` and `todoke-fs`
 both use it; its version did not change.

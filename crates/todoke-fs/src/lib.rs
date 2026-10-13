@@ -20,6 +20,65 @@
 //! | `FsSource` | `todoke_transfer::SendSource` on disk: files held open from hashing on, outboards in private storage, mutation detection | §8 |
 //! | [`quarantine::codec`] | The quarantine's local journal and tombstone formats | — |
 
+//!
+//! # Receiving, step by step
+//!
+//! 1. **Before consent** (`ReceiveSink::check_offer`): the
+//!    [`DestinationPlan`] gives every entry its exact local name, avoiding
+//!    names the destination already holds, and lists renames, warnings,
+//!    and rejections for the receive sheet (`FsSink::plan`). Nothing is
+//!    created. An offer with no storable file is refused as an unsupported
+//!    destination; one whose smallest file exceeds the quarantine quota,
+//!    as quota.
+//! 2. **At consent** (`record_accept`): a private quarantine directory for
+//!    the transfer gets the manifest and a journal, durably, before the
+//!    Accept is sent. A selection with a rejected file, or over the quota,
+//!    is refused and nothing is sent.
+//! 3. **Keys** (`record_file_key`): each file's master is sealed with the
+//!    platform `Sealer` (§8) and kept only sealed.
+//! 4. **Segments** (`store_segment`): only the verified content
+//!    ciphertext, exactly as received, is stored, one fixed-size slot per
+//!    segment, synced before the request retires ([`Durability`]). No
+//!    plaintext is at rest in the quarantine.
+//! 5. **Publication** (`publish`): every stored segment is decrypted and
+//!    verified again into a temporary file in the destination directory,
+//!    the exact length and whole-file BLAKE3 root are checked (§7.7), the
+//!    file is marked ([`dest::OriginMarker`]), synced, and published under
+//!    its planned name, or the next free `" (n)"` name, without replacing
+//!    anything and atomically where the filesystem allows. Its ciphertext
+//!    and sealed master are deleted. Its content type is checked
+//!    ([`detect`]) for UI warnings (`FsSink::content_report`).
+//! 6. **Resume, cancel, expiry**: retained ciphertext is revalidated by the
+//!    engine under the new session's key; cancel, revocation, and expiry
+//!    delete the quarantine (the sealed masters with it, which leaves any
+//!    remnant on flash unreadable; physical erasure is not promised, §7.6)
+//!    and keep a tombstone. Start-up removes expired and damaged state and
+//!    temporary files a crash left.
+//!
+//! # Guarantees and limits
+//!
+//! - **No path escape:** every local name is one sanitized component, and
+//!   every operation is relative to a directory opened from the
+//!   destination root without following links (`openat` with
+//!   `O_NOFOLLOW` on Unix; reparse points opened and refused on Windows).
+//! - **No overwrite:** files and directories are created exclusively;
+//!   publication uses rename-without-replace, a hard link, or, on
+//!   filesystems with neither (FAT, exFAT, some network shares), an
+//!   exclusive copy, which is not atomic.
+//! - **Nothing runs:** no execute permission, no opening, no previews.
+//! - **Windows residual race:** paths are re-resolved per call, with every
+//!   directory from the root down pinned while an operation runs; see
+//!   `docs/adr/0006-filesystem.md`.
+//! - **Not here:** the Android Storage Access Framework and iOS
+//!   security-scoped folder adapters ([`dest`] documents their contract),
+//!   and the Mark of the Web and `com.apple.quarantine` implementations
+//!   (platform crates).
+//!
+//! # Logging
+//!
+//! Nothing here logs. `Debug` output shows no names, paths, keys, or
+//! content; errors carry codes.
+
 #![forbid(unsafe_code)]
 
 pub mod dest;
