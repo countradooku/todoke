@@ -1721,3 +1721,294 @@ fn the_hello_after_a_code_offer_is_bounded_by_the_exchange_window() -> TestResul
     drop(writer);
     Ok(())
 }
+
+/// A complete prelude record.
+fn prelude(kind: todoke_proto::session::PreludeKind, body: &[u8]) -> AnyResult<Vec<u8>> {
+    Ok(todoke_proto::session::encode_prelude_record(kind, body)?)
+}
+
+/// §3.2: the `CodeOfferRequest` itself must arrive within 5 seconds of the
+/// stream's acceptance; a later one is refused and the stream closed
+/// silently.
+#[test]
+fn a_code_offer_request_must_arrive_within_the_exchange_window() -> TestResult {
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    let window = crate::session::CODE_OFFER_EXCHANGE_TIMEOUT;
+    for (delay, in_time) in [
+        (window.saturating_sub(Duration::from_millis(1)), true),
+        (window, false),
+    ] {
+        let (mut client, server) = duplex(4096);
+        let mut accept = Box::pin(IncomingSession::accept_any(
+            server,
+            timer.clone(),
+            GATE,
+            &offers,
+        ));
+        assert!(poll_once(accept.as_mut()).is_pending());
+        timer.advance(delay);
+        block_on(futures_write_all(
+            &mut client,
+            &code_offer_request_record()?,
+        ))??;
+        let Poll::Ready(accepted) = poll_once(accept.as_mut()) else {
+            return Err("the request was not read".into());
+        };
+        if in_time {
+            let Ok(accepted) = accepted else {
+                return Err("a timely request was refused".into());
+            };
+            assert!(
+                format!("{accepted:?}").starts_with("CodeOfferRequest(IncomingCodeRequest {"),
+                "{accepted:?}"
+            );
+            // Dropping the request without an answer frees its place.
+            let Accepted::CodeOfferRequest(request) = accepted else {
+                return Err("expected a request".into());
+            };
+            assert_eq!(offers.active_attempts(), 1);
+            drop(request.reject());
+            assert_eq!(offers.active_attempts(), 0);
+        } else {
+            assert_eq!(accepted.map(drop).err(), Some(SessionError::Timeout));
+            drop(accept);
+            assert!(closed_silently(&mut client));
+        }
+    }
+    assert_eq!(offers.active_attempts(), 0);
+    Ok(())
+}
+
+/// A stream may only begin with a `ClientHello` or a `CodeOfferRequest`;
+/// anything else closes it, without an answer, and frees its place in the
+/// §13 budget.
+#[test]
+fn a_stream_beginning_with_another_record_is_refused() -> TestResult {
+    use todoke_proto::session::{Hello, PreludeKind};
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    let hello = Hello::client(SessionMode::Qr, 0, [0xa1; 16], [1; 16])?;
+    let offer = todoke_proto::pairing::CodeOffer::new(
+        &todoke_proto::pairing::CodeOfferRequest::new(TOKEN)?,
+        [0xa1; 16],
+        crate::identity::test_support::time(WALL)?,
+    )?;
+    let cases = [
+        (
+            prelude(
+                PreludeKind::ServerHello,
+                &hello.server_reply([2; 16])?.encode(),
+            )?,
+            ErrorCode::STATE,
+        ),
+        (
+            prelude(PreludeKind::CodeOffer, &offer.encode())?,
+            ErrorCode::STATE,
+        ),
+        // A reserved kind.
+        (vec![0, 1, 0x08], ErrorCode::MALFORMED),
+    ];
+    for (record, code) in cases {
+        let (mut client, server) = duplex(4096);
+        block_on(futures_write_all(&mut client, &record))??;
+        let accepted = block_on(IncomingSession::accept_any(
+            server,
+            timer.clone(),
+            GATE,
+            &offers,
+        ))?;
+        assert_eq!(
+            accepted.map(drop).err(),
+            Some(SessionError::Protocol(code)),
+            "{record:?}"
+        );
+        assert!(closed_silently(&mut client));
+        assert_eq!(offers.active_attempts(), 0);
+    }
+    // A ClientHello is accepted as such.
+    let (mut client, server) = duplex(4096);
+    block_on(futures_write_all(
+        &mut client,
+        &prelude(PreludeKind::ClientHello, &hello.encode())?,
+    ))??;
+    let accepted = block_on(IncomingSession::accept_any(
+        server,
+        timer.clone(),
+        GATE,
+        &offers,
+    ))??;
+    assert!(format!("{accepted:?}").starts_with("Hello(IncomingSession {"));
+    Ok(())
+}
+
+/// After answering, the displayer accepts only a code-mode `ClientHello`
+/// for exactly the offer it sent; anything else ends the stream before
+/// the offer is reserved or charged.
+#[test]
+fn the_hello_after_a_code_offer_must_name_that_offer() -> TestResult {
+    use todoke_proto::session::{Hello, PreludeKind};
+    let wall = crate::identity::test_support::time(WALL)?;
+    let offers = PairingOffers::new();
+    let timer = ManualTimer::at(START);
+    offers.create_code(CODE_GATE, wall, timer.now())?;
+    let id = offers.code_pairing_id().ok_or("offer")?;
+    let bob = Device::new()?;
+    let bob_local = bob.local()?;
+    for (hello, accepted) in [
+        (Hello::client(SessionMode::Qr, 0, id, [1; 16])?, false),
+        (
+            Hello::client(SessionMode::Code, 0, [0x99; 16], [1; 16])?,
+            false,
+        ),
+        (Hello::client(SessionMode::Code, 0, id, [1; 16])?, true),
+    ] {
+        let (client, server) = duplex(4096);
+        let mut writer = client;
+        block_on(futures_write_all(
+            &mut writer,
+            &code_offer_request_record()?,
+        ))??;
+        block_on(futures_write_all(
+            &mut writer,
+            &prelude(PreludeKind::ClientHello, &hello.encode())?,
+        ))??;
+        let Accepted::CodeOfferRequest(request) = block_on(IncomingSession::accept_any(
+            server,
+            timer.clone(),
+            GATE,
+            &offers,
+        ))??
+        else {
+            return Err("expected a request".into());
+        };
+        let answered = block_on(request.answer(CODE_GATE, &offers, &TOKEN, wall))?;
+        if accepted {
+            let Ok(incoming) = answered else {
+                return Err("the offer's own Hello was refused".into());
+            };
+            // A stream that exchanged the offer runs code pairing only.
+            let plan = ResponderPlan::qr(PairingPsk::from_bytes(Zeroizing::new([1; 32])));
+            let mut authority = ScriptedAuthority::new(None);
+            assert_eq!(
+                block_on(incoming.respond(&bob_local, wall, plan, &mut authority))?
+                    .map(drop)
+                    .err(),
+                Some(SessionError::Usage)
+            );
+        } else {
+            assert_eq!(
+                answered.map(drop).err(),
+                Some(SessionError::Protocol(ErrorCode::STATE)),
+                "{hello:?}"
+            );
+        }
+        assert_eq!(offers.active_attempts(), 0);
+    }
+    assert_eq!(offers.failures(&id), Some(0));
+    Ok(())
+}
+
+/// The entrant accepts only a `CodeOffer` that echoes its own token and
+/// can still be used: any other reply ends the attempt before `CPace`,
+/// leaving its contact store untouched.
+#[test]
+fn the_entrant_accepts_only_a_usable_offer_for_its_request() -> TestResult {
+    use todoke_proto::pairing::{CodeOffer, CodeOfferRequest};
+    use todoke_proto::session::{Hello, PreludeKind};
+    let wall = crate::identity::test_support::time(WALL)?;
+    let alice = Device::new()?;
+    let alice_local = alice.local()?;
+    let code = HumanCode::parse("0123456789")?;
+    let request = CodeOfferRequest::new(TOKEN)?;
+    let id = [0xa1; 16];
+    let offer = |token: [u8; 8], pairing_id: [u8; 16], expires: u64| -> AnyResult<Vec<u8>> {
+        let offer = CodeOffer::new(
+            &CodeOfferRequest::new(token)?,
+            pairing_id,
+            crate::identity::test_support::time(expires)?,
+        )?;
+        prelude(PreludeKind::CodeOffer, &offer.encode())
+    };
+    let server_hello = Hello::client(SessionMode::Code, 0, id, [1; 16])?.server_reply([2; 16])?;
+    // A store that already used offer 0xb2.
+    let mut burned_store = empty_store()?;
+    burned_store.journal_pairing(
+        &crate::identity::contacts::PairingJournal {
+            pairing_id: [0xb2; 16],
+            expires_at: wall,
+            origin: crate::identity::TrustOrigin::CodePairing,
+            peer: &Device::new()?.binding,
+            handshake_hash: &[1; 32],
+            psk_next: &[2; 32],
+        },
+        wall,
+    )?;
+    let skew = crate::identity::CLOCK_SKEW_SECONDS;
+    let cases = [
+        (
+            prelude(PreludeKind::ServerHello, &server_hello.encode())?,
+            SessionError::Protocol(ErrorCode::STATE),
+            false,
+        ),
+        (
+            offer([0x5f; 8], id, WALL + 300)?,
+            SessionError::Protocol(ErrorCode::MALFORMED),
+            false,
+        ),
+        (
+            offer(TOKEN, id, WALL - skew)?,
+            SessionError::Pairing(PairingError::Expired),
+            false,
+        ),
+        (
+            offer(TOKEN, id, WALL + 300 + skew + 1)?,
+            SessionError::Pairing(PairingError::Expired),
+            false,
+        ),
+        (
+            offer(TOKEN, [0xb2; 16], WALL + 300)?,
+            SessionError::Pairing(PairingError::Burned),
+            true,
+        ),
+    ];
+    for (reply, expected, burned) in cases {
+        let mut fresh = empty_store()?;
+        let store = if burned {
+            &mut burned_store
+        } else {
+            &mut fresh
+        };
+        let pending_before = store.pairing_pending();
+        let (alice_end, mut bob_end) = duplex(4096);
+        block_on(futures_write_all(&mut bob_end, &reply))??;
+        let result = block_on(Session::initiate_code_pairing(
+            alice_end,
+            ManualTimer::at(START),
+            GATE,
+            CODE_GATE,
+            &alice_local,
+            wall,
+            TOKEN,
+            &code,
+            store,
+        ))?;
+        assert_eq!(result.map(drop).err(), Some(expected), "{expected:?}");
+        assert_eq!(store.pairing_pending(), pending_before, "{expected:?}");
+        assert!(!store.pairing_burned(&id), "{expected:?}");
+        // The request went out; nothing else did.
+        let mut sent = vec![0; 64];
+        let read = match Pin::new(&mut bob_end)
+            .poll_read(&mut Context::from_waker(Waker::noop()), &mut sent)
+        {
+            Poll::Ready(read) => read?,
+            Poll::Pending => 0,
+        };
+        assert_eq!(
+            &sent[..read],
+            prelude(PreludeKind::CodeOfferRequest, &request.encode())?.as_slice(),
+            "{expected:?}"
+        );
+    }
+    Ok(())
+}
