@@ -634,6 +634,12 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             ContentError::SuiteUnavailable => violation(FailureCode::Unsupported),
             _ => violation(FailureCode::State),
         })?;
+        // The sink keeps the master (sealed) to publish the file from its
+        // stored ciphertext (§8).
+        if self.sink.record_file_key(&accepted, key.master()).is_err() {
+            self.fail_incoming(&transfer_id, FailureCode::Storage);
+            return Ok(());
+        }
         let tracker = SegmentTracker::new(accepted.binding());
         receiving.masters.insert(file_id, key.into_master());
         receiving.files.insert(
