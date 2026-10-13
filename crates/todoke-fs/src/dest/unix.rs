@@ -46,7 +46,9 @@ pub(super) fn open_root(path: &Path) -> Result<Handle, DestError> {
     Ok(fd)
 }
 
-pub(super) fn duplicate(handle: &Handle) -> Result<Handle, DestError> {
+/// A root handle for one operation: a duplicate of the open root (which
+/// keeps following the directory if it is renamed).
+pub(super) fn duplicate(handle: &Handle, _: &Path) -> Result<Handle, DestError> {
     handle.try_clone().map_err(DestError::from)
 }
 

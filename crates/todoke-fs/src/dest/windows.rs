@@ -5,10 +5,11 @@
 //!
 //! - Every directory on the way down is opened with
 //!   `FILE_FLAG_OPEN_REPARSE_POINT` (a symbolic link or junction is opened
-//!   itself, then refused) and without `FILE_SHARE_DELETE`, so while the
-//!   handle is held nobody can rename, delete, or replace that directory
-//!   (and NTFS refuses to rename a directory with open handles beneath
-//!   it).
+//!   itself, then refused) and without `FILE_SHARE_DELETE`, so while an
+//!   operation holds the handles nobody can rename, delete, or replace
+//!   those directories. Between operations nothing is held except the
+//!   root, and that with `FILE_SHARE_DELETE`, so the user can still move
+//!   the destination folder.
 //! - Files are created with `CREATE_NEW` (never an existing entry, link
 //!   or not) and opened for reading with `FILE_FLAG_OPEN_REPARSE_POINT`,
 //!   then checked to be plain files.
@@ -19,9 +20,9 @@
 //!   dots and spaces, and short names are not interpreted.
 //!
 //! Residual risk, documented in ADR 0006: the path is re-resolved on each
-//! call. The held handles pin every directory between the root and the
-//! entry, so only the root's own ancestors could change, and changing
-//! them needs local rights over the user's folders. No rename without
+//! call. During an operation the held handles pin every directory from the
+//! root down to the entry, so only the root's own ancestors could change,
+//! and changing them needs local rights over the user's folders. No rename without
 //! replace exists in the standard library (`std::fs::rename` replaces),
 //! hence the hard link.
 
@@ -60,12 +61,17 @@ fn open_directory(path: &Path) -> Result<Handle, DestError> {
     Ok(handle)
 }
 
-pub(super) fn open_root(path: &Path) -> Result<Handle, DestError> {
+/// `FILE_SHARE_DELETE` as well: for the long-lived root handle, so the
+/// user can still rename or move the destination folder while the app
+/// runs.
+const SHARE_ALL: u32 = SHARE_READ_WRITE | 0x4;
+
+fn open_root_with(path: &Path, share: u32) -> Result<Handle, DestError> {
     // The root itself was chosen by the user and canonicalized by the
     // caller; only its contents are untrusted.
     let handle = OpenOptions::new()
         .read(true)
-        .share_mode(SHARE_READ_WRITE)
+        .share_mode(share)
         .custom_flags(BACKUP_SEMANTICS)
         .open(path)?;
     if !handle.metadata()?.is_dir() {
@@ -74,8 +80,14 @@ pub(super) fn open_root(path: &Path) -> Result<Handle, DestError> {
     Ok(handle)
 }
 
-pub(super) fn duplicate(handle: &Handle) -> Result<Handle, DestError> {
-    handle.try_clone().map_err(DestError::from)
+pub(super) fn open_root(path: &Path) -> Result<Handle, DestError> {
+    open_root_with(path, SHARE_ALL)
+}
+
+/// A root handle for one operation, opened again from the root's path and
+/// held without `FILE_SHARE_DELETE` while the operation runs.
+pub(super) fn duplicate(_: &Handle, path: &Path) -> Result<Handle, DestError> {
+    open_root_with(path, SHARE_READ_WRITE)
 }
 
 pub(super) fn exists(_: &Handle, dir: &Path, name: &str) -> Result<bool, DestError> {

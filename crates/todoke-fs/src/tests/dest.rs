@@ -230,3 +230,22 @@ fn debug_output_shows_no_paths() -> TestResult {
     assert!(!rendered.contains(&path), "{rendered}");
     Ok(())
 }
+
+/// Between operations the destination folder is not locked: the user can
+/// still rename or move it while the app runs.
+#[test]
+fn the_destination_folder_can_be_moved_while_open() -> TestResult {
+    let temp = TempDir::new()?;
+    let root = temp.path().join("Downloads");
+    std::fs::create_dir(&root)?;
+    let destination = DirDestination::open(&root)?;
+    let handle = destination.root()?;
+    stage_and_publish(&destination, &handle, ".t", "a.txt", b"x")?;
+    drop(handle);
+    std::fs::rename(&root, temp.path().join("Moved"))?;
+    assert_eq!(
+        std::fs::read(temp.path().join("Moved").join("a.txt"))?,
+        b"x"
+    );
+    Ok(())
+}

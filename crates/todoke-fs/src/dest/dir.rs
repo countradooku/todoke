@@ -110,7 +110,7 @@ impl Destination for DirDestination {
 
     fn root(&self) -> Result<DirHandle, DestError> {
         Ok(DirHandle {
-            handle: sys::duplicate(&self.root.handle)?,
+            handle: sys::duplicate(&self.root.handle, &self.root.path)?,
             path: self.root.path.clone(),
         })
     }
