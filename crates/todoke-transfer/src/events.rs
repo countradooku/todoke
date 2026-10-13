@@ -281,7 +281,10 @@ impl fmt::Debug for OfferView {
 }
 
 /// Transfer progress (§7.4): verified-and-stored bytes for a receiver,
-/// sent bytes for a sender.
+/// sent bytes for a sender. A sender counts each segment once, plus, for
+/// a resumed transfer, what the receiver claims to hold already, which is
+/// a hint, not proof (§7.5); its `files_done` counts only files whose
+/// every segment it sent in this session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Progress {
     /// The transfer.
@@ -345,8 +348,9 @@ pub enum TransferEvent {
     },
     /// Bytes moved.
     Progress(Progress),
-    /// One selected file was verified and published (receiver) or fully
-    /// served at least once (sender).
+    /// One selected file was verified and published (receiver), or every
+    /// one of its segments was sealed and sent in this session (sender; a
+    /// receiver's claim to hold segments already never counts, §7.5).
     FileCompleted {
         /// The transfer.
         transfer_id: TransferId,

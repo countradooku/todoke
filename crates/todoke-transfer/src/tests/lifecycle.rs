@@ -277,6 +277,20 @@ fn resume_after_interruption_revalidates_retained_segments() -> TestResult {
     assert_eq!(link.delivered(false, FrameType::RESUME_QUERY), 0);
     assert!(link.delivered(true, FrameType::RESUME_QUERY) >= 1);
     assert!(link.delivered(false, FrameType::RESUME_STATUS) >= 1);
+    // What the receiver claimed to hold is not proof (§7.5): the sender
+    // reports a file as sent only if it sent every segment in this
+    // session, which it did not for the big file (segments were retained).
+    assert!(retained > 0);
+    assert!(!has(&link.a_events, |e| matches!(
+        e,
+        TransferEvent::FileCompleted { file_id: 2, .. }
+    )));
+    if published == 1 {
+        assert!(!has(&link.a_events, |e| matches!(
+            e,
+            TransferEvent::FileCompleted { file_id: 4, .. }
+        )));
+    }
     assert!(has(&link.a_events, |e| matches!(
         e,
         TransferEvent::DeliveryConfirmed { .. }
@@ -538,6 +552,16 @@ fn reoffer_after_unheard_completion_needs_no_retransfer() -> TestResult {
     again.b.accept(&transfer_id, vec![2, 4], again.now)?;
     again.settle()?;
     assert_eq!(again.delivered(false, FrameType::CHUNK_REQUEST), 0);
+    // Nothing was sent in this session, so the sender reports no file as
+    // sent; only the verified receipt confirms delivery.
+    assert!(!has(&again.a_events, |e| matches!(
+        e,
+        TransferEvent::FileCompleted { .. }
+    )));
+    assert!(!has(&again.a_events, |e| matches!(
+        e,
+        TransferEvent::Progress(progress) if progress.files_done > 0
+    )));
     assert!(has(&again.a_events, |e| matches!(
         e,
         TransferEvent::DeliveryConfirmed { .. }

@@ -25,6 +25,7 @@ use todoke_proto::transfer::{
 use zeroize::Zeroizing;
 
 use super::ended::{Ended, Late, LateKind, Outcome};
+use super::served::{Recorded, Served};
 use super::{EngineError, Handled, Phase, TransferEngine, violation};
 use crate::events::{Direction, Failure, FailureCode, Meter, Progress, TransferEvent};
 use crate::limits::RECEIPT_TIMEOUT;
@@ -64,10 +65,13 @@ pub(super) struct Serving {
     resume_files: VecDeque<u32>,
     /// The outstanding `ResumeQuery`: file and `from_index`.
     resume_cursor: Option<(u32, u32)>,
-    /// Segments served or reported present, per file.
-    served: BTreeMap<u32, u32>,
-    bytes_done: u64,
-    files_done: u32,
+    /// Segments sealed and queued in this session, each counted once.
+    served: Served,
+    /// Bytes of those segments.
+    sent_bytes: u64,
+    /// Bytes the receiver claimed to hold already (`ResumeStatus`): a
+    /// progress hint only, never proof of delivery (§7.5).
+    claimed_bytes: u64,
     meter: Meter,
 }
 
@@ -315,9 +319,9 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
                 expiry,
                 resume_files,
                 resume_cursor: None,
-                served: BTreeMap::new(),
-                bytes_done: 0,
-                files_done: 0,
+                served: Served::default(),
+                sent_bytes: 0,
+                claimed_bytes: 0,
                 meter: Meter::new(),
             })),
         );
@@ -414,15 +418,14 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
                         frame_type: FrameType::CHUNK,
                         body: Zeroizing::new(chunk.encode()),
                     });
-                    serving.bytes_done = serving
-                        .bytes_done
-                        .saturating_add(segment_bytes(size, index));
-                    let served = serving.served.entry(file_id).or_insert(0);
-                    *served = served.saturating_add(1);
-                    let finished = (*served == count).then_some(file_id);
-                    if finished.is_some() {
-                        serving.files_done += 1;
+                    // A segment counts once, however often it is requested.
+                    let recorded = serving.served.record(file_id, index, count);
+                    if recorded != Recorded::Unchanged {
+                        serving.sent_bytes = serving
+                            .sent_bytes
+                            .saturating_add(segment_bytes(size, index));
                     }
+                    let finished = (recorded == Recorded::Completed).then_some(file_id);
                     let progress = progress_of(&transfer_id, serving, now, transport);
                     RequestOutcome::Served(progress, finished)
                 }
@@ -500,24 +503,17 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         {
             return Err(violation(FailureCode::State));
         }
-        let mut present_segments: u32 = 0;
+        // §7.5: claimed progress is not proof. It adjusts the progress
+        // hint only; files count as sent only for segments sent here.
         let mut present_bytes: u64 = 0;
         for &(start, length) in status.ranges() {
-            present_segments = present_segments.saturating_add(length);
             let first = u64::from(start) * u64::from(todoke_crypto::content::SEGMENT_LEN);
             let end = u64::from(start.saturating_add(length))
                 .saturating_mul(u64::from(todoke_crypto::content::SEGMENT_LEN))
                 .min(layout.size());
             present_bytes = present_bytes.saturating_add(end.saturating_sub(first));
         }
-        serving.bytes_done = serving.bytes_done.saturating_add(present_bytes);
-        let served = serving.served.entry(file_id).or_insert(0);
-        let before = *served;
-        *served = served.saturating_add(present_segments).min(count);
-        let finished = (before < count && *served == count).then_some(file_id);
-        if finished.is_some() {
-            serving.files_done += 1;
-        }
+        serving.claimed_bytes = serving.claimed_bytes.saturating_add(present_bytes);
         let next_query = if next < count {
             serving.resume_cursor = Some((file_id, next));
             Some(
@@ -533,13 +529,6 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             self.queue(FrameType::RESUME_QUERY, query.encode().to_vec());
         } else {
             self.resume_query = None;
-        }
-        if let Some(file_id) = finished {
-            self.event(TransferEvent::FileCompleted {
-                transfer_id,
-                direction: Direction::Outgoing,
-                file_id,
-            });
         }
         if let Some(progress) = progress {
             self.event(TransferEvent::Progress(progress));
@@ -832,14 +821,17 @@ fn progress_of(
     transport: &'static str,
 ) -> Option<Progress> {
     let total = serving.accept.selected_bytes();
-    let done = serving.bytes_done.min(total);
+    let done = serving
+        .sent_bytes
+        .saturating_add(serving.claimed_bytes)
+        .min(total);
     let (bytes_per_second, eta) = serving.meter.record(now, done, total)?;
     Some(Progress {
         transfer_id: *transfer_id,
         direction: Direction::Outgoing,
         bytes_done: done,
         bytes_total: total,
-        files_done: serving.files_done,
+        files_done: serving.served.files_complete(),
         files_total: serving.accept.selected_count(),
         bytes_per_second,
         eta,

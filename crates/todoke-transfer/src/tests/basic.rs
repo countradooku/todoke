@@ -166,6 +166,51 @@ fn happy_path_multi_file_with_folders_and_empty_file() -> TestResult {
     assert!(accepted < first_progress);
     // A finished transfer is not resumable.
     assert!(link.a.take_resumable().is_empty());
+    // The sender reports each selected file fully sent exactly once, and
+    // its progress reaches the total.
+    for id in [2, 3, 5, 6] {
+        let completed = link
+            .a_events
+            .iter()
+            .filter(|e| matches!(e, TransferEvent::FileCompleted { file_id, .. } if *file_id == id))
+            .count();
+        assert_eq!(completed, 1, "file {id}");
+    }
+    let last = link
+        .a_events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            TransferEvent::Progress(progress) => Some(*progress),
+            _ => None,
+        })
+        .ok_or("sender progress")?;
+    assert_eq!((last.bytes_done, last.files_done), (last.bytes_total, 4));
+    Ok(())
+}
+
+/// The sender counts a segment once however often it is requested: a
+/// receiver that asks for the same segment again cannot make the sender
+/// report a file as sent, or more bytes than it sent (§7.4).
+#[test]
+fn repeated_requests_count_once_in_sender_progress() -> TestResult {
+    let fixture = fixture()?;
+    // a.bin (file 2) has three segments; the first chunk is on the wire.
+    let (mut link, transfer_id, accept_hash) = receiving(&fixture, vec![2])?;
+    for request_id in 1000..1004 {
+        let request = ChunkRequest::new(transfer_id, accept_hash, request_id, 2, 0)?.encode();
+        link.a
+            .handle_frame(FrameType::CHUNK_REQUEST, &request, link.now)?;
+    }
+    link.collect();
+    assert!(!has(&link.a_events, |e| matches!(
+        e,
+        TransferEvent::FileCompleted { .. }
+    )));
+    assert!(!has(&link.a_events, |e| matches!(
+        e,
+        TransferEvent::Progress(progress) if progress.bytes_done > 16_384 || progress.files_done > 0
+    )));
     Ok(())
 }
 
