@@ -10,7 +10,7 @@ use crate::content::keys::{
 };
 use crate::content::{
     AcceptedFile, ContentError, ContentOpener, ContentSealer, ContentSuite, EPOCH_SEGMENTS,
-    FileBinding, FileMaster, SEGMENT_LEN, outboard,
+    FileBinding, FileMaster, SEGMENT_LEN, aead, outboard,
 };
 use crate::session::test_vectors::{Vector, hex_array_at, hex_at, json_at, load};
 
@@ -130,6 +130,113 @@ fn content_key_schedule_matches_every_fixture_case() -> TestResult {
     Ok(())
 }
 
+/// The §8 AAD table written out field by field, independently of
+/// `content_aad`: domain, version 1, transfer ID, manifest hash, file ID,
+/// suite, epoch, global segment index, logical length, final, root.
+fn spec_aad(binding: &FileBinding, epoch: u32, index: u32, len: u32, is_final: bool) -> Vec<u8> {
+    let mut aad = b"todoke/v1/content-aad\0".to_vec();
+    aad.extend_from_slice(&[0, 1]);
+    aad.extend_from_slice(binding.transfer_id());
+    aad.extend_from_slice(binding.manifest_hash());
+    aad.extend_from_slice(&binding.file_id().to_be_bytes());
+    aad.extend_from_slice(&binding.suite().id().to_be_bytes());
+    aad.extend_from_slice(&epoch.to_be_bytes());
+    aad.extend_from_slice(&index.to_be_bytes());
+    aad.extend_from_slice(&len.to_be_bytes());
+    aad.push(u8::from(is_final));
+    aad.extend_from_slice(binding.root());
+    aad
+}
+
+/// Every sealed segment uses exactly its epoch's fixture key, a nonce built
+/// from that epoch's fixture prefix, its local index, and its final flag,
+/// and the §8 AAD with the global index and its epoch. The sealer's output
+/// opens under those independently assembled parameters, and the opener
+/// accepts what they seal. Segments 65535 and 65536 straddle the epoch
+/// boundary, so reusing one epoch's key or nonce for another, putting the
+/// local index or a constant final flag in the AAD, or swapping AAD fields
+/// all fail here.
+#[test]
+fn sealed_segments_use_the_fixture_epoch_keys_nonces_and_aad() -> TestResult {
+    let vector = load("stream-nonces.json")?;
+    let schedule = json_at(&vector, "/content_key_schedule")?;
+    let master = FileMaster::from_secret(hex_array_at::<32>(schedule, "/file_master_hex")?.into());
+    let cases = json_at(schedule, "/cases")?
+        .as_array()
+        .ok_or("cases is not an array")?;
+    // (index, epoch, local index, final) in a file of 65538 full segments.
+    let segments = [
+        (0, 0, 0, false),
+        (1, 0, 1, false),
+        (65_535, 0, 65_535, true),
+        (65_536, 1, 0, false),
+        (65_537, 1, 1, true),
+    ];
+    let mut checked = 0;
+    for suite in [
+        ContentSuite::Aes256GcmStream,
+        ContentSuite::XChaCha20Poly1305Stream,
+    ] {
+        let binding = schedule_binding(schedule, suite)?;
+        assert_eq!(binding.layout().count(), EPOCH_SEGMENTS + 2);
+        let file = AcceptedFile::assume_accepted_without_verification(binding);
+        let (sealer, opener) = match (
+            ContentSealer::new(&file, &master),
+            ContentOpener::new(&file, &master),
+        ) {
+            (Ok(sealer), Ok(opener)) => (sealer, opener),
+            (Err(ContentError::SuiteUnavailable), Err(ContentError::SuiteUnavailable))
+                if !aes_available() && suite == ContentSuite::Aes256GcmStream =>
+            {
+                continue;
+            }
+            _ => return Err("cipher setup failed".into()),
+        };
+        for (index, epoch, local, is_final) in segments {
+            let case = cases
+                .iter()
+                .find(|case| {
+                    number(case, "/content_suite").ok() == Some(u64::from(suite.id()))
+                        && number(case, "/content_epoch").ok() == Some(u64::from(epoch))
+                })
+                .ok_or("no fixture case for this suite and epoch")?;
+            let key = hex_array_at::<32>(case, "/content_key_hex")?;
+            let mut nonce = hex_at(case, "/nonce_prefix_hex")?;
+            nonce.extend_from_slice(&u32::to_be_bytes(local));
+            nonce.push(u8::from(is_final));
+            if local == 0 && !is_final {
+                assert_eq!(nonce, hex_at(case, "/first_nonce_nonfinal_hex")?);
+            }
+            let segment = binding.layout().segment(index)?;
+            assert_eq!(
+                (segment.epoch(), u32::from(segment.local_index())),
+                (epoch, local)
+            );
+            assert_eq!(segment.is_final(), is_final);
+            let aad = spec_aad(&binding, epoch, index, SEGMENT_LEN, is_final);
+            assert_eq!(aad.len(), AAD_LEN);
+            assert_eq!(content_aad(&binding, &segment).as_slice(), aad.as_slice());
+
+            let slice: Vec<u8> = (0..40_u8)
+                .map(|byte| byte ^ index.to_be_bytes()[3])
+                .collect();
+            let ciphertext = sealer.seal_raw(&segment, &slice)?;
+            let plaintext = aead::open(suite, &key, &nonce, &aad, &ciphertext)
+                .map_err(|_| format!("segment {index} is not sealed under the fixture"))?;
+            assert_eq!(plaintext.as_slice(), slice.as_slice());
+            let independent = aead::seal(suite, &key, &nonce, &aad, &slice)?;
+            assert_eq!(independent, ciphertext);
+            assert_eq!(
+                opener.decrypt_raw(&segment, &independent)?.as_slice(),
+                slice.as_slice()
+            );
+            checked += 1;
+        }
+    }
+    assert!(checked >= segments.len());
+    Ok(())
+}
+
 #[test]
 fn aad_and_nonce_for_the_manifest_fixture_segment() -> TestResult {
     let vector = load("stream-nonces.json")?;
@@ -139,10 +246,28 @@ fn aad_and_nonce_for_the_manifest_fixture_segment() -> TestResult {
     let content = hex_at(&manifest, "/entries/0/content_hex")?;
     let (_, root) = outboard(&content);
     assert_eq!(root, hex_array_at::<32>(example, "/root_hex")?);
+    // The example is the manifest fixture's file: same transfer, manifest
+    // hash, entry ID, and suite.
+    let transfer_id = hex_array_at::<16>(schedule, "/transfer_id_hex")?;
+    let manifest_hash = hex_array_at::<32>(schedule, "/manifest_hash_hex")?;
+    assert_eq!(
+        transfer_id,
+        hex_array_at::<16>(&manifest, "/transfer_id_hex")?
+    );
+    assert_eq!(
+        manifest_hash,
+        hex_array_at::<32>(&manifest, "/manifest_hash_hex")?
+    );
+    let file_id = u32::try_from(number(&manifest, "/entries/0/id")?)?;
+    assert_eq!(u64::from(file_id), number(schedule, "/file_id")?);
+    assert_eq!(
+        suite(example, "/content_suite")?,
+        suite(&manifest, "/entries/0/content_suite")?
+    );
     let binding = FileBinding::new(
-        hex_array_at(schedule, "/transfer_id_hex")?,
-        hex_array_at(schedule, "/manifest_hash_hex")?,
-        1,
+        transfer_id,
+        manifest_hash,
+        file_id,
         suite(example, "/content_suite")?,
         u64::try_from(content.len())?,
         root,
@@ -150,7 +275,10 @@ fn aad_and_nonce_for_the_manifest_fixture_segment() -> TestResult {
     let index = u32::try_from(number(example, "/segment_index")?)?;
     let segment = binding.layout().segment(index)?;
     assert_eq!(binding.layout().count(), 1);
-    assert_eq!(segment.epoch(), 0);
+    assert_eq!(
+        u64::from(segment.epoch()),
+        number(example, "/content_epoch")?
+    );
     assert_eq!(
         u64::from(segment.len()),
         number(example, "/logical_length")?
