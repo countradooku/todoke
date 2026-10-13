@@ -501,8 +501,10 @@ proptest! {
     /// - an ID once journaled stays burned in memory, and an ID burned by a
     ///   successful write stays burned across crashes; a burned ID never
     ///   journals again;
-    /// - after a crash nothing is pending, and every usable contact was
-    ///   created by a cleared pairing: generation 1 and the journaled PSK.
+    /// - after a crash nothing is pending, a device whose transaction was
+    ///   unfinished in the last durable write is not usable, and every
+    ///   usable contact was created by a cleared pairing: generation 1 and
+    ///   the journaled PSK.
     #[test]
     fn journal_state_machine(ops in proptest::collection::vec(op(), 1..40)) {
         let peers: Vec<VerifiedDeviceBinding> = (0..3)
@@ -518,6 +520,11 @@ proptest! {
         let mut committed = std::collections::BTreeMap::new();
         let mut burned_memory = BTreeSet::new();
         let mut burned_durable = BTreeSet::new();
+        // Peers whose transaction is journaled or committed and not
+        // cleared in the last durable write. A transaction whose writes
+        // all failed never reached storage, so a crash leaves what was
+        // durable before it, which may be an earlier, cleared pairing.
+        let mut unfinished_durable: BTreeSet<usize> = BTreeSet::new();
         let mut cleared_ever = BTreeSet::new();
         for op in ops {
             let blob_before = store.storage().blob().map(<[u8]>::to_vec);
@@ -583,9 +590,10 @@ proptest! {
                     burned_memory = (0..4).filter(|index| store.pairing_burned(&id(*index))).collect();
                     burned_durable.clone_from(&burned_memory);
                     pending = None;
-                    for peer in committed.keys() {
+                    for peer in &unfinished_durable {
                         prop_assert!(!usable(&store, peers[*peer].device_public()));
                     }
+                    unfinished_durable.clear();
                     committed.clear();
                     for (position, peer) in peers.iter().enumerate() {
                         if usable(&store, peer.device_public()) {
@@ -598,6 +606,7 @@ proptest! {
             // Any successful write makes the whole in-memory state durable.
             if store.storage().blob().map(<[u8]>::to_vec) != blob_before {
                 burned_durable.clone_from(&burned_memory);
+                unfinished_durable = pending.iter().map(|(peer, _)| *peer).chain(committed.keys().copied()).collect();
             }
             for peer in pending.iter().map(|(peer, _)| peer).chain(committed.keys()) {
                 prop_assert!(!usable(&store, peers[*peer].device_public()));
