@@ -110,6 +110,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "proto_discovery_record"
+path = "fuzz_targets/proto_discovery_record.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "proto_code_pairing"
 path = "fuzz_targets/proto_code_pairing.rs"
 test = false
