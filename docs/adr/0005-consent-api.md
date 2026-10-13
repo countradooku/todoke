@@ -66,7 +66,10 @@ type system enforces the rest: decryption needs an `AcceptedFile`.
 ### 3. A sans-IO engine per session, plus a thin async driver
 
 `TransferEngine` takes complete frames and the monotonic time, and queues
-frames and events; `pump` runs it over a `Session`. This matches the
+frames and events; `pump` runs it over a `Session`, and first checks that
+the engine was built with that session's `SessionBinding` (an engine
+driven over another session would verify Accepts and receipts against the
+wrong one). This matches the
 session layer's design (sans-IO cores, a thin adapter), keeps the
 adversarial tests and proofs free of I/O, and lets the core interleave user
 intent between frames. To support it, `Session` gained `recv_until`

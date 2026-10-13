@@ -343,3 +343,47 @@ fn resume_in_a_fresh_session_after_a_lost_connection() -> TestResult {
     drop(pair);
     Ok(())
 }
+
+/// An engine runs only over the session it was built for: driven over
+/// another session it would accept that session's peer's Accept signed for
+/// the first one (§7.3: an Accept is bound to its session).
+#[test]
+fn pump_refuses_an_engine_built_for_another_session() -> TestResult {
+    let timer = ManualTimer::at(START);
+    let (mut pair, (first_alice, first_bob)) = Pair::new(&timer)?;
+    let first = first_alice.transfer_binding();
+    drop((first_alice, first_bob));
+    let (mut alice_session, _bob_session) = pair.contact_session(&timer)?;
+    let now = alice_session.now();
+    let mut engine = TransferEngine::new(
+        first,
+        &pair.alice.keys,
+        pair.alice.signing_key,
+        MemorySource::new(),
+        MemorySink::new(),
+        config(16)?,
+        Clock::new(time(WALL)?, now),
+        now,
+    )?;
+    let (result, ()) = join(pump(&mut alice_session, &mut engine, now), async {})?;
+    assert_eq!(result, Err(DriveError::WrongSession));
+    // Nothing was sent or received: the Capabilities are still queued and
+    // the engine is not closed.
+    assert!(engine.has_frames());
+    assert!(!engine.is_closed());
+    // The engine for this session is pumped normally.
+    let mut engine = TransferEngine::new(
+        alice_session.transfer_binding(),
+        &pair.alice.keys,
+        pair.alice.signing_key,
+        MemorySource::new(),
+        MemorySink::new(),
+        config(16)?,
+        Clock::new(time(WALL)?, now),
+        now,
+    )?;
+    let (result, ()) = join(pump(&mut alice_session, &mut engine, now), async {})?;
+    assert_eq!(result, Ok(()));
+    assert!(!engine.has_frames());
+    Ok(())
+}

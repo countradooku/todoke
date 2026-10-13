@@ -26,6 +26,10 @@ pub enum DriveError {
     Session(SessionError),
     /// The engine closed the session (it queued and sent the `Error`).
     Engine(EngineError),
+    /// The engine was built for another session than the one it was
+    /// driven over; nothing was sent or received, and neither the engine
+    /// nor the session changed.
+    WrongSession,
 }
 
 impl fmt::Display for DriveError {
@@ -33,6 +37,7 @@ impl fmt::Display for DriveError {
         match self {
             Self::Session(error) => write!(f, "session: {error}"),
             Self::Engine(error) => write!(f, "transfer: {error}"),
+            Self::WrongSession => f.write_str("the transfer engine belongs to another session"),
         }
     }
 }
@@ -81,11 +86,19 @@ where
 /// `until`) and hands it to the engine. Call it in a loop, handling events
 /// and local intent between calls.
 ///
+/// The engine must have been built for `session` (its
+/// [`TransferEngine::session`] is `session.transfer_binding()`): the
+/// signed Accept and receipt are checked against the engine's binding, so
+/// an engine driven over another session would accept records bound to
+/// the first one (§7.3).
+///
 /// # Errors
 ///
-/// [`DriveError::Session`] when the session fails or closes, and
-/// [`DriveError::Engine`] when the engine closed it after a violation or a
-/// deadline; in both cases the engine is closed.
+/// [`DriveError::WrongSession`] if the engine belongs to another session
+/// (checked first; nothing happens then). [`DriveError::Session`] when the
+/// session fails or closes, and [`DriveError::Engine`] when the engine
+/// closed it after a violation or a deadline; in both cases the engine is
+/// closed.
 pub async fn pump<IO, T, K, S, R>(
     session: &mut Session<IO, T>,
     engine: &mut TransferEngine<'_, K, S, R>,
@@ -98,6 +111,9 @@ where
     S: SendSource,
     R: ReceiveSink,
 {
+    if session.transfer_binding() != *engine.session() {
+        return Err(DriveError::WrongSession);
+    }
     flush(session, engine).await?;
     if engine.is_closed() {
         return Err(DriveError::Engine(EngineError::Closed));
