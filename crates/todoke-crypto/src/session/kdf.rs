@@ -1,4 +1,5 @@
 //! Labeled derivations bound to a session (PROTOCOL §4.2.6, §4.3, §4.4).
+//! The HKDF helpers also serve the content key schedule (§8).
 //!
 //! HKDF is RFC 5869 HKDF-SHA-256 and HMAC is HMAC-SHA-256, both from libcrux.
 //! These are distinct from Noise's internal HKDF (§4.2.3). libcrux's HACL
@@ -39,6 +40,18 @@ pub(crate) fn hkdf_sha256(
     ikm: &[u8],
     info: &[u8],
 ) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
+    let prk = hkdf_sha256_extract(salt, ikm)?;
+    let mut okm = Zeroizing::new([0; KEY_LEN]);
+    hkdf_sha256_expand(&prk, info, okm.as_mut_slice())?;
+    Ok(okm)
+}
+
+/// RFC 5869 HKDF-SHA-256 Extract: the pseudorandom key for
+/// [`hkdf_sha256_expand`]. An empty salt means 32 zero bytes.
+pub(crate) fn hkdf_sha256_extract(
+    salt: &[u8],
+    ikm: &[u8],
+) -> Result<Zeroizing<[u8; KEY_LEN]>, KdfError> {
     let mut prk = Zeroizing::new([0; KEY_LEN]);
     Hkdf::<Sha2_256>::extract(
         prk.as_mut_slice().classify_ref_mut(),
@@ -46,14 +59,19 @@ pub(crate) fn hkdf_sha256(
         ikm.classify_ref(),
     )
     .map_err(|_| KdfError)?;
-    let mut okm = Zeroizing::new([0; KEY_LEN]);
-    Hkdf::<Sha2_256>::expand(
-        okm.as_mut_slice().classify_ref_mut(),
-        prk.as_slice().classify_ref(),
-        info,
-    )
-    .map_err(|_| KdfError)?;
-    Ok(okm)
+    Ok(prk)
+}
+
+/// RFC 5869 HKDF-SHA-256 Expand of `prk` into all of `okm` (at most 8160
+/// bytes). Extract then Expand with the same inputs is `HKDF(salt, ikm,
+/// info, okm.len())` (§1).
+pub(crate) fn hkdf_sha256_expand(
+    prk: &[u8; KEY_LEN],
+    info: &[u8],
+    okm: &mut [u8],
+) -> Result<(), KdfError> {
+    Hkdf::<Sha2_256>::expand(okm.classify_ref_mut(), prk.as_slice().classify_ref(), info)
+        .map_err(|_| KdfError)
 }
 
 /// `psk_next = HKDF(h, psk, "todoke/v1/psk-ratchet\0", 32)`: the handshake
