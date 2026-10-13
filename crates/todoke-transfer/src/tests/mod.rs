@@ -4,6 +4,7 @@
 
 mod adversarial;
 mod basic;
+mod decisions;
 mod e2e;
 mod lifecycle;
 mod support;

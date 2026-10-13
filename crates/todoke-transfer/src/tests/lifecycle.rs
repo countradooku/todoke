@@ -96,7 +96,11 @@ fn receipt_window_and_forged_receipts() -> TestResult {
 }
 
 /// Runs until Bob has stored at least `segments` verified segments.
-fn run_until_stored(link: &mut Link<'_>, transfer_id: &TransferId, segments: usize) -> TestResult {
+pub(super) fn run_until_stored(
+    link: &mut Link<'_>,
+    transfer_id: &TransferId,
+    segments: usize,
+) -> TestResult {
     for _ in 0..100_000 {
         if link.b.sink().stored_segments(transfer_id) >= segments {
             return Ok(());
@@ -113,7 +117,7 @@ fn run_until_stored(link: &mut Link<'_>, transfer_id: &TransferId, segments: usi
     Err("not stored".into())
 }
 
-fn big_specs() -> Vec<Spec> {
+pub(super) fn big_specs() -> Vec<Spec> {
     vec![
         dir("folder", 0),
         file("big", 1, 16_384 * 12 + 77, 7),
@@ -191,7 +195,7 @@ fn accept_expiry_pauses_content_and_resume_needs_fresh_consent() -> TestResult {
 }
 
 /// What a fresh session needs after an interruption.
-type Interrupted = (
+pub(super) type Interrupted = (
     OutgoingOffer,
     TransferId,
     (MemorySource, MemorySource),
@@ -201,8 +205,22 @@ type Interrupted = (
 
 /// Interrupts a transfer after `stored` segments and returns everything a
 /// fresh session needs.
-fn interrupted(fixture: &Fixture, selection: Vec<u32>, stored: usize) -> AnyResult<Interrupted> {
-    let (mut link, transfer_id, _) = offered(fixture, &big_specs(), 3600, (4, 4))?;
+pub(super) fn interrupted(
+    fixture: &Fixture,
+    selection: Vec<u32>,
+    stored: usize,
+) -> AnyResult<Interrupted> {
+    interrupted_with(fixture, &big_specs(), selection, stored)
+}
+
+/// As [`interrupted`], for a transfer of `specs`.
+pub(super) fn interrupted_with(
+    fixture: &Fixture,
+    specs: &[Spec],
+    selection: Vec<u32>,
+    stored: usize,
+) -> AnyResult<Interrupted> {
+    let (mut link, transfer_id, _) = offered(fixture, specs, 3600, (4, 4))?;
     link.b.accept(&transfer_id, selection, link.now)?;
     run_until_stored(&mut link, &transfer_id, stored)?;
     link.a.close(None);
@@ -871,7 +889,7 @@ fn interrupted_in(
 
 /// Hands `manifest` to Bob directly (`ManifestStart` and parts), as a
 /// sender that skipped its own checks would.
-fn inject_manifest(link: &mut Link<'_>, manifest: &CanonicalManifest) -> TestResult {
+pub(super) fn inject_manifest(link: &mut Link<'_>, manifest: &CanonicalManifest) -> TestResult {
     let bytes = manifest.bytes();
     let id = *manifest.transfer_id();
     let start = ManifestStart::new(id, *manifest.hash(), u32::try_from(bytes.len())?)?;
