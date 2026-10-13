@@ -621,7 +621,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             None => {
                 let mut created = None;
                 // The name it had (if the user removed it), then the
-                // consented name, then the next free ones. Once its records
+                // consented name, then the next free ones after it. Once its records
                 // reach the bound, only its last name: the journal never
                 // grows without bound.
                 let local = plan
@@ -636,7 +636,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
                         .iter()
                         .cloned()
                         .chain(local)
-                        .chain(plan.candidates(top).map(|(_, name)| name))
+                        .chain(plan.fallbacks(top))
                         .collect()
                 };
                 for name in candidates {
@@ -945,7 +945,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
     }
 
     /// Publishes the staged file under its planned name, or the next free
-    /// candidate; never replaces anything.
+    /// candidate after it; never replaces anything.
     fn commit(
         &self,
         transfer_id: &TransferId,
@@ -960,8 +960,8 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             .and_then(|transfer| transfer.plan.as_ref())
             .ok_or(SinkError::Storage)?;
         let entry = plan.entry(file_id).ok_or(SinkError::Storage)?;
-        let candidates = core::iter::once(entry.local().as_str().to_owned())
-            .chain(plan.candidates(file_id).map(|(_, name)| name));
+        let candidates =
+            core::iter::once(entry.local().as_str().to_owned()).chain(plan.fallbacks(file_id));
         for name in candidates {
             match self.destination.publish(dir, staged, temp, &name) {
                 Ok(_) => return Ok(name),

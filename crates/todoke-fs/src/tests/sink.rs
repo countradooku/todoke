@@ -252,6 +252,34 @@ fn existing_names_get_suffixes_and_nothing_is_overwritten() -> TestResult {
     Ok(())
 }
 
+/// A name the plan skipped because the destination held it is never used
+/// at publication, even once it is free: the fallback is the next name
+/// after the consented one (on a case-sensitive filesystem, `c.txt` would
+/// otherwise land beside the `C.TXT` the plan avoided).
+#[test]
+fn publication_never_falls_back_to_a_name_the_plan_skipped() -> TestResult {
+    let (mut harness, consented) = setup(2)?;
+    let dest = harness.dest.path().to_owned();
+    std::fs::write(dest.join("c.txt"), b"theirs")?;
+    let transfer_id = *consented.manifest.transfer_id();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    let plan = harness.sink()?.plan(&transfer_id).ok_or("plan")?;
+    assert_eq!(plan.entry(6).map(|e| e.local().as_str()), Some("c (2).txt"));
+    std::fs::remove_file(dest.join("c.txt"))?;
+    std::fs::write(dest.join("c (2).txt"), b"late")?;
+    for file_id in FILES {
+        harness.sink()?.publish(&consented.manifest, file_id)?;
+    }
+    assert!(!dest.join("c.txt").exists());
+    assert_eq!(std::fs::read(dest.join("c (2).txt"))?, b"late");
+    assert_eq!(std::fs::read(dest.join("c (3).txt"))?, content(100, 4));
+    assert_eq!(
+        harness.sink()?.published_path(&transfer_id, 6),
+        Some(vec!["c (3).txt".to_owned()])
+    );
+    Ok(())
+}
+
 #[test]
 fn a_restart_keeps_verified_segments_and_removes_temporaries() -> TestResult {
     let (mut harness, consented) = setup(3)?;

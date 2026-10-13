@@ -527,6 +527,19 @@ impl DestinationPlan {
         })
     }
 
+    /// The names entry `id` may take at publication if its consented name
+    /// was taken since: the candidates after that name, never an earlier
+    /// one, which the plan skipped because the destination held it (or a
+    /// case or normalization variant of it). Empty if the consented name is
+    /// not a candidate.
+    pub(crate) fn fallbacks(&self, id: u32) -> impl Iterator<Item = String> + '_ {
+        let local = self.entry(id).map(|entry| entry.local().as_str());
+        self.candidates(id)
+            .map(|(_, name)| name)
+            .skip_while(move |name| Some(name.as_str()) != local)
+            .skip(1)
+    }
+
     fn check_paths(&mut self, root_len: usize) {
         let limit = self.profile.path;
         let mut lengths: BTreeMap<u32, usize> = BTreeMap::new();
