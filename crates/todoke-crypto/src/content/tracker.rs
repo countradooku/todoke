@@ -11,6 +11,12 @@ use super::{FileBinding, VerifiedSegment};
 /// this caps a tracker near 100 KiB including map overhead. A receiver
 /// that requests the lowest missing segments first keeps at most about as
 /// many ranges as it has requests outstanding (at most 16, §7.4).
+///
+/// This is a per-file cap only. §7.5 also caps per-session resume metadata
+/// in memory at 8 MiB, which about 80 full trackers would reach; the
+/// transfer layer (P07) must budget the trackers it keeps resident in a
+/// session against that cap, for example by keeping only active files'
+/// trackers in memory and rebuilding others from revalidated storage.
 pub const MAX_TRACKED_RANGES: usize = 4096;
 /// The most ranges in one `ResumeStatus` page (§7.5).
 pub const MAX_RESUME_RANGES: usize = 1024;
@@ -48,7 +54,12 @@ impl std::error::Error for TrackerError {}
 /// segment present. After a restart, rebuild it by reopening each stored
 /// ciphertext (or re-verifying each stored slice) and recording the result
 /// (§7.5: revalidate before advertising). Record a segment only after it
-/// has been durably stored.
+/// has been durably stored, and ask [`can_record`](Self::can_record) first
+/// (before requesting it, and again before storing it) so that a stored
+/// segment is never refused as [`TrackerError::TooFragmented`].
+///
+/// Each tracker is bounded by [`MAX_TRACKED_RANGES`]; the session-wide
+/// §7.5 budget for all resident trackers is the transfer layer's (P07).
 #[derive(Clone, PartialEq, Eq)]
 pub struct SegmentTracker {
     transfer_id: [u8; 16],
@@ -72,29 +83,60 @@ impl SegmentTracker {
         }
     }
 
+    /// What [`record`](Self::record) would return for segment `index` of
+    /// this file, without changing anything: `Ok(true)` if it is missing
+    /// and would be recorded, `Ok(false)` if it is already recorded.
+    ///
+    /// Call it before requesting a segment and again before durably storing
+    /// it: with no other `record` in between, `record` then succeeds, so a
+    /// segment is never stored and afterwards refused.
+    ///
+    /// # Errors
+    ///
+    /// [`TrackerError::ForeignSegment`] for an index past the file's last
+    /// segment; [`TrackerError::TooFragmented`] if it would start a new
+    /// range past [`MAX_TRACKED_RANGES`] (request lower missing segments
+    /// first, which extend existing ranges).
+    pub fn can_record(&self, index: u32) -> Result<bool, TrackerError> {
+        if index >= self.count {
+            return Err(TrackerError::ForeignSegment);
+        }
+        if self.contains(index) {
+            return Ok(false);
+        }
+        // `index` is not covered, so a range covering `index - 1` ends at
+        // `index`.
+        let joins_before = index.checked_sub(1).is_some_and(|prev| self.contains(prev));
+        let joins_after = index
+            .checked_add(1)
+            .is_some_and(|next| self.ranges.contains_key(&next));
+        if !joins_before && !joins_after && self.ranges.len() >= MAX_TRACKED_RANGES {
+            return Err(TrackerError::TooFragmented);
+        }
+        Ok(true)
+    }
+
     /// Records a verified, stored segment. Returns whether it was new.
     ///
     /// # Errors
     ///
     /// [`TrackerError::ForeignSegment`] for another transfer or file;
     /// [`TrackerError::TooFragmented`] if it would start a new range past
-    /// the cap.
+    /// the cap, which [`can_record`](Self::can_record) reports before the
+    /// segment is stored.
     pub fn record(&mut self, segment: &VerifiedSegment) -> Result<bool, TrackerError> {
         if segment.transfer_id() != &self.transfer_id || segment.file_id() != self.file_id {
             return Err(TrackerError::ForeignSegment);
         }
         let index = segment.segment().index();
-        if index >= self.count {
-            return Err(TrackerError::ForeignSegment);
+        if !self.can_record(index)? {
+            return Ok(false);
         }
         let before = self
             .ranges
             .range(..=index)
             .next_back()
             .map(|(&start, &end)| (start, end));
-        if before.is_some_and(|(_, end)| index < end) {
-            return Ok(false);
-        }
         let joins_before = before.filter(|&(_, end)| end == index);
         let after = index
             .checked_add(1)
@@ -112,9 +154,7 @@ impl SegmentTracker {
                 self.ranges.insert(index, end);
             }
             (None, None) => {
-                if self.ranges.len() >= MAX_TRACKED_RANGES {
-                    return Err(TrackerError::TooFragmented);
-                }
+                // can_record checked the cap.
                 self.ranges.insert(index, index + 1);
             }
         }

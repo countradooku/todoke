@@ -180,6 +180,56 @@ fn fragmentation_cap_and_page_limit() -> TestResult {
     Ok(())
 }
 
+/// `can_record` answers before the caller stores anything, so a verified
+/// segment is never durably stored and then refused as too fragmented; and
+/// `record` agrees with it at the cap.
+#[test]
+fn can_record_predicts_the_cap_before_storage() -> TestResult {
+    let segments = 2 * u32::try_from(MAX_TRACKED_RANGES)? + 10;
+    let file = binding(segments, 1)?;
+    let mut tracker = SegmentTracker::new(&file);
+    // One range short of the cap: even indices 0, 2, .., 2 * (cap - 2).
+    let below = u32::try_from(MAX_TRACKED_RANGES - 1)?;
+    for index in (0..below).map(|i| 2 * i) {
+        assert_eq!(tracker.can_record(index), Ok(true));
+        assert_eq!(record(&mut tracker, &file, index)?, Ok(true));
+    }
+    assert_eq!(tracker.range_count(), MAX_TRACKED_RANGES - 1);
+    // The last new range still fits.
+    let last = 2 * below;
+    assert_eq!(tracker.can_record(last), Ok(true));
+    assert_eq!(record(&mut tracker, &file, last)?, Ok(true));
+    assert_eq!(tracker.range_count(), MAX_TRACKED_RANGES);
+    // At the cap: a new isolated range is refused before storage, and
+    // record agrees without changing anything.
+    let isolated = last + 2;
+    assert_eq!(
+        tracker.can_record(isolated),
+        Err(TrackerError::TooFragmented)
+    );
+    let before = tracker.clone();
+    assert_eq!(
+        record(&mut tracker, &file, isolated)?,
+        Err(TrackerError::TooFragmented)
+    );
+    assert_eq!(tracker, before);
+    // Extending a range (after it, or before the next one) and filling a
+    // gap still fit; a recorded segment is not new; a past-the-end index
+    // is not this file's.
+    assert_eq!(tracker.can_record(last + 1), Ok(true));
+    assert_eq!(tracker.can_record(1), Ok(true));
+    assert_eq!(tracker.can_record(0), Ok(false));
+    assert_eq!(
+        tracker.can_record(segments),
+        Err(TrackerError::ForeignSegment)
+    );
+    assert_eq!(record(&mut tracker, &file, 1)?, Ok(true));
+    assert_eq!(tracker.range_count(), MAX_TRACKED_RANGES - 1);
+    // Merging two ranges freed one slot.
+    assert_eq!(tracker.can_record(isolated), Ok(true));
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
 enum Op {
     Record(u32),
@@ -221,7 +271,9 @@ proptest! {
         for op in ops {
             match op {
                 Op::Record(index) => {
+                    let predicted = tracker.can_record(index);
                     let result = record(&mut tracker, &file, index).map_err(to_fail)?;
+                    prop_assert_eq!(result, predicted);
                     prop_assert_eq!(result, Ok(model.insert(index)));
                 }
                 Op::RecordForeign(index) => {
