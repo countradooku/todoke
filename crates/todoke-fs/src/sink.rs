@@ -446,6 +446,18 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         self.save_tombstones();
     }
 
+    /// Whether every tombstone is on disk. After a failed write this is
+    /// `false` until a retry ([`Self::sweep`], [`ReceiveSink::tombstone_room`],
+    /// or the next offer or Accept) succeeds; meanwhile the sink takes no
+    /// new or resumed transfer (`tombstone_room` answers `false`, offers are
+    /// refused, Accepts fail), because a crash would forget the cancel.
+    #[must_use]
+    pub fn tombstones_durable(&self) -> bool {
+        !self.tombstones_dirty
+    }
+
+    /// Writes the tombstone list if memory is ahead of the disk. A failure
+    /// leaves it marked for the next retry.
     fn save_tombstones(&mut self) {
         if !self.tombstones_dirty {
             return;
@@ -893,6 +905,11 @@ fn reservation(manifest: &CanonicalManifest, selection: &[u32]) -> u64 {
 
 impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
     fn check_offer(&mut self, manifest: &CanonicalManifest) -> Result<(), SinkRefusal> {
+        // Fail closed while a cancel is only in memory.
+        self.save_tombstones();
+        if self.tombstones_dirty {
+            return Err(SinkRefusal::UnsupportedDestination);
+        }
         let plan = self.plan_for(manifest);
         if !plan.any_file_storable() {
             return Err(SinkRefusal::UnsupportedDestination);
@@ -944,7 +961,8 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
 
     fn tombstone_room(&mut self, now: UnixTime) -> bool {
         self.sweep(now);
-        self.tombstones.len() < self.config.tombstone_limit
+        // No new transfer ID while a tombstone exists only in memory.
+        !self.tombstones_dirty && self.tombstones.len() < self.config.tombstone_limit
     }
 
     fn retained(&self, transfer_id: &TransferId, now: UnixTime) -> Option<Retained> {
@@ -969,6 +987,12 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
         {
             // An unreadable retained transfer is never replaced: it may
             // become readable again at the next start.
+            return Err(SinkError::Storage);
+        }
+        self.save_tombstones();
+        if self.tombstones_dirty {
+            // A cancel exists only in memory: take nothing new until it is
+            // durable.
             return Err(SinkError::Storage);
         }
         if let Some(transfer) = self.transfers.get_mut(&transfer_id)

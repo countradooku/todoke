@@ -149,6 +149,10 @@ its records are positively damaged (or missing) or expired: a journal or
 manifest that cannot be read now (permissions, an I/O error, too many open
 files) is kept on disk, unused, and no new Accept may replace it that run. Tombstones (`TDKT`) are a sorted,
 checked list replaced atomically; a damaged list fails closed at start-up.
+A failed write of the list is retried on every sweep, offer, and Accept;
+until a retry succeeds the sink reports the tombstones as not durable
+(`FsSink::tombstones_durable`) and takes no new or resumed transfer, so a
+crash cannot forget a cancel that was already acknowledged.
 Cancel, revocation, expiry, and start-up clean-up delete the
 quarantine and leftover temporary files; deleting the sealed master leaves any
 ciphertext remnant unreadable. Physical erasure on flash is not promised

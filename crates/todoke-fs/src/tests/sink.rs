@@ -735,3 +735,50 @@ fn unreadable_state_is_kept_not_deleted() -> TestResult {
     }
     Ok(())
 }
+
+/// A cancel whose tombstone cannot be written is not forgotten silently:
+/// the sink reports the tombstones as not durable and takes no new or
+/// resumed transfer until a retry persists them.
+#[test]
+fn a_tombstone_that_cannot_be_written_fails_closed_until_it_is() -> TestResult {
+    let (mut harness, consented) = setup(16)?;
+    let transfer_id = *consented.manifest.transfer_id();
+    receive_all(harness.sink()?, &consented, &FILES)?;
+    let fixture = fixture()?;
+    let other = build_manifest(&fixture, [17; 16], &entries(), 3600)?;
+    let other_consent = Consented::new(&fixture, &other, &entries(), &FILES, false, 17)?;
+    harness
+        .sink()?
+        .check_offer(&other)
+        .map_err(|r| format!("{r:?}"))?;
+    // The atomic write's temporary name is taken by a directory: every
+    // write of the tombstone list fails.
+    let blocker = harness.state.path().join("tombstones.tmp");
+    std::fs::create_dir(&blocker)?;
+    let until = time(WALL + 7200)?;
+    let sink = harness.sink()?;
+    sink.tombstone(&transfer_id, until);
+    assert!(sink.is_tombstoned(&transfer_id, time(WALL)?));
+    assert!(!sink.tombstones_durable());
+    assert!(
+        !sink.tombstone_room(time(WALL)?),
+        "a new transfer was taken"
+    );
+    assert_eq!(
+        sink.record_accept(&other, &other_consent.accept),
+        Err(SinkError::Storage)
+    );
+    assert_eq!(
+        sink.check_offer(&other),
+        Err(SinkRefusal::UnsupportedDestination)
+    );
+    sink.sweep(time(WALL)?);
+    assert!(!sink.tombstones_durable());
+    // The next retry persists it.
+    std::fs::remove_dir(&blocker)?;
+    assert!(sink.tombstone_room(time(WALL)?));
+    assert!(sink.tombstones_durable());
+    harness.reopen(WALL + 1)?;
+    assert!(harness.sink()?.is_tombstoned(&transfer_id, time(WALL + 1)?));
+    Ok(())
+}
