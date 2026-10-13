@@ -10,3 +10,33 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+todoke-proto.workspace = true
+# Never enable a gate feature here (unaudited-suite-0001,
+# unaudited-code-pairing, insecure-content-without-accept): this is a
+# shipped graph, and scripts/ci/deny-exceptions-dev-only.sh checks it.
+todoke-crypto.workspace = true
+# Every link is a `futures-io` byte pipe, as the session adapter takes.
+futures-io.workspace = true
+
+# The LAN transport: TCP and timers. There are no sockets on
+# wasm32-unknown-unknown, so the LAN code is not built there.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# Dual-stack listening (IPV6_V6ONLY off on every platform) and socket
+# options; tokio's `net` feature already depends on it.
+socket2 = "=0.6.5"
+tokio = { workspace = true, features = ["net", "time", "rt"] }
+
+[dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# Tests run real suite 0x0001 sessions; development builds only.
+todoke-crypto = { workspace = true, features = ["unaudited-suite-0001"] }
+# The migration test runs a transfer across two sessions.
+todoke-transfer.workspace = true
+# A valid ML-KEM-768 public credential for test device bindings.
+libcrux-ml-kem.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt", "macros", "test-util", "io-util"] }
+zeroize.workspace = true

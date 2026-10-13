@@ -62,6 +62,11 @@ version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.bytes]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport tests (tokio io-util, development builds only); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.cc]]
 version = "1.8.0"
 criteria = "safe-to-deploy"
@@ -352,6 +357,11 @@ version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.mio]]
+version = "1.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport (tokio's I/O event loop: epoll, kqueue, IOCP); mozilla and bytecode-alliance trust its publisher (Thomasdezeeuw) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.num-bigint]]
 version = "0.4.8"
 criteria = "safe-to-deploy"
@@ -492,6 +502,11 @@ version = "0.10.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.socket2]]
+version = "0.6.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport (dual-stack LAN listener: IPV6_V6ONLY off, SO_REUSEADDR on Unix); mozilla and bytecode-alliance trust its publisher (Thomasdezeeuw) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -507,6 +522,16 @@ version = "1.13.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (dependency of unicode-normalization, the PROTOCOL §7.1 NFC check on manifest names); imported audits cover only 1.9.0; replace with an audit or imported audit."
 
+[[exemptions.tokio]]
+version = "1.53.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport (LAN TCP and timers; features net, time, rt); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.tokio-macros]]
+version = "2.7.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport tests (#[tokio::test], development builds only); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
 [[exemptions.typenum]]
 version = "1.20.1"
 criteria = "safe-to-deploy"
@@ -521,6 +546,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.wasi]]
+version = "0.11.1+wasi-snapshot-preview1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for mio on WASI targets, which todoke does not ship; isrg, mozilla, and bytecode-alliance trust its publisher (alexcrichton) instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.wasm-bindgen]]
 version = "0.2.129"

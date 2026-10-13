@@ -17,7 +17,7 @@ todoke-proto.workspace = true
 # unaudited-code-pairing, insecure-content-without-accept): this is a
 # shipped graph, and scripts/ci/deny-exceptions-dev-only.sh checks it.
 todoke-crypto.workspace = true
-todoke-transfer = { path = "../todoke-transfer", version = "0.1.0" }
+todoke-transfer.workspace = true
 # Whole-file BLAKE3 before publication (§7.7) and source hashing.
 blake3.workspace = true
 # NFD and NFC for collision keys and local names.
