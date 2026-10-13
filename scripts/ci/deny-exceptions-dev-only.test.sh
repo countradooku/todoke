@@ -88,7 +88,7 @@ expect fail "no classified license exceptions" "$scratch/unclassified.toml" "$wo
 workspace_copy() {
     local copy="$1"
     mkdir -p "$copy"
-    git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock crates bench \
+    git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock crates \
         | tar -cf - -T - | tar -xf - -C "$copy"
 }
 
@@ -141,6 +141,18 @@ TOML
 cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent/Cargo.toml" > /dev/null
 expect_manifest "content consent bypass in a shipped graph" "$scratch/consent/Cargo.toml" \
     'todoke-crypto feature insecure-content-without-accept is enabled outside dev-dependencies'
+
+# A workspace member enabling the content consent bypass for its own tests:
+# feature unification would compile every shipped crate's tests against it.
+workspace_copy "$scratch/consent-dev"
+cat >> "$scratch/consent-dev/crates/todoke-core/Cargo.toml" <<'TOML'
+
+[dev-dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent-dev/Cargo.toml" > /dev/null
+expect_manifest "content consent bypass in the root development graph" "$scratch/consent-dev/Cargo.toml" \
+    "todoke-crypto feature insecure-content-without-accept is enabled in the root workspace's development graph"
 
 # The runtime Noise engine with Snow's raw traffic-key export.
 workspace_copy "$scratch/raw-split"

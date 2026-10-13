@@ -24,7 +24,7 @@ Mobile and web bindings are to use BoltFFI. Its exact supported targets, packagi
 
 ## Crate responsibilities and trust boundaries
 
-The table assigns responsibilities. Apart from the identity, session, pairing, and content code in `todoke-proto` and `todoke-crypto`, every crate currently contains documentation only and does not provide the APIs described here. The `todoke-bench` crate in `bench/` holds benchmarks only.
+The table assigns responsibilities. Apart from the identity, session, pairing, and content code in `todoke-proto` and `todoke-crypto`, every crate currently contains documentation only and does not provide the APIs described here. The `todoke-bench` crate in `bench/`, an isolated workspace like `fuzz/`, holds benchmarks only.
 
 | Crate | Responsibility | Trust boundary |
 | --- | --- | --- |

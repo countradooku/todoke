@@ -22,6 +22,12 @@
 #   unified into builds of targets that need them (Cargo book, "Feature
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
+# - No target's full graph, dev-dependencies included, may enable a feature in
+#   forbidden_dev_features: `insecure-content-without-accept`. `cargo test
+#   --workspace` and `--all-targets` builds unify every member's
+#   dev-dependency features, so one member enabling it would compile every
+#   shipped crate's tests against the consent bypass. The benchmarks that
+#   need it live in the isolated `bench/` workspace.
 #
 # The graph is resolved per real target triple rather than with --target all:
 # libcrux declares some crates only under cfg(hax) or cfg(valgrind_ct_test), which
@@ -65,6 +71,11 @@ forbidden_features=(
     "todoke-crypto:unaudited-code-pairing"
     "todoke-crypto:insecure-content-without-accept"
     "snow:risky-raw-split"
+)
+
+# Features the root workspace may not enable even through dev-dependencies.
+forbidden_dev_features=(
+    "todoke-crypto:insecure-content-without-accept"
 )
 
 # Skipped duplicate versions, read from deny.toml as name@version.
@@ -155,6 +166,20 @@ is_build_time_only() {
     return 1
 }
 
+# Exit 0 if the "{p}|{f}" graph enables package:feature, 1 if the package is
+# present without it, and 2 if the package is absent (a vacuous check).
+feature_outcome() {
+    local graph="$1" forbidden="$2"
+    awk -F'|' -v name="${forbidden%%:*}" -v feature="${forbidden#*:}" '
+        { split($1, words, " "); count = split($2, enabled, ",") }
+        words[1] == name {
+            seen = 1
+            for (i = 1; i <= count; i++) if (enabled[i] == feature) found = 1
+        }
+        END { exit found ? 0 : (seen ? 1 : 2) }
+    ' <<< "$graph"
+}
+
 contains() {
     local graph="$1" package="$2"
     local name="${package%@*}" version="${package#*@}"
@@ -168,6 +193,8 @@ for target in "${targets[@]}"; do
     compiled_any="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}')"
     # Enabled features of every non-dev package, as "name vX (source)|f1,f2".
     features="$(cargo tree --manifest-path "$manifest" --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}|{f}')"
+    # The same for everything compiled at all, dev-dependencies included.
+    features_any="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}|{f}')"
     # Only what is linked into target artifacts.
     linked="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,no-proc-macro --target "$target" --prefix none --format '{p}')"
     for package in "${exempt[@]}"; do
@@ -182,17 +209,8 @@ for target in "${targets[@]}"; do
         fi
     done
     for forbidden in "${forbidden_features[@]}"; do
-        # Exit 0: the feature is enabled; 1: the package is present without
-        # it; 2: the package is absent, which would make the check vacuous.
         outcome=0
-        awk -F'|' -v name="${forbidden%%:*}" -v feature="${forbidden#*:}" '
-            { split($1, words, " "); count = split($2, enabled, ",") }
-            words[1] == name {
-                seen = 1
-                for (i = 1; i <= count; i++) if (enabled[i] == feature) found = 1
-            }
-            END { exit found ? 0 : (seen ? 1 : 2) }
-        ' <<< "$features" || outcome=$?
+        feature_outcome "$features" "$forbidden" || outcome=$?
         case "$outcome" in
             0)
                 echo "${forbidden%%:*} feature ${forbidden#*:} is enabled outside dev-dependencies for ${target}." >&2
@@ -201,6 +219,21 @@ for target in "${targets[@]}"; do
             1) ;;
             *)
                 echo "${forbidden%%:*} is not in the non-dev graph for ${target}; refusing to pass vacuously." >&2
+                status=1
+                ;;
+        esac
+    done
+    for forbidden in "${forbidden_dev_features[@]}"; do
+        outcome=0
+        feature_outcome "$features_any" "$forbidden" || outcome=$?
+        case "$outcome" in
+            0)
+                echo "${forbidden%%:*} feature ${forbidden#*:} is enabled in the root workspace's development graph for ${target}; only isolated workspaces such as bench/ may enable it." >&2
+                status=1
+                ;;
+            1) ;;
+            *)
+                echo "${forbidden%%:*} is not in the development graph for ${target}; refusing to pass vacuously." >&2
                 status=1
                 ;;
         esac
@@ -220,6 +253,6 @@ for target in "${targets[@]}"; do
 done
 
 if [[ $status -eq 0 ]]; then
-    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); no shipped graph enables ${forbidden_features[*]}; CI cross targets (${cross_targets[*]}) are covered."
+    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); no shipped graph enables ${forbidden_features[*]}; no root development graph enables ${forbidden_dev_features[*]}; CI cross targets (${cross_targets[*]}) are covered."
 fi
 exit "$status"

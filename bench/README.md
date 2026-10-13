@@ -1,13 +1,45 @@
 # Benchmarks
 
-Reproducible measurements live in the `todoke-bench` workspace crate
-(`bench/`). Its library is empty; each benchmark is a
-[criterion](https://docs.rs/criterion/0.8.2/) target in `bench/benches/`.
-criterion and the content consent bypass
-(`todoke-crypto/insecure-content-without-accept`) are development
-dependencies only, so no shipped graph contains them
-(`scripts/ci/deny-exceptions-dev-only.sh` checks the feature). On wasm32 the
-benchmark is an empty program.
+Reproducible measurements live in the `todoke-bench` crate (`bench/`), an
+isolated cargo workspace like `fuzz/`. Its library is empty; each benchmark
+is a [criterion](https://docs.rs/criterion/0.8.2/) target in
+`bench/benches/`. On wasm32 the benchmark is an empty program.
+
+The benchmarks need the content consent bypass
+(`todoke-crypto/insecure-content-without-accept`). Cargo unifies a
+dev-dependency's features across every package of a workspace build
+(`cargo test --workspace`, `--all-targets`), so as a root workspace member
+`bench/` would compile every shipped crate's tests against the bypass. It
+is therefore its own workspace, excluded from the root one, and
+`scripts/ci/deny-exceptions-dev-only.sh` fails if any root graph, dev
+edges included, enables the feature.
+
+## Workspace and dependency checks
+
+- `bench/Cargo.toml` has its own `[workspace]`, repeats the root lints, and
+  uses a versioned path dependency on `todoke-crypto` with the bypass
+  feature. Every dependency is a development dependency.
+- `bench/Cargo.lock` is committed and was seeded from the root `Cargo.lock`,
+  so both graphs use the same versions; keep it in step when the root lock
+  changes.
+- `bench/supply-chain` is its own cargo-vet store, created with
+  `cargo vet init` inside `bench/`, importing the same six audit sets as the
+  root store, with exact-version "Not yet reviewed" exemptions for the rest
+  (see `supply-chain/README.md`). Store commands such as `init`, `import`,
+  and `regenerate` reject `--manifest-path`; run them from inside `bench/`.
+- From the repository root (CI runs these too):
+
+  ```sh
+  cargo fmt --all --manifest-path bench/Cargo.toml -- --check
+  cargo clippy --manifest-path bench/Cargo.toml --all-targets --locked -- -D warnings -W clippy::pedantic
+  cargo deny --manifest-path bench/Cargo.toml --locked --config deny.toml check
+  cargo vet --manifest-path bench/Cargo.toml --locked
+  cargo bench --manifest-path bench/Cargo.toml --locked --no-run
+  cargo test --manifest-path bench/Cargo.toml --locked --benches  # each benchmark once
+  ```
+
+  cargo-deny's license check skips development dependencies, so it checks
+  no licenses in this graph (all of them are development dependencies).
 
 Record the revision, hardware, OS, Rust version, workload, and procedure
 with every result. Use synthetic data only; never collect telemetry or
@@ -34,7 +66,7 @@ Throughput counts logical file bytes. A suite this device does not advertise
 Run (short, as used for the numbers below; keep parallelism modest):
 
 ```sh
-CARGO_BUILD_JOBS=4 cargo bench -p todoke-bench --locked --bench content -- \
+CARGO_BUILD_JOBS=4 cargo bench --manifest-path bench/Cargo.toml --locked --bench content -- \
   --warm-up-time 1 --measurement-time 3
 ```
 
