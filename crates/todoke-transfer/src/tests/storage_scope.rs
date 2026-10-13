@@ -1,7 +1,8 @@
-//! §12 scope of a local storage failure: `STORAGE` is a transfer-scoped
-//! code, so a sink that cannot read retained data fails that transfer,
-//! tells the peer with a transfer-scoped `Error`, and leaves the session
-//! (and any other transfer) running.
+//! Local storage failures (§7.7, §12): `STORAGE` and `INTEGRITY` are
+//! transfer-scoped codes, so a sink that cannot read retained data or
+//! publish a file fails that transfer, tells the peer with a
+//! transfer-scoped `Error`, sends no `Complete` or receipt, and leaves the
+//! session running.
 
 use core::time::Duration;
 
@@ -19,28 +20,33 @@ use crate::{
     SendSource, SinkError, SinkRefusal, TransferEngine, TransferEvent,
 };
 
-/// A [`MemorySink`] whose reads of retained segments fail.
-struct FailingReads(MemorySink);
+/// A [`MemorySink`] whose reads of retained segments fail (`reads`), or
+/// whose publication fails with `publish`.
+struct Failing {
+    sink: MemorySink,
+    reads: bool,
+    publish: Option<SinkError>,
+}
 
-impl ReceiveSink for FailingReads {
+impl ReceiveSink for Failing {
     fn check_offer(&mut self, manifest: &CanonicalManifest) -> Result<(), SinkRefusal> {
-        self.0.check_offer(manifest)
+        self.sink.check_offer(manifest)
     }
 
     fn is_tombstoned(&self, transfer_id: &TransferId, now: UnixTime) -> bool {
-        self.0.is_tombstoned(transfer_id, now)
+        self.sink.is_tombstoned(transfer_id, now)
     }
 
     fn tombstone(&mut self, transfer_id: &TransferId, until: UnixTime) {
-        self.0.tombstone(transfer_id, until);
+        self.sink.tombstone(transfer_id, until);
     }
 
     fn tombstone_room(&mut self, now: UnixTime) -> bool {
-        self.0.tombstone_room(now)
+        self.sink.tombstone_room(now)
     }
 
     fn retained(&self, transfer_id: &TransferId, now: UnixTime) -> Option<Retained> {
-        self.0.retained(transfer_id, now)
+        self.sink.retained(transfer_id, now)
     }
 
     fn record_accept(
@@ -48,20 +54,23 @@ impl ReceiveSink for FailingReads {
         manifest: &CanonicalManifest,
         accept: &VerifiedAccept,
     ) -> Result<(), SinkError> {
-        self.0.record_accept(manifest, accept)
+        self.sink.record_accept(manifest, accept)
     }
 
     fn retained_segment(
         &mut self,
-        _transfer_id: &TransferId,
-        _file_id: u32,
-        _index: u32,
+        transfer_id: &TransferId,
+        file_id: u32,
+        index: u32,
     ) -> Result<Option<Vec<u8>>, SinkError> {
-        Err(SinkError::Storage)
+        if self.reads {
+            return Err(SinkError::Storage);
+        }
+        self.sink.retained_segment(transfer_id, file_id, index)
     }
 
     fn drop_segment(&mut self, transfer_id: &TransferId, file_id: u32, index: u32) {
-        self.0.drop_segment(transfer_id, file_id, index);
+        self.sink.drop_segment(transfer_id, file_id, index);
     }
 
     fn store_segment(
@@ -69,23 +78,26 @@ impl ReceiveSink for FailingReads {
         segment: &VerifiedSegment,
         ciphertext: &[u8],
     ) -> Result<(), SinkError> {
-        self.0.store_segment(segment, ciphertext)
+        self.sink.store_segment(segment, ciphertext)
     }
 
     fn publish(&mut self, manifest: &CanonicalManifest, file_id: u32) -> Result<(), SinkError> {
-        self.0.publish(manifest, file_id)
+        if let Some(error) = self.publish {
+            return Err(error);
+        }
+        self.sink.publish(manifest, file_id)
     }
 
     fn published_intact(&mut self, manifest: &CanonicalManifest, file_id: u32) -> bool {
-        self.0.published_intact(manifest, file_id)
+        self.sink.published_intact(manifest, file_id)
     }
 
     fn finish(&mut self, transfer_id: &TransferId) {
-        self.0.finish(transfer_id);
+        self.sink.finish(transfer_id);
     }
 
     fn revoke_sender(&mut self, sender: &Ed25519PublicKey, until: UnixTime) {
-        self.0.revoke_sender(sender, until);
+        self.sink.revoke_sender(sender, until);
     }
 }
 
@@ -131,8 +143,25 @@ fn events<K: KeyStore, S: SendSource, R: ReceiveSink>(
     core::iter::from_fn(|| engine.pop_event()).collect()
 }
 
-#[test]
-fn a_failed_read_of_retained_data_fails_only_that_transfer() -> TestResult {
+/// Runs a transfer of file 2 of the standard offer into `sink` until both
+/// engines are quiet. Returns the receiver's `Error` frames, both sides'
+/// events, the frame types the receiver sent, and whether either engine
+/// closed.
+#[expect(
+    clippy::type_complexity,
+    reason = "one tuple of everything the tests inspect"
+)]
+fn run_into(
+    sink: Failing,
+) -> AnyResult<(
+    TransferId,
+    Vec<(ErrorScope, ErrorCode)>,
+    Vec<TransferEvent>,
+    Vec<TransferEvent>,
+    Vec<todoke_proto::session::FrameType>,
+    bool,
+    usize,
+)> {
     let fixture = fixture()?;
     let mut source = MemorySource::new();
     let offer = build_offer(
@@ -159,7 +188,7 @@ fn a_failed_read_of_retained_data_fails_only_that_transfer() -> TestResult {
         &fixture.bob.keys,
         fixture.bob.signing_key,
         MemorySource::new(),
-        FailingReads(MemorySink::new()),
+        sink,
         config(16)?,
         clock,
         START,
@@ -168,28 +197,101 @@ fn a_failed_read_of_retained_data_fails_only_that_transfer() -> TestResult {
     alice.offer(offer, START)?;
     exchange(&mut alice, &mut bob, START);
     bob.accept(&transfer_id, vec![2], START)?;
-    // Bob's Accept, Alice's FileKey: scheduling the first request reads
-    // the sink for retained data, which fails.
     let (_, from_bob) = exchange(&mut alice, &mut bob, START);
-    let errors: Vec<_> = from_bob
+    let errors = from_bob
         .iter()
         .filter_map(|frame| match frame {
             OutgoingFrame::Error(record) => Some((record.scope(), record.code())),
             OutgoingFrame::Frame { .. } => None,
         })
         .collect();
+    let kinds = from_bob.iter().map(|frame| raw(frame).0).collect();
+    let closed = alice.is_closed() || bob.is_closed();
+    let stored = bob.sink().sink.stored_segments(&transfer_id);
+    Ok((
+        transfer_id,
+        errors,
+        events(&mut bob),
+        events(&mut alice),
+        kinds,
+        closed,
+        stored,
+    ))
+}
+
+fn failed(
+    events: &[TransferEvent],
+    transfer_id: &TransferId,
+    code: FailureCode,
+    by: Party,
+) -> bool {
+    events.iter().any(|e| {
+        matches!(e, TransferEvent::Failed { transfer_id: t, failure, .. }
+            if t == transfer_id && failure.code == code && failure.by == by)
+    })
+}
+
+#[test]
+fn a_failed_read_of_retained_data_fails_only_that_transfer() -> TestResult {
+    let (transfer_id, errors, bob_events, alice_events, _, closed, stored) = run_into(Failing {
+        sink: MemorySink::new(),
+        reads: true,
+        publish: None,
+    })?;
     assert_eq!(
         errors,
         vec![(ErrorScope::Transfer(transfer_id), ErrorCode::STORAGE)]
     );
-    assert!(!bob.is_closed());
-    assert!(!alice.is_closed());
-    assert!(events(&mut bob).iter().any(|e| matches!(e,
-        TransferEvent::Failed { transfer_id: t, failure, .. }
-            if *t == transfer_id && failure.code == FailureCode::Storage && failure.by == Party::Local)));
-    assert!(events(&mut alice).iter().any(|e| matches!(e,
-        TransferEvent::Failed { transfer_id: t, failure, .. }
-            if *t == transfer_id && failure.code == FailureCode::Storage && failure.by == Party::Peer)));
-    assert_eq!(bob.sink().0.stored_segments(&transfer_id), 0);
+    assert!(!closed);
+    assert!(failed(
+        &bob_events,
+        &transfer_id,
+        FailureCode::Storage,
+        Party::Local
+    ));
+    assert!(failed(
+        &alice_events,
+        &transfer_id,
+        FailureCode::Storage,
+        Party::Peer
+    ));
+    assert_eq!(stored, 0);
+    Ok(())
+}
+
+/// §7.7: a file that fails its whole-file check or cannot be published
+/// fails the transfer with `INTEGRITY` or `STORAGE`; no `Complete` and no
+/// receipt are sent, and the sender never confirms delivery.
+#[test]
+fn a_failed_publication_sends_no_complete_or_receipt() -> TestResult {
+    for (error, code, wire) in [
+        (
+            SinkError::Integrity,
+            FailureCode::Integrity,
+            ErrorCode::INTEGRITY,
+        ),
+        (SinkError::Storage, FailureCode::Storage, ErrorCode::STORAGE),
+    ] {
+        let (transfer_id, errors, bob_events, alice_events, kinds, closed, _) =
+            run_into(Failing {
+                sink: MemorySink::new(),
+                reads: false,
+                publish: Some(error),
+            })?;
+        assert_eq!(errors, vec![(ErrorScope::Transfer(transfer_id), wire)]);
+        assert!(!closed);
+        assert!(!kinds.contains(&todoke_proto::session::FrameType::COMPLETE));
+        assert!(!kinds.contains(&todoke_proto::session::FrameType::DELIVERY_RECEIPT));
+        assert!(failed(&bob_events, &transfer_id, code, Party::Local));
+        assert!(failed(&alice_events, &transfer_id, code, Party::Peer));
+        assert!(!alice_events.iter().any(|e| matches!(
+            e,
+            TransferEvent::DeliveryConfirmed { .. } | TransferEvent::DeliveryUnconfirmed { .. }
+        )));
+        assert!(!bob_events.iter().any(|e| matches!(
+            e,
+            TransferEvent::Completed { .. } | TransferEvent::FileCompleted { .. }
+        )));
+    }
     Ok(())
 }
