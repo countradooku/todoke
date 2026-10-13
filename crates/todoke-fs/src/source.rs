@@ -155,7 +155,17 @@ impl FsSource {
             io::ErrorKind::NotFound => SourceError::NotFound,
             kind => SourceError::Io(kind),
         };
-        let mut file = File::open(path).map_err(io)?;
+        // Windows refuses to open a directory as a file (`PermissionDenied`):
+        // a refused open of something that is not a regular file is reported
+        // as such, on every platform. The check that counts is below, on the
+        // opened handle.
+        let mut file = File::open(path).map_err(|error| {
+            if std::fs::metadata(path).is_ok_and(|meta| !meta.is_file()) {
+                SourceError::Io(io::ErrorKind::InvalidInput)
+            } else {
+                io(error)
+            }
+        })?;
         let before = file.metadata().map_err(io)?;
         if !before.is_file() {
             return Err(SourceError::Io(io::ErrorKind::InvalidInput));
