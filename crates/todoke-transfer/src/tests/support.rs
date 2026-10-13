@@ -687,8 +687,8 @@ impl<'k> Link<'k> {
 
 /// Hands one frame to an engine as the session layer would: a
 /// session-scoped `Error` closes the session; anything else is a frame.
-pub(crate) fn deliver_to(
-    engine: &mut Engine<'_>,
+pub(crate) fn deliver_to<K: KeyStore, S: crate::SendSource, R: crate::ReceiveSink>(
+    engine: &mut TransferEngine<'_, K, S, R>,
     frame: OutgoingFrame,
     now: Duration,
 ) -> Result<(), crate::EngineError> {

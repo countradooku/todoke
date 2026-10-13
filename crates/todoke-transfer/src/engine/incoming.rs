@@ -770,16 +770,27 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
     }
 
     fn fail_incoming(&mut self, transfer_id: &TransferId, code: FailureCode) {
+        self.fail_incoming_as(transfer_id, code, code);
+    }
+
+    /// Fails an incoming transfer: reports `local` to this side's UI and
+    /// sends the peer a transfer-scoped `Error` with `wire`'s code.
+    fn fail_incoming_as(
+        &mut self,
+        transfer_id: &TransferId,
+        local: FailureCode,
+        wire: FailureCode,
+    ) {
         let late = match self.incoming.get(transfer_id) {
             Some(Incoming::Receiving(receiving)) => receiving.late(),
             _ => Late::default(),
         };
-        self.transfer_error(*transfer_id, code);
+        self.transfer_error(*transfer_id, wire);
         self.end_incoming(transfer_id, Outcome::Failed, late);
         self.event(TransferEvent::Failed {
             transfer_id: *transfer_id,
             direction: Direction::Incoming,
-            failure: Failure::local(code),
+            failure: Failure::local(local),
         });
     }
 
@@ -1060,7 +1071,12 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             .len()
             .saturating_sub(receiving.masters.len());
         let (Ok(complete), Ok(receipt)) = (complete, receipt) else {
-            self.fail_incoming(transfer_id, FailureCode::KeyStore);
+            // The files are published but cannot be confirmed: §7.7 allows
+            // no Complete without its receipt. Tell the sender at once, or
+            // it holds the masters until the Accept expires. KeyStore has no
+            // §12 code and STATE is session-scoped only; STORAGE is the
+            // transfer-scoped code for a local failure to finish delivery.
+            self.fail_incoming_as(transfer_id, FailureCode::KeyStore, FailureCode::Storage);
             return;
         };
         self.queue(FrameType::COMPLETE, complete.encode().to_vec());

@@ -5,6 +5,10 @@
 use core::time::Duration;
 
 use todoke_crypto::consent::random_id;
+use todoke_crypto::identity::{
+    Ed25519PublicKey, ExportPolicy, KeyId, KeyRole, KeyStore, KeyStoreError, Signature,
+    SigningDomain, WrappedKey, WrappingKey,
+};
 use todoke_proto::session::{ErrorCode, FrameType};
 use todoke_proto::transfer::{CancelReason, Complete, TransferId};
 
@@ -13,8 +17,8 @@ use super::basic::{
 };
 use super::support::*;
 use crate::{
-    EngineError, FailureCode, MemorySink, MemorySource, OutgoingFrame, OutgoingOffer, Party,
-    ReceiveSink, TransferEvent,
+    Clock, EngineError, FailureCode, MemorySink, MemorySource, OutgoingFrame, OutgoingOffer, Party,
+    ReceiveSink, TransferEngine, TransferEvent,
 };
 
 #[test]
@@ -542,5 +546,136 @@ fn reoffer_after_unheard_completion_needs_no_retransfer() -> TestResult {
         again.b.sink().published(&transfer_id, 2),
         Some(content(16_384 * 12 + 77, 7).as_slice())
     );
+    Ok(())
+}
+
+/// A device key store that signs everything except delivery receipts.
+struct NoReceipts<'k>(&'k Keys);
+
+impl KeyStore for NoReceipts<'_> {
+    fn generate(&mut self, _role: KeyRole, _export: ExportPolicy) -> Result<KeyId, KeyStoreError> {
+        Err(KeyStoreError::Capacity)
+    }
+
+    fn role(&self, key: &KeyId) -> Result<KeyRole, KeyStoreError> {
+        self.0.role(key)
+    }
+
+    fn public_key(&self, key: &KeyId) -> Result<Ed25519PublicKey, KeyStoreError> {
+        self.0.public_key(key)
+    }
+
+    fn sign(
+        &self,
+        key: &KeyId,
+        domain: SigningDomain,
+        message: &[u8],
+    ) -> Result<Signature, KeyStoreError> {
+        if domain == SigningDomain::DeliveryReceipt {
+            return Err(KeyStoreError::Seal);
+        }
+        self.0.sign(key, domain, message)
+    }
+
+    fn export_wrapped(
+        &self,
+        key: &KeyId,
+        wrapping_key: &WrappingKey,
+    ) -> Result<WrappedKey, KeyStoreError> {
+        self.0.export_wrapped(key, wrapping_key)
+    }
+
+    fn delete(&mut self, _key: &KeyId) -> Result<(), KeyStoreError> {
+        Err(KeyStoreError::UnknownKey)
+    }
+}
+
+/// The receiver cannot sign its receipt once every file is published: the
+/// sender must hear at once, by a transfer-scoped `STORAGE` error, instead
+/// of holding the masters until the Accept expires (§7.7, §12).
+#[test]
+fn a_receipt_that_cannot_be_signed_fails_the_transfer_on_both_sides() -> TestResult {
+    let fixture = fixture()?;
+    let mut source = MemorySource::new();
+    let offer = build_offer(
+        &fixture.alice.key(),
+        &fixture.bob.key(),
+        &standard_specs(),
+        &mut source,
+        3600,
+    )?;
+    let transfer_id = *offer.transfer_id();
+    let clock = Clock::new(time(WALL)?, START);
+    let mut alice = TransferEngine::new(
+        fixture.first.0,
+        &fixture.alice.keys,
+        fixture.alice.signing_key,
+        source,
+        MemorySink::new(),
+        config(16)?,
+        clock,
+        START,
+    )?;
+    let keys = NoReceipts(&fixture.bob.keys);
+    let mut bob = TransferEngine::new(
+        fixture.first.1,
+        &keys,
+        fixture.bob.signing_key,
+        MemorySource::new(),
+        MemorySink::new(),
+        config(16)?,
+        clock,
+        START,
+    )?;
+    let (mut a_events, mut b_events, mut to_alice) = (Vec::new(), Vec::new(), Vec::new());
+    let mut offer = Some(offer);
+    let mut accepted = false;
+    for _ in 0..10_000 {
+        let mut moved = false;
+        while let Some(frame) = alice.pop_frame() {
+            moved = true;
+            deliver_to(&mut bob, frame, START)?;
+        }
+        while let Some(frame) = bob.pop_frame() {
+            moved = true;
+            to_alice.push(raw(&frame).0);
+            deliver_to(&mut alice, frame, START)?;
+        }
+        while let Some(event) = alice.pop_event() {
+            a_events.push(event);
+        }
+        while let Some(event) = bob.pop_event() {
+            b_events.push(event);
+        }
+        if let Some(offer) = offer.take_if(|_| alice.negotiated().is_some()) {
+            alice.offer(offer, START)?;
+            moved = true;
+        }
+        if !accepted && has(&b_events, |e| matches!(e, TransferEvent::OfferReceived(_))) {
+            bob.accept(&transfer_id, vec![6], START)?;
+            accepted = true;
+            moved = true;
+        }
+        if !moved {
+            break;
+        }
+    }
+    assert!(accepted);
+    assert!(bob.sink().published(&transfer_id, 6).is_some());
+    assert!(has(&b_events, |e| matches!(e,
+        TransferEvent::Failed { failure, .. } if failure.code == FailureCode::KeyStore && failure.by == Party::Local)));
+    assert!(!has(&b_events, |e| matches!(
+        e,
+        TransferEvent::Completed { .. }
+    )));
+    // Neither Complete nor a receipt was sent; the sender heard STORAGE and
+    // ended the transfer at once.
+    assert!(!to_alice.contains(&FrameType::COMPLETE));
+    assert!(!to_alice.contains(&FrameType::DELIVERY_RECEIPT));
+    assert!(has(&a_events, |e| matches!(e,
+        TransferEvent::Failed { transfer_id: t, failure, .. }
+            if *t == transfer_id && failure.code == FailureCode::Storage && failure.by == Party::Peer)));
+    assert_eq!(alice.next_deadline(START), core::time::Duration::MAX);
+    assert!(!alice.is_closed() && !bob.is_closed());
     Ok(())
 }
