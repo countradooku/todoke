@@ -207,6 +207,64 @@ fn a_destination_with_every_candidate_taken_rejects_the_entry() -> TestResult {
     Ok(())
 }
 
+/// Planning before consent reads the destination root once and confirms
+/// only the chosen name of each top-level entry: 10,000 entries against
+/// a root holding five " (n)" variants of each name cost about 10,000
+/// lookups, not 60,000 (and never more than `MAX_LOOKUPS`).
+#[test]
+fn planning_against_a_crowded_destination_stays_bounded() -> TestResult {
+    let specs: Vec<Spec> = (0..10_000).map(|k| file(&format!("f{k}.txt"), 0)).collect();
+    let manifest = manifest(ID, &specs)?;
+    let mut existing = BTreeSet::new();
+    for k in 0..10_000 {
+        existing.insert(collision_key(&format!("f{k}.txt")));
+        for n in 2..=5 {
+            existing.insert(collision_key(&format!("f{k} ({n}).txt")));
+        }
+    }
+    let mut lookups = 0_usize;
+    let plan = DestinationPlan::with_listing(
+        &manifest,
+        &FsProfile::host(),
+        10,
+        Some(&existing),
+        &mut |name| {
+            lookups += 1;
+            existing.contains(&collision_key(name))
+        },
+    );
+    assert_eq!(lookups, 10_000);
+    for (k, entry) in plan.entries().iter().enumerate() {
+        assert_eq!(entry.local().as_str(), format!("f{k} (6).txt"));
+        assert_eq!(entry.changes(), [Change::Exists]);
+    }
+    // Without a listing every candidate is a lookup, within the budget;
+    // what the budget cannot settle is rejected, visibly.
+    let mut lookups = 0_usize;
+    let plan = DestinationPlan::new(&manifest, &FsProfile::host(), 10, &mut |_| {
+        lookups += 1;
+        true
+    });
+    assert_eq!(lookups, crate::plan::MAX_LOOKUPS);
+    assert!(
+        plan.entries()
+            .iter()
+            .all(|entry| entry.rejection() == Some(Rejection::NoFreeName))
+    );
+    // A listing that missed a name (it appeared since) is caught by the
+    // confirmation, and the next candidate is used.
+    let manifest = super::manifest(ID, &[file("late.txt", 0)])?;
+    let plan = DestinationPlan::with_listing(
+        &manifest,
+        &FsProfile::host(),
+        10,
+        Some(&BTreeSet::new()),
+        &mut |name| name == "late.txt",
+    );
+    assert_eq!(locals(&plan), ["late (2).txt"]);
+    Ok(())
+}
+
 #[test]
 fn paths_beyond_the_limit_are_rejected_with_their_children() -> TestResult {
     let profile = FsProfile {

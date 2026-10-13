@@ -18,6 +18,12 @@ use crate::name::{Change, Kind, NameRules, sanitize_component, with_suffix};
 /// is reported as having no free name.
 pub(crate) const MAX_SUFFIX: u32 = 1001;
 
+/// The most destination lookups (`exists` calls) one plan makes. With a
+/// listing of the root, each top-level entry normally costs one; without
+/// one, every candidate does. Entries the budget cannot settle are
+/// rejected with [`Rejection::NoFreeName`], before consent and visibly.
+pub(crate) const MAX_LOOKUPS: usize = 20_000;
+
 /// A name exactly as the peer sent it. Untrusted display data: it may
 /// contain direction overrides, look-alike characters, or misleading
 /// extensions, so show it only marked as the sender's name, next to the
@@ -259,15 +265,30 @@ impl DestinationPlan {
     /// Maps `manifest` onto a destination whose root path is `root_len`
     /// long (in `profile.path` units). `exists` reports whether a name is
     /// already taken in the destination root (filesystem semantics,
-    /// without following links); it is asked only about top-level names.
+    /// without following links); it is asked only about top-level names,
+    /// at most [`MAX_LOOKUPS`] times.
     pub fn new(
         manifest: &Manifest,
         profile: &FsProfile,
         root_len: usize,
         exists: &mut dyn FnMut(&str) -> bool,
     ) -> Self {
+        Self::with_listing(manifest, profile, root_len, None, exists)
+    }
+
+    /// As [`Self::new`], with the collision keys of every name the root
+    /// held when it was listed: candidates whose key is listed are skipped
+    /// without a lookup, so `exists` normally only confirms each entry's
+    /// chosen name (a name created since the listing is still caught).
+    pub(crate) fn with_listing(
+        manifest: &Manifest,
+        profile: &FsProfile,
+        root_len: usize,
+        listed: Option<&BTreeSet<String>>,
+        exists: &mut dyn FnMut(&str) -> bool,
+    ) -> Self {
         let mut plan = Self::sanitized(manifest, profile);
-        plan.avoid_existing(exists);
+        plan.avoid_existing(listed, exists);
         plan.check_paths(root_len);
         plan
     }
@@ -362,8 +383,13 @@ impl DestinationPlan {
     }
 
     /// Gives each top-level entry the first of its candidates that the
-    /// destination does not already hold.
-    fn avoid_existing(&mut self, exists: &mut dyn FnMut(&str) -> bool) {
+    /// destination does not already hold, within [`MAX_LOOKUPS`].
+    fn avoid_existing(
+        &mut self,
+        listed: Option<&BTreeSet<String>>,
+        exists: &mut dyn FnMut(&str) -> bool,
+    ) {
+        let mut budget = MAX_LOOKUPS;
         let ids: Vec<u32> = self
             .entries
             .iter()
@@ -377,7 +403,14 @@ impl DestinationPlan {
             let mut found = None;
             for (n, candidate) in self.candidates(id) {
                 let key = collision_key(&candidate);
-                if !chosen.contains(&key) && !exists(&candidate) {
+                if chosen.contains(&key) || listed.is_some_and(|listed| listed.contains(&key)) {
+                    continue;
+                }
+                let Some(left) = budget.checked_sub(1) else {
+                    break;
+                };
+                budget = left;
+                if !exists(&candidate) {
                     chosen.insert(key);
                     found = Some((n, candidate));
                     break;

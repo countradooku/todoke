@@ -115,6 +115,10 @@ impl Destination for DirDestination {
         })
     }
 
+    fn list(&self, dir: &DirHandle, limit: usize) -> Result<Option<Vec<String>>, DestError> {
+        sys::list(&dir.handle, &dir.path, limit)
+    }
+
     fn exists(&self, dir: &DirHandle, name: &str) -> Result<bool, DestError> {
         sys::exists(&dir.handle, &dir.path, name)
     }

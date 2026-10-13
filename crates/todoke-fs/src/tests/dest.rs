@@ -200,6 +200,24 @@ fn a_directory_swapped_for_a_link_while_held_cannot_redirect_files() -> TestResu
     Ok(())
 }
 
+/// Planning lists the root once: every name, and nothing past the limit.
+#[test]
+fn listing_returns_every_name_within_its_limit() -> TestResult {
+    let temp = TempDir::new()?;
+    std::fs::write(temp.path().join("a.txt"), b"")?;
+    std::fs::write(temp.path().join("B (2).txt"), b"")?;
+    std::fs::create_dir(temp.path().join("sub"))?;
+    let destination = DirDestination::open(temp.path())?;
+    let root = destination.root()?;
+    let mut listed = destination.list(&root, 3)?.ok_or("listing")?;
+    listed.sort();
+    assert_eq!(listed, ["B (2).txt", "a.txt", "sub"]);
+    assert_eq!(destination.list(&root, 2)?, None);
+    // The held handle still works afterwards.
+    assert_eq!(destination.exists(&root, "a.txt"), Ok(true));
+    Ok(())
+}
+
 #[cfg(unix)]
 #[test]
 fn fifos_are_not_opened_as_files() -> TestResult {

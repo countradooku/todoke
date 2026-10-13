@@ -150,6 +150,15 @@ pub trait Destination {
     /// [`DestError`].
     fn root(&self) -> Result<Self::Dir, DestError>;
 
+    /// The names in `dir` (lossily converted where they are not UTF-8), or
+    /// `None` if it holds more than `limit` entries. Used once per plan so
+    /// that most candidate names need no lookup of their own.
+    ///
+    /// # Errors
+    ///
+    /// [`DestError`].
+    fn list(&self, dir: &Self::Dir, limit: usize) -> Result<Option<Vec<String>>, DestError>;
+
     /// Whether `name` exists in `dir`, without following a link.
     ///
     /// # Errors

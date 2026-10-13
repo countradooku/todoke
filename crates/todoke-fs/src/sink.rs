@@ -17,6 +17,7 @@ use zeroize::Zeroizing;
 use crate::dest::{DestError, Destination};
 use crate::detect::{ContentReport, SNIFF_LEN, assess};
 use crate::name::TEMP_PREFIX;
+use crate::name::fold::collision_key;
 use crate::plan::{DestinationPlan, FsProfile};
 use crate::quarantine::codec::{
     Corrupt, JournalEntry, JournalHeader, decode_journal, decode_tombstones, encode_tombstones,
@@ -140,6 +141,10 @@ fn read_record(path: &Path) -> Result<Vec<u8>, LoadError> {
     })
 }
 
+/// The most destination root entries read for one plan; a larger root is
+/// not listed, and each candidate name is looked up instead, within
+/// [`crate::plan::MAX_LOOKUPS`].
+const ROOT_LISTING_LIMIT: usize = 100_000;
 /// Plans kept for offers that have not been accepted yet.
 const OFFER_PLANS: usize = 16;
 /// Bytes reserved per transfer besides its slots (journal, manifest).
@@ -377,14 +382,21 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         Ok(manifest)
     }
 
-    /// The plan for `manifest` against the destination as it is now.
+    /// The plan for `manifest` against the destination as it is now: the
+    /// root is listed once, and each top-level entry's chosen name is then
+    /// confirmed with one lookup (bounded work inside frame handling).
     fn plan_for(&self, manifest: &CanonicalManifest) -> DestinationPlan {
         let root = self.destination.root().ok();
         let destination = &self.destination;
-        DestinationPlan::new(
+        let listed: Option<BTreeSet<String>> = root
+            .as_ref()
+            .and_then(|root| destination.list(root, ROOT_LISTING_LIMIT).ok().flatten())
+            .map(|names| names.iter().map(|name| collision_key(name)).collect());
+        DestinationPlan::with_listing(
             manifest.manifest(),
             &self.config.profile,
             self.destination.root_len(),
+            listed.as_ref(),
             // An unreadable name counts as taken.
             &mut |name| {
                 root.as_ref()

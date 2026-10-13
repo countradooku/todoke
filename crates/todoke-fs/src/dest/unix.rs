@@ -52,6 +52,25 @@ pub(super) fn duplicate(handle: &Handle, _: &Path) -> Result<Handle, DestError> 
     handle.try_clone().map_err(DestError::from)
 }
 
+pub(super) fn list(dir: &Handle, _: &Path, limit: usize) -> Result<Option<Vec<String>>, DestError> {
+    // Reads through a new descriptor for the same directory, so the held
+    // one keeps no shared read position.
+    let entries = rustix::fs::Dir::read_from(dir).map_err(error)?;
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(error)?;
+        let name = entry.file_name().to_bytes();
+        if name == b"." || name == b".." {
+            continue;
+        }
+        if names.len() == limit {
+            return Ok(None);
+        }
+        names.push(String::from_utf8_lossy(name).into_owned());
+    }
+    Ok(Some(names))
+}
+
 pub(super) fn exists(dir: &Handle, _: &Path, name: &str) -> Result<bool, DestError> {
     match rustix::fs::statat(dir, name, AtFlags::SYMLINK_NOFOLLOW) {
         Ok(_) => Ok(true),

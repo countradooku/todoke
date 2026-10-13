@@ -90,6 +90,17 @@ pub(super) fn duplicate(_: &Handle, path: &Path) -> Result<Handle, DestError> {
     open_root_with(path, SHARE_READ_WRITE)
 }
 
+pub(super) fn list(_: &Handle, dir: &Path, limit: usize) -> Result<Option<Vec<String>>, DestError> {
+    let mut names = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        if names.len() == limit {
+            return Ok(None);
+        }
+        names.push(entry?.file_name().to_string_lossy().into_owned());
+    }
+    Ok(Some(names))
+}
+
 pub(super) fn exists(_: &Handle, dir: &Path, name: &str) -> Result<bool, DestError> {
     match std::fs::symlink_metadata(dir.join(name)) {
         Ok(_) => Ok(true),

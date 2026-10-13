@@ -116,7 +116,11 @@ manifest allows is shortened visibly rather than failing with
 each character upper- then lower-cased twice, NFD: a superset of NTFS, APFS,
 HFS+, exFAT, and FAT equivalences, so "ß"/"SS", "ı"/"I", and the Greek sigmas
 collide) with `" (n)"` suffixes, avoids names the destination root already
-holds, checks the per-OS path limit (4095 bytes on Linux and Android, 1023 on
+holds (bounded work inside frame handling: the root is listed once, up to
+100,000 names, so a candidate whose collision key is listed costs nothing,
+each top-level entry's chosen name is confirmed with one lookup, and one
+plan makes at most 20,000 lookups; what the budget cannot settle is
+rejected, visibly, before consent), checks the per-OS path limit (4095 bytes on Linux and Android, 1023 on
 Apple platforms, 32,760 UTF-16 units on Windows, warning above 259), and adds
 warnings: risky extensions per platform, macOS bundle directories, hidden
 names, and MIME labels that do not fit the extension. Rejected entries
