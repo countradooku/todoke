@@ -479,3 +479,14 @@ the guard, which looked only at `-e no-dev` graphs, did not notice.
   dev-dependencies included, enables `insecure-content-without-accept`, and
   its test script covers that with a workspace copy whose `todoke-core`
   enables it as a dev-dependency.
+
+## libcrux SIMD build variables (2026-10-13)
+
+libcrux-aes's build script honours `LIBCRUX_DISABLE_SIMD256` and
+`LIBCRUX_DISABLE_SIMD128`, which replace its hardware AES-GCM with the
+portable implementation while `ContentSuites::local` still advertises AES
+(see [ADR 0004](../docs/adr/0004-content-aead.md), "Build configuration").
+`scripts/ci/deny-exceptions-dev-only.sh` now fails if either is set in its
+environment or appears in a repository workflow or `.cargo/config*` file,
+and its test script covers the environment, a workflow, and a Cargo
+config. No dependency changed.

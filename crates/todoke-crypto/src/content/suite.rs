@@ -132,6 +132,12 @@ impl ContentSuites {
 /// NEON GHASH needs it, and libcrux's dispatch checks only AES. libcrux-platform
 /// 0.0.4 detects aarch64 features only on Linux and macOS, so Android and
 /// iOS devices report no hardware AES and advertise `XChaCha` only.
+///
+/// This assumes libcrux-aes was built with its hardware paths: the
+/// `LIBCRUX_DISABLE_SIMD256`/`LIBCRUX_DISABLE_SIMD128` build variables
+/// replace them with the portable implementation without changing these
+/// checks, so they must never be set for a release build (ADR 0004; the CI
+/// guard checks the repository's workflows and Cargo configs).
 fn hardware_aes_gcm() -> bool {
     #[cfg(target_arch = "x86_64")]
     {

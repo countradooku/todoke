@@ -50,6 +50,20 @@ only. `ContentSealer`/`ContentOpener` refuse an AES file on such a device
 if a peer misbehaves. The decision depends only on the local CPU, is stable
 for the process, and is never influenced by the peer.
 
+**Build configuration.** The advertisement mirrors libcrux-aes's runtime
+dispatch, which only works if libcrux-aes was compiled with its hardware
+paths. Its build script honours `LIBCRUX_DISABLE_SIMD256` (x86_64) and
+`LIBCRUX_DISABLE_SIMD128` (aarch64): with either set, the hardware AES-GCM
+types become aliases of the portable implementation, while
+libcrux-platform still reports the CPU features. todoke would then
+advertise AES and run bit-sliced AES: still constant time, but several
+times slower, and contrary to this decision. **Neither variable may be set
+for a release build** (or any build whose output is measured or shipped).
+`scripts/ci/deny-exceptions-dev-only.sh` fails if either is set in its
+environment or appears in a repository workflow or `.cargo/config*` file;
+it cannot see a packager's own environment, so release build scripts must
+not set them either.
+
 ## Constant-time behavior per target
 
 "Hardware" means AES-NI/PCLMULQDQ on x86_64 or AESE/AESMC/PMULL on

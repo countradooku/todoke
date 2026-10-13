@@ -28,13 +28,20 @@
 #   dev-dependency features, so one member enabling it would compile every
 #   shipped crate's tests against the consent bypass. The benchmarks that
 #   need it live in the isolated `bench/` workspace.
+# - Neither LIBCRUX_DISABLE_SIMD256 nor LIBCRUX_DISABLE_SIMD128 may be set in
+#   this environment or in any repository workflow or `.cargo/config*` file.
+#   libcrux-aes's build script then aliases its hardware AES-GCM to the
+#   portable implementation while libcrux-platform still reports the CPU
+#   features, so todoke would advertise AES (§6) and run bit-sliced AES
+#   (docs/adr/0004-content-aead.md).
 #
 # The graph is resolved per real target triple rather than with --target all:
 # libcrux declares some crates only under cfg(hax) or cfg(valgrind_ct_test), which
 # no todoke build sets, so they appear in the all-target graph but never compile.
 # Fails closed if any graph or configuration cannot be resolved.
 #
-# DENY_CONFIG, CI_WORKFLOW, and CARGO_MANIFEST override the inputs (for the
+# DENY_CONFIG, CI_WORKFLOW, CARGO_MANIFEST, and SCAN_ROOT (the directory
+# searched for workflows and Cargo configs) override the inputs (for the
 # guard's own tests).
 set -euo pipefail
 
@@ -43,6 +50,7 @@ cd "$(dirname "${BASH_SOURCE[0]}")/../.."
 deny_config="${DENY_CONFIG:-deny.toml}"
 ci_workflow="${CI_WORKFLOW:-.github/workflows/ci.yml}"
 manifest="${CARGO_MANIFEST:-Cargo.toml}"
+scan_root="${SCAN_ROOT:-.}"
 
 # Supported and CI-checked targets. Add new release targets here.
 targets=(
@@ -156,6 +164,28 @@ for target in "${cross_targets[@]}"; do
     fi
 done
 
+# libcrux build-time SIMD overrides that would make ContentSuites::local
+# advertise AES while libcrux-aes runs its portable implementation.
+simd_overrides=(LIBCRUX_DISABLE_SIMD256 LIBCRUX_DISABLE_SIMD128)
+for variable in "${simd_overrides[@]}"; do
+    if printenv "$variable" > /dev/null; then
+        echo "${variable} is set in the environment; libcrux-aes would run portable AES while todoke advertises hardware AES (docs/adr/0004-content-aead.md)." >&2
+        status=1
+    fi
+done
+while IFS= read -r file; do
+    for variable in "${simd_overrides[@]}"; do
+        if grep -qF "$variable" "$file"; then
+            echo "${file} sets ${variable}; libcrux-aes would run portable AES while todoke advertises hardware AES (docs/adr/0004-content-aead.md)." >&2
+            status=1
+        fi
+    done
+done < <({
+    find "$scan_root" \( -name target -o -name .git \) -prune -o -type f \
+        \( -path '*/.cargo/config' -o -path '*/.cargo/config*.toml' -o -path '*/.github/workflows/*' \) -print
+    echo "$ci_workflow"
+} | sort -u)
+
 is_build_time_only() {
     local candidate="$1" allowed
     for allowed in "${build_time_only[@]}"; do
@@ -253,6 +283,6 @@ for target in "${targets[@]}"; do
 done
 
 if [[ $status -eq 0 ]]; then
-    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); no shipped graph enables ${forbidden_features[*]}; no root development graph enables ${forbidden_dev_features[*]}; CI cross targets (${cross_targets[*]}) are covered."
+    echo "All ${#exempt[@]} deny.toml exceptions and ${license_entries} license exceptions (${#license_never[@]} never compiled, ${#license_build[@]} build-time only) stay out of shipped code on ${#targets[@]} targets (${build_time_only[*]} build-time only); no shipped graph enables ${forbidden_features[*]}; no root development graph enables ${forbidden_dev_features[*]}; ${simd_overrides[*]} are unset; CI cross targets (${cross_targets[*]}) are covered."
 fi
 exit "$status"

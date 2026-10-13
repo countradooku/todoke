@@ -83,6 +83,40 @@ grep -v 'Never compiled: libcrux-secrets' "$deny" > "$scratch/unclassified.toml"
 expect fail "no classified license exceptions" "$scratch/unclassified.toml" "$workflow" \
     'refusing to pass vacuously'
 
+# libcrux SIMD overrides: in the environment, a workflow, or a Cargo config.
+expect_simd() {
+    local name="$1" pattern="$2" output
+    shift 2
+    if output="$(env "$@" bash "$guard" 2>&1)"; then
+        result=pass
+    else
+        result=fail
+    fi
+    if [[ "$result" != fail ]] || ! grep -qF -- "$pattern" <<< "$output"; then
+        echo "not ok - ${name}: expected fail with \"${pattern}\", got ${result}:" >&2
+        sed 's/^/    /' <<< "$output" >&2
+        failures=$((failures + 1))
+    else
+        echo "ok - ${name}"
+    fi
+}
+
+expect_simd "LIBCRUX_DISABLE_SIMD256 in the environment" \
+    'LIBCRUX_DISABLE_SIMD256 is set in the environment' LIBCRUX_DISABLE_SIMD256=1
+expect_simd "LIBCRUX_DISABLE_SIMD128 in the environment" \
+    'LIBCRUX_DISABLE_SIMD128 is set in the environment' LIBCRUX_DISABLE_SIMD128=1
+
+mutate "$workflow" "$scratch/simd-workflow.yml" 'env:' \
+    'env:
+  LIBCRUX_DISABLE_SIMD128: "1"'
+expect_simd "LIBCRUX_DISABLE_SIMD128 in a workflow" \
+    "$scratch/simd-workflow.yml sets LIBCRUX_DISABLE_SIMD128" CI_WORKFLOW="$scratch/simd-workflow.yml"
+
+mkdir -p "$scratch/simd-root/.cargo"
+printf '[env]\nLIBCRUX_DISABLE_SIMD256 = "1"\n' > "$scratch/simd-root/.cargo/config.toml"
+expect_simd "LIBCRUX_DISABLE_SIMD256 in a Cargo config" \
+    "$scratch/simd-root/.cargo/config.toml sets LIBCRUX_DISABLE_SIMD256" SCAN_ROOT="$scratch/simd-root"
+
 # Forbidden features in the shipped (non-dev) graph. These mutate a copy of the
 # workspace manifests, since features come from Cargo.toml, not deny.toml.
 workspace_copy() {
