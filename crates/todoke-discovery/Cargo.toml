@@ -10,3 +10,30 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+todoke-proto.workspace = true
+# Never enable a gate feature here (unaudited-suite-0001,
+# unaudited-code-pairing, insecure-content-without-accept): this is a
+# shipped graph, and scripts/ci/deny-exceptions-dev-only.sh checks it.
+todoke-crypto.workspace = true
+# The LAN address policy and link candidates.
+todoke-transport.workspace = true
+# Instance labels and stranger tokens from the OS CSPRNG (§1).
+getrandom.workspace = true
+
+# mDNS (§9). Without the default `logging` feature, so nothing it does is
+# logged; `async` for awaiting browser events.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+mdns-sd = { version = "=0.21.5", default-features = false, features = ["async"] }
+
+[dev-dependencies]
+proptest.workspace = true
+# Test contacts with committed pair PSKs.
+todoke-crypto = { workspace = true, features = ["unaudited-suite-0001"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# Real contacts for the tests: QR pairing over loopback TCP.
+libcrux-ml-kem.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt", "macros"] }
+zeroize.workspace = true
