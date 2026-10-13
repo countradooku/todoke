@@ -42,7 +42,7 @@ fn fixture_table() -> Result<(DiscoveryTable, Ed25519PublicKey), Box<dyn std::er
         .and_then(serde_json::Value::as_u64)
         .ok_or("reference")?;
     let key = device()?;
-    let table = DiscoveryTable::build(time(reference)?, [(key, &psk)].into_iter())?;
+    let table = DiscoveryTable::build(time(reference)?, [(key, &psk, 1)].into_iter())?;
     Ok((table, key))
 }
 
@@ -173,6 +173,7 @@ fn the_store_table_covers_available_contacts_only() -> TestResult {
     )?;
     let table = store.discovery_table(time(T0)?)?;
     assert_eq!(table.contacts().collect::<Vec<_>>(), vec![&key]);
+    assert_eq!(table.generation(&key), Some(1));
     let record = table.advertisement(&key).ok_or("advertised")?;
     assert_eq!(table.candidates(&record), vec![key]);
     // Re-paired with another PSK: the old record no longer matches.
@@ -180,10 +181,11 @@ fn the_store_table_covers_available_contacts_only() -> TestResult {
         &enrolled.bind(1)?,
         TrustOrigin::QrPairing,
         PairPsk::new([0x78; 32]),
-        1,
+        2,
         time(T0)?,
     )?;
     let renewed = store.discovery_table(time(T0)?)?;
+    assert_eq!(renewed.generation(&key), Some(2));
     assert_eq!(renewed.candidates(&record).len(), 0);
     assert_ne!(renewed.locator(&key), table.locator(&key));
     // Blocked: neither advertised nor matched.

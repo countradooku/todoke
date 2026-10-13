@@ -20,6 +20,18 @@
 //! A match is a candidate filter, not authentication: the 64-bit token can
 //! collide or be replayed within its epoch, so every candidate goes through
 //! the full authenticated session (§9).
+//!
+//! # Secret residue (O6)
+//!
+//! `pair_secret` and `pair_key` live in `Zeroizing` buffers. The HMAC comes
+//! from `RustCrypto`'s `hmac` 0.13 (`SimpleHmac`), which keeps `pair_key`
+//! XOR opad and a BLAKE3 state absorbed with `pair_key` XOR ipad in fields
+//! it does not wipe on drop; the HKDF has the libcrux stack residue noted
+//! in `session::kdf`. These are recorded with the suite's other unwiped
+//! temporaries under PROTOCOL §16 O6 rather than worked around with a
+//! hand-written HMAC. Exposure is bounded: `pair_key` serves only discovery
+//! (whoever holds it can recognise and forge the pair's tokens, which
+//! authorize nothing) and is replaced at every committed session.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -105,6 +117,8 @@ impl PairKeys {
 /// One contact's tokens and locators for the table's epochs.
 #[derive(Clone, PartialEq, Eq)]
 struct ContactEntry {
+    /// The pair generation the entries were derived at (§4.4).
+    generation: u64,
     /// `(epoch, token)` for the previous, current, and next epochs.
     tokens: Vec<(Epoch, [u8; DISCOVERY_TOKEN_LEN])>,
     /// `(epoch, locator)` for the same epochs.
@@ -126,7 +140,7 @@ pub struct DiscoveryTable {
 impl DiscoveryTable {
     fn build<'a>(
         now: UnixTime,
-        contacts: impl Iterator<Item = (Ed25519PublicKey, &'a [u8; 32])>,
+        contacts: impl Iterator<Item = (Ed25519PublicKey, &'a [u8; 32], u64)>,
     ) -> Result<Self, DiscoveryError> {
         let epoch = Epoch::of(now);
         let mut table = Self {
@@ -135,9 +149,10 @@ impl DiscoveryTable {
             by_token: BTreeMap::new(),
             by_locator: BTreeMap::new(),
         };
-        for (device, psk) in contacts {
+        for (device, psk, generation) in contacts {
             let keys = PairKeys::derive(psk)?;
             let mut entry = ContactEntry {
+                generation,
                 tokens: Vec::with_capacity(3),
                 locators: Vec::with_capacity(3),
             };
@@ -179,6 +194,15 @@ impl DiscoveryTable {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.contacts.is_empty()
+    }
+
+    /// The pair generation `device`'s entries were derived at. A table is
+    /// current for a contact only while the store's generation for it is
+    /// the same: every committed session moves it on, and state from an
+    /// earlier generation must not stay in use (§9).
+    #[must_use]
+    pub fn generation(&self, device: &Ed25519PublicKey) -> Option<u64> {
+        self.contacts.get(device).map(|entry| entry.generation)
     }
 
     /// The contacts in the table, in key order.
@@ -269,16 +293,21 @@ impl<S: Sealer, B: BlobStorage> ContactStore<S, B> {
     /// [`DiscoveryError`] if a derivation fails (fails closed: no table).
     pub fn discovery_table(&self, now: UnixTime) -> Result<DiscoveryTable, DiscoveryError> {
         // `handshake_inputs` refuses every contact that is not available.
-        let available: Vec<(Ed25519PublicKey, Zeroizing<[u8; 32]>)> = self
+        let available: Vec<(Ed25519PublicKey, Zeroizing<[u8; 32]>, u64)> = self
             .contacts()
             .map(|contact| *contact.pinned().device_public())
             .filter_map(|device| {
                 self.handshake_inputs(&device)
                     .ok()
-                    .map(|inputs| (device, inputs.psk))
+                    .map(|inputs| (device, inputs.psk, inputs.generation))
             })
             .collect();
-        DiscoveryTable::build(now, available.iter().map(|(device, psk)| (*device, &**psk)))
+        DiscoveryTable::build(
+            now,
+            available
+                .iter()
+                .map(|(device, psk, generation)| (*device, &**psk, *generation)),
+        )
     }
 }
 
