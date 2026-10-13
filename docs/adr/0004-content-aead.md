@@ -130,11 +130,15 @@ constant-time OR-accumulate.
 ## Secret lifecycle (O6)
 
 todoke keeps file masters, the HKDF PRK, epoch keys, and nonce prefixes in
-`Zeroizing` buffers and zeroizes decrypted slices on drop. Not covered:
-libcrux-aes expands the AES key schedule into a state value it does not
-wipe; libcrux's XChaCha keeps the HChaCha20 subkey in an unwiped stack
-array; HACL HMAC/HKDF temporaries as noted in ADR 0001. These residues are
-part of gate O6.
+`Zeroizing` buffers and zeroizes decrypted slices and verified segment
+bytes on drop (`VerifiedSegment::into_data` returns them still wrapped;
+copies a caller makes are its own to wipe). Not covered: the `bao`
+decoder keeps the last verified chunk (up to 1024 bytes of plaintext) in
+an internal buffer it does not wipe; the sender's extracted slice of the
+source file is a plain `Vec`; libcrux-aes expands the AES key schedule
+into a state value it does not wipe; libcrux's XChaCha keeps the
+HChaCha20 subkey in an unwiped stack array; HACL HMAC/HKDF temporaries
+as noted in ADR 0001. These residues are part of gate O6.
 
 ## Consequences
 

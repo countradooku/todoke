@@ -261,11 +261,13 @@ impl VerifiedSegment {
         &self.data
     }
 
-    /// Takes the verified bytes (for example into `bytes::Bytes` without a
-    /// copy).
+    /// Takes the verified bytes without a copy, still in a buffer that is
+    /// wiped when dropped. Moving the `Vec` out of the [`Zeroizing`]
+    /// wrapper (or copying from [`data`](Self::data)) makes wiping the
+    /// plaintext the caller's responsibility.
     #[must_use]
-    pub fn into_data(mut self) -> Vec<u8> {
-        core::mem::take(&mut *self.data)
+    pub fn into_data(self) -> Zeroizing<Vec<u8>> {
+        self.data
     }
 
     #[cfg(test)]

@@ -47,8 +47,14 @@
 //! # Secrets
 //!
 //! File masters, the HKDF pseudorandom key, epoch keys, and nonce prefixes
-//! live in `Zeroizing` buffers and appear in no `Debug` output or error;
-//! decrypted slices are zeroized when dropped. libcrux-aes keeps its AES
+//! live in `Zeroizing` buffers and appear in no `Debug` output or error.
+//! On the receiver, decrypted slices and a [`VerifiedSegment`]'s bytes,
+//! also after [`VerifiedSegment::into_data`], are `Zeroizing` and wiped
+//! when dropped; plaintext a caller copies out of them, or moves out of
+//! the wrapper, is the caller's to wipe. Not wiped: the `bao` slice
+//! decoder's internal buffer, which holds the last verified chunk (up to
+//! 1024 bytes), and the sender's extracted slice, which holds bytes of the
+//! source file being sent. libcrux-aes keeps its AES
 //! key schedule, and libcrux's `XChaCha20` keeps its derived subkey, in
 //! stack or state values it does not wipe; HKDF has the HACL temporaries
 //! noted in the session module. These residues are recorded under O6 in

@@ -44,6 +44,18 @@ fn every_segment_round_trips_in_every_local_suite() -> TestResult {
     Ok(())
 }
 
+/// Taking the verified bytes out of the segment keeps them in a buffer that
+/// is wiped when dropped (§14.2), rather than in a plain `Vec`.
+#[test]
+fn into_data_keeps_the_plaintext_in_a_wiping_buffer() -> TestResult {
+    let source = Source::new(counter_input(1000)?, ContentSuite::XChaCha20Poly1305Stream)?;
+    let ciphertext = source.seal(&source.sealer()?, 0)?;
+    let verified = source.opener()?.open_segment(0, &ciphertext)?;
+    let data: Zeroizing<Vec<u8>> = verified.into_data();
+    assert_eq!(data.as_slice(), source.segment_bytes(0)?);
+    Ok(())
+}
+
 #[test]
 fn the_empty_file_seals_to_24_bytes() -> TestResult {
     for suite in local_suites() {
