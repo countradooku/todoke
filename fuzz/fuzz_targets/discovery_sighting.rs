@@ -7,8 +7,8 @@
 use std::net::IpAddr;
 
 use libfuzzer_sys::fuzz_target;
-use todoke_discovery::sighting::MAX_ADDRESSES;
 use todoke_discovery::Sighting;
+use todoke_discovery::sighting::MAX_ADDRESSES;
 use todoke_proto::discovery::MDNS_SERVICE;
 use todoke_transport::LanPolicy;
 
@@ -26,7 +26,12 @@ fn field<'a>(data: &mut &'a [u8]) -> &'a [u8] {
 fuzz_target!(|data: &[u8]| {
     let mut data = data;
     let name = String::from_utf8_lossy(field(&mut data)).into_owned();
-    let port = u16::from_be_bytes(field(&mut data).get(..2).and_then(|b| b.try_into().ok()).unwrap_or([0, 0]));
+    let port = u16::from_be_bytes(
+        field(&mut data)
+            .get(..2)
+            .and_then(|b| b.try_into().ok())
+            .unwrap_or([0, 0]),
+    );
     let mut addresses = Vec::new();
     for chunk in field(&mut data).chunks(21) {
         let scope = chunk.first().copied().map_or(0, u32::from);
@@ -49,12 +54,18 @@ fuzz_target!(|data: &[u8]| {
         let value = field(&mut data).to_vec();
         strings.push((key, value));
     }
-    let txt = strings
-        .iter()
-        .map(|(key, value)| (key.as_str(), (!value.is_empty()).then_some(value.as_slice())));
+    let txt = strings.iter().map(|(key, value)| {
+        (
+            key.as_str(),
+            (!value.is_empty()).then_some(value.as_slice()),
+        )
+    });
     for policy in [LanPolicy::new(), LanPolicy::new().with_loopback()] {
         if let Ok(sighting) = Sighting::check(&name, port, addresses.clone(), txt.clone(), policy) {
-            assert_eq!(format!("{}.{MDNS_SERVICE}", sighting.label().as_str()), name);
+            assert_eq!(
+                format!("{}.{MDNS_SERVICE}", sighting.label().as_str()),
+                name
+            );
             assert_eq!(strings.len(), 1);
             assert!(!sighting.addresses().is_empty());
             assert!(sighting.addresses().len() <= MAX_ADDRESSES);

@@ -4,8 +4,8 @@
 
 use libfuzzer_sys::fuzz_target;
 use todoke_proto::session::{
-    ErrorRecord, Identity, Ratchet, ciphertext_len, decode_frame, decode_key_update,
-    decode_ping, encode_frame_into,
+    ErrorRecord, Identity, Ratchet, ciphertext_len, decode_frame, decode_key_update, decode_ping,
+    encode_frame_into,
 };
 
 fuzz_target!(|data: &[u8]| {

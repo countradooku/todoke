@@ -4,9 +4,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use todoke_proto::pairing::{
-    CODE_OFFER_REQUEST_LEN, CodeOffer, CodeOfferRequest, CodeShare,
-};
+use todoke_proto::pairing::{CODE_OFFER_REQUEST_LEN, CodeOffer, CodeOfferRequest, CodeShare};
 
 fuzz_target!(|data: &[u8]| {
     if let Ok(request) = CodeOfferRequest::decode(data) {
