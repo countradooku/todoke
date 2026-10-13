@@ -680,11 +680,15 @@ fn errors_and_debug_output() -> TestResult {
         PairingError::LocalIdentity,
         PairingError::Random,
         PairingError::Unavailable,
+        PairingError::CodePairingUnavailable,
     ]
     .iter()
     .map(ToString::to_string)
     .collect();
     crate::identity::test_support::assert_distinct_messages(&messages);
+    // Built at run time here, not only in constants.
+    let gate = UnauditedCodePairing::acknowledge_not_production_ready();
+    assert_eq!(format!("{gate:?}"), "UnauditedCodePairing(())");
     assert_eq!(
         PairingError::from(QrError::Length),
         PairingError::Qr(QrError::Length)
