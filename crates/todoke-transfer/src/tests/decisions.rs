@@ -1545,3 +1545,48 @@ fn a_resume_query_before_the_files_key_is_refused() -> TestResult {
     assert_eq!(session_failure(result), Some(FailureCode::State));
     Ok(())
 }
+
+/// §7.6: a cancel makes a transfer permanently unusable, also after it
+/// expired: its masters are dropped and it is never offered for resume.
+/// Without the cancel the expired transfer stays resumable; a delivered
+/// one cannot be cancelled.
+#[test]
+fn cancelling_an_expired_outgoing_transfer_ends_it_for_good() -> TestResult {
+    let fixture = fixture()?;
+    for cancel in [false, true] {
+        let (mut link, transfer_id, _) = offered(&fixture, &standard_specs(), 600, (16, 16))?;
+        link.b.accept(&transfer_id, vec![2], link.now)?;
+        run_until(&mut link, true, FrameType::CHUNK)?;
+        link.now = START + Duration::from_secs(600);
+        link.a.poll(link.now)?;
+        link.collect();
+        assert!(has(&link.a_events, |e| matches!(
+            e,
+            TransferEvent::Expired {
+                direction: Direction::Outgoing,
+                ..
+            }
+        )));
+        if cancel {
+            link.a.cancel(&transfer_id, CancelReason::User, link.now)?;
+            let cancels = waiting(&mut link, true, FrameType::CANCEL);
+            assert_eq!(cancels.len(), 1);
+            assert_eq!(link.a.take_resumable().len(), 0);
+            // Cancelled for good: a second cancel is refused.
+            assert_eq!(
+                link.a.cancel(&transfer_id, CancelReason::User, link.now),
+                Err(EngineError::WrongState)
+            );
+        } else {
+            assert_eq!(link.a.take_resumable().len(), 1);
+        }
+    }
+    let (mut link, transfer_id, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+    link.b.accept(&transfer_id, vec![6], link.now)?;
+    link.settle()?;
+    assert_eq!(
+        link.a.cancel(&transfer_id, CancelReason::User, link.now),
+        Err(EngineError::WrongState)
+    );
+    Ok(())
+}
