@@ -65,6 +65,8 @@ jobs:
         run: bash scripts/ci/deny-exceptions-dev-only.test.sh
       - name: Check fuzzing-only modules need their gate features
         run: bash scripts/ci/fuzzing-gates.test.sh
+      - name: Check the Kani job lists every proof harness
+        run: bash scripts/ci/kani-harnesses.sh
       - name: Check dependency audits
         run: cargo vet --locked
       - name: Check fuzz dependency policy and audits
@@ -136,8 +138,28 @@ jobs:
         run: |
           cargo install --locked kani-verifier --version "$KANI_VERSION"
           cargo kani setup
+      # Every harness is named exactly: with --exact, Kani 0.68.0 fails when
+      # a --harness filter matches nothing (kani-driver metadata.rs), and the
+      # summary must report each one verified. A harness that is gated out or
+      # renamed therefore fails this job instead of passing with "No proof
+      # harnesses were found". scripts/ci/kani-harnesses.sh (supply-chain job)
+      # checks this list against the #[kani::proof] functions.
       - name: Check the consent-gate harnesses
-        run: cargo kani -p todoke-transfer
+        run: |
+          set -euo pipefail
+          harnesses=(
+            gate_proofs::kani_harnesses::consent_gate_invariant
+            gate_proofs::kani_harnesses::no_key_or_content_before_accept
+            gate_proofs::kani_harnesses::no_key_or_content_after_close
+            gate_proofs::kani_harnesses::content_only_for_selected_keyed_files
+          )
+          filters=()
+          for harness in "${harnesses[@]}"; do
+            filters+=(--harness "$harness")
+          done
+          cargo kani -p todoke-transfer --exact "${filters[@]}" 2>&1 | tee "$RUNNER_TEMP/kani.log"
+          count=${#harnesses[@]}
+          grep -Fx "Complete - $count successfully verified harnesses, 0 failures, $count total." "$RUNNER_TEMP/kani.log"
 
   cross:
     name: Check ${{ matrix.target }}
