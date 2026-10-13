@@ -1,12 +1,73 @@
+# Rust build output
 /target/
 /bench/target/
 /fuzz/target/
+
+# Fuzzing output (committed seeds live in fuzz/seeds/)
 /fuzz/artifacts/
 /fuzz/corpus/
 /fuzz/coverage/
+
+# Mutation testing and coverage reports
 /mutants.out/
 /mutants.out.old/
+*.profraw
+*.profdata
+lcov.info
+/coverage/
+
+# proptest failure seeds. Turn a real failure into an explicit regression test
+# instead of committing the seed file.
+proptest-regressions/
+
+# Secrets and signing material: never commit keys, certificates, or env files.
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.mobileprovision
+*.provisionprofile
+
+# Android (apps/android)
+/apps/android/**/.gradle/
+/apps/android/**/build/
+/apps/android/**/.cxx/
+/apps/android/**/.externalNativeBuild/
+/apps/android/**/captures/
+/apps/android/**/local.properties
+/apps/android/**/*.iml
+/apps/android/**/*.apk
+/apps/android/**/*.aab
+
+# iOS / Xcode (apps/ios)
+/apps/ios/**/xcuserdata/
+/apps/ios/**/DerivedData/
+/apps/ios/**/.build/
+/apps/ios/**/*.xcuserstate
+/apps/ios/**/*.ipa
+/apps/ios/**/*.dSYM.zip
+
+# Web (web/)
+/web/**/node_modules/
+/web/**/dist/
+/web/**/pkg/
+
+# Editors and operating systems
 .DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local coding-tool state (shared project settings stay committable)
+/.claude/worktrees/
+/.claude/settings.local.json
 
 # Local ChatGPT project reference files are not part of the repository.
 /AGENTS.md
