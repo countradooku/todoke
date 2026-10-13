@@ -27,6 +27,11 @@ version = "1.1.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.anstyle]]
+version = "1.0.14"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
 [[exemptions.arrayvec]]
 version = "0.7.8"
 criteria = "safe-to-deploy"
@@ -82,6 +87,21 @@ version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.clap]]
+version = "4.6.7"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.clap_builder]]
+version = "4.6.7"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.clap_lex]]
+version = "1.1.1"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
 [[exemptions.cmov]]
 version = "0.5.4"
 criteria = "safe-to-deploy"
@@ -111,6 +131,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.3.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.criterion]]
+version = "0.3.5"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only) as the base version that imported delta audits extend to the version in the lock; replace with an audit or imported audit."
 
 [[exemptions.crypto-common]]
 version = "0.2.2"
@@ -181,6 +206,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.3.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.half]]
+version = "2.7.1"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
 
 [[exemptions.hax-lib]]
 version = "0.3.7"
@@ -507,6 +537,11 @@ version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.walkdir]]
+version = "2.4.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only) as the base version that imported delta audits extend to the version in the lock; replace with an audit or imported audit."
+
 [[exemptions.wasm-bindgen]]
 version = "0.2.129"
 criteria = "safe-to-deploy"
@@ -526,6 +561,31 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.winapi-i686-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.winapi-x86_64-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
+version = "0.61.2"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.zerocopy]]
+version = "0.8.62"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
+
+[[exemptions.zerocopy-derive]]
+version = "0.8.62"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-13 for the content-layer benchmarks (criterion 0.8.2 in the bench/ crate, a development dependency only); replace with an audit or imported audit."
 
 [[exemptions.zeroize]]
 version = "1.9.1"

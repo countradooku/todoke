@@ -1,0 +1,30 @@
+[package]
+name = "todoke-bench"
+description = "Reproducible performance measurements for todoke (see README.md)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+# Benchmarks only: every dependency is a development dependency, so no shipped
+# graph contains criterion or the consent-bypass feature below.
+[dev-dependencies]
+# The benchmarks seal and open content without a signed Accept, which only
+# this feature allows (never in a shipped graph; see todoke-crypto's manifest).
+todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
+zeroize.workspace = true
+
+[[bench]]
+name = "content"
+harness = false
+
+# Default features off: no plotting or rayon; reports are text only. Not on
+# wasm32, where there is nothing to measure and criterion's `alloca`
+# dependency would need a C compiler for that target.
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+criterion = { version = "=0.8.2", default-features = false, features = ["cargo_bench_support"] }
