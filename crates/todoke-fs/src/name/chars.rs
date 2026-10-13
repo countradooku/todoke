@@ -206,4 +206,185 @@ mod tests {
         assert_eq!(ascii_skeleton('X'), Some('x'));
         assert_eq!(ascii_skeleton('漢'), None);
     }
+
+    /// Both ends of every range, and the code points just outside them,
+    /// against `Default_Ignorable_Code_Point` (Unicode 16,
+    /// DerivedCoreProperties.txt), UAX #9's bidi controls, the C1 block,
+    /// the interlinear annotation controls, and the noncharacters.
+    #[test]
+    fn every_range_is_classified_up_to_its_ends() {
+        for c in [
+            '\u{0080}',
+            '\u{009F}',
+            '\u{00AD}',
+            '\u{115F}',
+            '\u{1160}',
+            '\u{17B4}',
+            '\u{17B5}',
+            '\u{180E}',
+            '\u{200B}',
+            '\u{2029}',
+            '\u{2060}',
+            '\u{2064}',
+            '\u{2065}',
+            '\u{206A}',
+            '\u{206F}',
+            '\u{3164}',
+            '\u{FFA0}',
+            '\u{FFF0}',
+            '\u{FFF8}',
+            '\u{FFF9}',
+            '\u{FFFB}',
+            '\u{1BCA0}',
+            '\u{1BCA3}',
+            '\u{1D173}',
+            '\u{1D17A}',
+            '\u{E0000}',
+            '\u{E007F}',
+            '\u{E00FF}',
+            '\u{E01F0}',
+            '\u{E0FFF}',
+            '\u{FDEF}',
+            '\u{FFFF}',
+            '\u{1FFFE}',
+            '\u{10FFFE}',
+            '\u{10FFFF}',
+        ] {
+            assert_eq!(classify(c), Class::Hidden, "{:04X}", c as u32);
+        }
+        for c in [
+            '\u{034F}',
+            '\u{180B}',
+            '\u{180C}',
+            '\u{180D}',
+            '\u{180F}',
+            '\u{FE00}',
+            '\u{E01EF}',
+        ] {
+            assert_eq!(classify(c), Class::Joiner, "{:04X}", c as u32);
+        }
+        for c in [
+            '\u{007E}',
+            '\u{00A0}',
+            '\u{00AC}',
+            '\u{00AE}',
+            '\u{034E}',
+            '\u{0350}',
+            '\u{061B}',
+            '\u{061D}',
+            '\u{115E}',
+            '\u{1161}',
+            '\u{17B3}',
+            '\u{17B6}',
+            '\u{180A}',
+            '\u{1810}',
+            '\u{200A}',
+            '\u{2010}',
+            '\u{2027}',
+            '\u{202F}',
+            '\u{205F}',
+            '\u{2070}',
+            '\u{3163}',
+            '\u{3165}',
+            '\u{FDCF}',
+            '\u{FDF0}',
+            '\u{FDFF}',
+            '\u{FE10}',
+            '\u{FEFE}',
+            '\u{FF00}',
+            '\u{FF9F}',
+            '\u{FFA1}',
+            '\u{FFEF}',
+            '\u{FFFC}',
+            '\u{1BC9F}',
+            '\u{1BCA4}',
+            '\u{1D172}',
+            '\u{1D17B}',
+            '\u{1FFFD}',
+            '\u{DFFFD}',
+            '\u{E1000}',
+            '\u{10FFFD}',
+        ] {
+            assert_eq!(classify(c), Class::Plain, "{:04X}", c as u32);
+        }
+    }
+
+    #[test]
+    fn spaces_and_dot_lookalikes_are_exactly_the_listed_characters() {
+        for c in [
+            ' ', '\u{00A0}', '\u{1680}', '\u{2000}', '\u{2005}', '\u{200A}', '\u{202F}',
+            '\u{205F}', '\u{3000}',
+        ] {
+            assert!(is_space(c), "{:04X}", c as u32);
+        }
+        for c in [
+            '\t', '\u{1FFF}', '\u{200B}', '\u{2028}', '\u{2060}', '\u{FEFF}',
+        ] {
+            assert!(!is_space(c), "{:04X}", c as u32);
+        }
+        for c in [
+            '\u{00B7}', '\u{0701}', '\u{0702}', '\u{06D4}', '\u{2024}', '\u{2027}', '\u{2219}',
+            '\u{22C5}', '\u{2E33}', '\u{3002}', '\u{A4F8}', '\u{FE52}', '\u{FF0E}', '\u{FF61}',
+        ] {
+            assert!(is_dot_lookalike(c), "{:04X}", c as u32);
+        }
+        for c in ['.', ',', '\u{2025}', '\u{FF0F}', 'o'] {
+            assert!(!is_dot_lookalike(c), "{:04X}", c as u32);
+        }
+    }
+
+    /// Every look-alike letter maps to the ASCII letter it imitates
+    /// (Unicode confusables.txt), and fullwidth ASCII maps up to the ends
+    /// of its three ranges and no further.
+    #[test]
+    fn every_listed_lookalike_has_its_skeleton() {
+        let table: &[(&str, char)] = &[
+            ("аАαΑɑ", 'a'),
+            ("вВβΒь", 'b'),
+            ("сСϲϹⅽ", 'c'),
+            ("ԁⅾ", 'd'),
+            ("еЕεΕёҽ", 'e'),
+            ("ғϝ", 'f'),
+            ("ɡց", 'g'),
+            ("һНΗհ", 'h'),
+            ("іІιΙıⅰӏӀ", 'i'),
+            ("јЈϳ", 'j'),
+            ("кКκΚ", 'k'),
+            ("ⅼℓƖ", 'l'),
+            ("мМΜⅿ", 'm'),
+            ("пηΝո", 'n'),
+            ("оОοΟօσ", 'o'),
+            ("рРρΡթ", 'p'),
+            ("ԛգ", 'q'),
+            ("гⲅ", 'r'),
+            ("ѕЅꜱ", 's'),
+            ("тТτΤ", 't'),
+            ("υսʋ", 'u'),
+            ("νѵⅴ", 'v'),
+            ("ԝաѡ", 'w'),
+            ("хХχΧⅹ", 'x'),
+            ("уУγΥ", 'y'),
+            ("Ζᴢ", 'z'),
+        ];
+        for (lookalikes, ascii) in table {
+            for c in lookalikes.chars() {
+                assert_eq!(ascii_skeleton(c), Some(*ascii), "{:04X}", c as u32);
+            }
+        }
+        for (c, ascii) in [
+            ('\u{FF10}', '0'),
+            ('\u{FF19}', '9'),
+            ('\u{FF21}', 'a'),
+            ('\u{FF3A}', 'z'),
+            ('\u{FF41}', 'a'),
+            ('\u{FF5A}', 'z'),
+        ] {
+            assert_eq!(ascii_skeleton(c), Some(ascii), "{:04X}", c as u32);
+        }
+        for c in [
+            '\u{FF0F}', '\u{FF1A}', '\u{FF20}', '\u{FF3B}', '\u{FF40}', '\u{FF5B}', '-',
+        ] {
+            assert_eq!(ascii_skeleton(c), None, "{:04X}", c as u32);
+        }
+    }
 }

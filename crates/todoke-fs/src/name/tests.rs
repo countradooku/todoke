@@ -433,3 +433,240 @@ proptest! {
         }
     }
 }
+
+/// Each full-stop look-alike before a known extension is exposed, and only
+/// where the word after it is a whole extension: followed by a dot, a
+/// space, or the end of the name, and at most eight letters long.
+#[test]
+fn every_dot_lookalike_before_a_known_extension_is_exposed() {
+    for dot in [
+        '\u{00B7}', '\u{0701}', '\u{0702}', '\u{06D4}', '\u{2024}', '\u{2027}', '\u{2219}',
+        '\u{22C5}', '\u{2E33}', '\u{3002}', '\u{A4F8}', '\u{FE52}', '\u{FF0E}', '\u{FF61}',
+    ] {
+        let input = format!("photo{dot}jpg.exe");
+        let (output, changes) = file(&input);
+        assert_eq!(output, "photo_jpg.exe", "{:04X}", dot as u32);
+        assert!(
+            changes.contains(&Change::LookalikeDot),
+            "{:04X}",
+            dot as u32
+        );
+        check_output(&input, &output);
+    }
+    for (input, expected) in [
+        ("a\u{2024}pdf x", "a_pdf x"),
+        // Eight letters, the longest the rule considers.
+        ("x\u{2024}appimage", "x_appimage"),
+    ] {
+        let (output, changes) = file(input);
+        assert_eq!(output, expected, "{input:?}");
+        assert_eq!(changes, [Change::LookalikeDot], "{input:?}");
+    }
+    // Not a whole word: the next character continues it.
+    for unchanged in ["a\u{2024}pdf-x", "a\u{2024}pdfx", "a\u{2024}.txt"] {
+        assert_eq!(
+            file(unchanged),
+            (unchanged.to_owned(), Vec::new()),
+            "{unchanged:?}"
+        );
+    }
+}
+
+/// Every space separator pads an extension away; each is removed.
+#[test]
+fn every_space_separator_padding_an_extension_is_removed() {
+    for space in [
+        ' ', '\u{00A0}', '\u{1680}', '\u{2000}', '\u{2005}', '\u{200A}', '\u{202F}', '\u{205F}',
+        '\u{3000}',
+    ] {
+        let input = format!("report.pdf{space}{space}.exe");
+        let (output, changes) = file(&input);
+        assert_eq!(output, "report_pdf.exe", "{:04X}", space as u32);
+        assert!(
+            changes.contains(&Change::PaddedExtension),
+            "{:04X}",
+            space as u32
+        );
+    }
+}
+
+/// Joiners survive only right after visible non-ASCII text outside the
+/// extension: not after a space, not after a replaced character, and not
+/// inside the extension even after non-ASCII text.
+#[test]
+fn joiners_are_kept_only_inside_non_ascii_text() {
+    for (input, expected) in [
+        ("a\u{3000}\u{200D}b", "a\u{3000}\u{FFFD}b"),
+        ("\u{4E2D}\u{3000}\u{FE0F}", "\u{4E2D}\u{3000}\u{FFFD}"),
+        ("\u{202E}\u{200D}x", "\u{FFFD}\u{FFFD}x"),
+        ("a.\u{4E2D}\u{200D}", "a.\u{4E2D}\u{FFFD}"),
+    ] {
+        let (output, changes) = file(input);
+        assert_eq!(output, expected, "{input:?}");
+        assert!(changes.contains(&Change::InvisibleCharacters), "{input:?}");
+        check_output(input, &output);
+    }
+    assert_eq!(
+        file("\u{4E2D}\u{200D}\u{6587}.txt"),
+        ("\u{4E2D}\u{200D}\u{6587}.txt".to_owned(), Vec::new())
+    );
+}
+
+/// A name of a document extension in front of nothing is not a double
+/// extension; nor is a plain risky name.
+#[test]
+fn a_single_extension_is_not_a_disguise() {
+    for unchanged in ["pdf.exe", "report.exe", "a.b.exe"] {
+        assert_eq!(
+            file(unchanged),
+            (unchanged.to_owned(), Vec::new()),
+            "{unchanged:?}"
+        );
+    }
+    // A benign part padded with spaces still counts, and so does one
+    // after a leading dot.
+    assert_eq!(file("x. pdf .exe").0, "x_ pdf.exe");
+    assert_eq!(file(".pdf.exe").0, "_pdf.exe");
+}
+
+#[test]
+fn every_shell_processed_name_is_neutralized() {
+    for (input, expected) in [
+        ("x.website", "x.website.txt"),
+        ("x.WEBSITE", "x.WEBSITE.txt"),
+        ("x.settingcontent-ms", "x.settingcontent-ms.txt"),
+        ("x.SearchConnector-MS", "x.SearchConnector-MS.txt"),
+        ("Folder.htt", "Folder.htt.txt"),
+    ] {
+        let (output, changes) = file(input);
+        assert_eq!(output, expected, "{input:?}");
+        assert_eq!(changes, [Change::ShellFileNeutralized], "{input:?}");
+    }
+    for unchanged in ["x.lnkx", "lnk", "desktop.ini.bak", "x.url2"] {
+        assert_eq!(file(unchanged).0, unchanged, "{unchanged:?}");
+    }
+}
+
+#[test]
+fn every_ntfs_metafile_name_is_prefixed() {
+    for name in [
+        "$MFT", "$MFTMirr", "$LogFile", "$Volume", "$AttrDef", "$Bitmap", "$Boot", "$BadClus",
+        "$Secure", "$UpCase", "$Extend", "$Quota", "$ObjId", "$Reparse", "$mftmirr", "$LOGFILE",
+    ] {
+        assert_eq!(
+            file(name),
+            (format!("_{name}"), vec![Change::ReservedName]),
+            "{name}"
+        );
+    }
+    for unchanged in ["$MFT.txt", "$Secure2", "MFT"] {
+        assert_eq!(file(unchanged).0, unchanged, "{unchanged:?}");
+    }
+}
+
+/// A truncation that leaves a Windows device name behind (spaces after the
+/// stem are cut away) still yields a prefixed name.
+#[test]
+fn a_device_name_exposed_by_truncation_is_prefixed() {
+    let input = format!("CON{}x", " ".repeat(20));
+    assert!(validate_name(input.as_bytes()).is_ok());
+    let rules = NameRules {
+        max_component_bytes: 16,
+        ..RULES
+    };
+    let (output, changes) = sanitize_component(&input, Kind::File, &rules);
+    assert_eq!(output, "_CON");
+    assert!(changes.contains(&Change::Truncated), "{changes:?}");
+    assert!(changes.contains(&Change::ReservedName), "{changes:?}");
+    check_output(&input, &output);
+}
+
+/// A rewrite that exposes another hazard is handled by a further pass:
+/// here truncation leaves spaces padding a new final extension, behind a
+/// document extension.
+#[test]
+fn hazards_exposed_by_truncation_are_rewritten_too() {
+    let input = format!(
+        "{}.pdf{}.exe  {}",
+        "b".repeat(240),
+        " ".repeat(5),
+        "x".repeat(10)
+    );
+    let (output, changes) = file(&input);
+    assert_eq!(output, format!("{}_pdf.exe", "b".repeat(240)));
+    for change in [
+        Change::Truncated,
+        Change::PaddedExtension,
+        Change::DoubleExtension,
+    ] {
+        assert!(changes.contains(&change), "{changes:?}");
+    }
+    check_output(&input, &output);
+    assert_eq!(file(&output), (output.clone(), Vec::new()));
+}
+
+/// Truncation never separates an emoji sequence at a joiner (neither
+/// before nor after it), and a name of nothing but marks becomes `_`.
+#[test]
+fn truncation_never_splits_a_joined_sequence() {
+    let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
+    assert_eq!(family.len(), 18);
+    let input = format!("{}.jpg", family.repeat(5));
+    // 60 bytes of stem end inside a joiner's sequence; 61 right after a
+    // joiner.
+    for limit in [64, 65] {
+        let rules = NameRules {
+            max_component_bytes: limit,
+            ..RULES
+        };
+        let (output, changes) = sanitize_component(&input, Kind::File, &rules);
+        assert_eq!(output, format!("{}.jpg", family.repeat(3)), "{limit}");
+        assert_eq!(changes, [Change::Truncated], "{limit}");
+    }
+    let rules = NameRules {
+        max_component_bytes: 64,
+        ..RULES
+    };
+    let marks = "\u{301}".repeat(120);
+    assert!(validate_name(marks.as_bytes()).is_ok());
+    assert_eq!(sanitize_component(&marks, Kind::File, &rules).0, "_");
+    let marks = format!("{}.txt", "\u{301}".repeat(100));
+    assert_eq!(sanitize_component(&marks, Kind::File, &rules).0, "_.txt");
+}
+
+/// The component limit is clamped to 16..=255 bytes whatever the rules
+/// say, and the extension is kept only where it fits beside a suffix.
+#[test]
+fn limits_are_clamped_and_suffixes_fit() {
+    let long = "a".repeat(300);
+    for (limit, expected) in [(1000, 255), (256, 255), (0, 16), (15, 16)] {
+        let rules = NameRules {
+            max_component_bytes: limit,
+            ..RULES
+        };
+        let (output, _) = sanitize_component(&long, Kind::File, &rules);
+        assert_eq!(output.len(), expected, "{limit}");
+    }
+    assert_eq!(
+        with_suffix("a.abcdefghijkl", 2, Kind::File, 16),
+        "a.abcdefghij (2)"
+    );
+    assert_eq!(
+        with_suffix("a.abcdefghij", 2, Kind::File, 16),
+        "a (2).abcdefghij"
+    );
+    assert_eq!(
+        with_suffix(&"\u{301}".repeat(200), 2, Kind::Directory, 255),
+        "_ (2)"
+    );
+    assert_eq!(final_extension_of("a."), None);
+    assert_eq!(
+        final_extension_of(&format!("a.{}", "x".repeat(24))),
+        Some(24)
+    );
+    assert_eq!(final_extension_of(&format!("a.{}", "x".repeat(25))), None);
+}
+
+fn final_extension_of(name: &str) -> Option<usize> {
+    extension::final_extension(name).map(str::len)
+}
