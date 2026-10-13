@@ -78,6 +78,9 @@ mod authority;
 mod base45;
 mod code;
 pub(crate) mod cpace;
+// Decoders only (QR payloads and typed codes, both public in every
+// build): no gate to bypass, so the cfg alone. The code-pairing handshake
+// harness is in `session::fuzzing`, behind `unaudited-code-pairing`.
 #[cfg(fuzzing)]
 pub mod fuzzing;
 mod offers;

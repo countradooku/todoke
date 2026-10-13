@@ -33,7 +33,8 @@ unaudited-code-pairing = [
 # Exposes `content::AcceptedFile::assume_accepted_without_verification()`
 # outside this crate's own unit tests, so that benchmarks can seal and open
 # content without a signed Accept. That bypasses the PROTOCOL §7.2 consent
-# gate, so only benchmark and test builds may enable it;
+# gate, so only benchmark, fuzzing, and test builds may enable it (the
+# content fuzzing harnesses need it too);
 # scripts/ci/deny-exceptions-dev-only.sh fails if any shipped graph does.
 # Not a default feature.
 insecure-content-without-accept = []

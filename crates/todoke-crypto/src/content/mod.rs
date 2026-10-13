@@ -28,9 +28,9 @@
 //! other constructor is
 //! `AcceptedFile::assume_accepted_without_verification`, which exists in
 //! this crate's unit tests and with the non-default
-//! `insecure-content-without-accept` feature (benchmarks). CI fails if a
-//! shipped graph enables it. A file binding alone ([`FileBinding`]) is public
-//! metadata and authorizes nothing.
+//! `insecure-content-without-accept` feature (benchmarks and fuzzing). CI
+//! fails if a shipped graph enables it. A file binding alone
+//! ([`FileBinding`]) is public metadata and authorizes nothing.
 //!
 //! # Verification order
 //!
@@ -59,7 +59,9 @@ mod aead;
 mod cipher;
 mod error;
 mod file_key;
-#[cfg(fuzzing)]
+// Seals and opens without a signed Accept, so it needs the consent bypass
+// feature as well as the cfg (scripts/ci/fuzzing-gates.test.sh).
+#[cfg(all(fuzzing, feature = "insecure-content-without-accept"))]
 pub mod fuzzing;
 mod keys;
 mod segment;

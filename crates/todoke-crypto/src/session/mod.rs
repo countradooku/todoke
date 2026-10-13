@@ -65,7 +65,9 @@
 pub(crate) mod authority;
 pub(crate) mod engine;
 pub(crate) mod establish;
-#[cfg(fuzzing)]
+// Runs suite 0x0001 with scripted randomness, so it needs the suite gate
+// feature as well as the cfg (scripts/ci/fuzzing-gates.test.sh).
+#[cfg(all(fuzzing, feature = "unaudited-suite-0001"))]
 pub mod fuzzing;
 pub(crate) mod handshake;
 mod io;

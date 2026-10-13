@@ -63,6 +63,8 @@ jobs:
         run: bash scripts/ci/deny-exceptions-dev-only.sh
       - name: Test the deny exception guard
         run: bash scripts/ci/deny-exceptions-dev-only.test.sh
+      - name: Check fuzzing-only modules need their gate features
+        run: bash scripts/ci/fuzzing-gates.test.sh
       - name: Check dependency audits
         run: cargo vet --locked
       - name: Check fuzz dependency policy and audits

@@ -1,4 +1,6 @@
-//! Entry points for `cargo fuzz` harnesses; compiled only with `--cfg fuzzing`.
+//! Entry points for `cargo fuzz` harnesses; compiled only with `--cfg fuzzing`
+//! and the `insecure-content-without-accept` feature, because the harnesses
+//! stand in for a verified Accept through that feature's constructor.
 //!
 //! The files are deterministic and public: a byte pattern of a
 //! fuzzer-chosen size, a fixed transfer, manifest hash, and master. Each
@@ -126,7 +128,7 @@ pub fn open_segment(data: &[u8]) {
     let Some(binding) = binding(&layout, suite(data), root) else {
         return;
     };
-    let file = AcceptedFile::for_fuzzing(binding);
+    let file = AcceptedFile::assume_accepted_without_verification(binding);
     let (Ok(opener), Ok(sealer)) = (
         ContentOpener::new(&file, &master()),
         ContentSealer::new(&file, &master()),
@@ -151,7 +153,8 @@ pub fn honest_ciphertext(size: u32, index: u8) -> Option<Vec<u8>> {
     let data = input(size, index, &[]);
     let (layout, index, _) = header(&data)?;
     let (content, tree, root) = file(layout.size());
-    let file = AcceptedFile::for_fuzzing(binding(&layout, suite(&data), root)?);
+    let file =
+        AcceptedFile::assume_accepted_without_verification(binding(&layout, suite(&data), root)?);
     ContentSealer::new(&file, &master())
         .ok()?
         .seal_segment(index, Cursor::new(&content), Cursor::new(&tree))

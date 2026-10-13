@@ -143,17 +143,11 @@ impl AcceptedFile {
     /// bypasses the PROTOCOL §7.2 consent gate.
     ///
     /// Exists only in this crate's unit tests and with the non-default
-    /// `insecure-content-without-accept` feature (benchmarks), never in a
-    /// shipped graph.
+    /// `insecure-content-without-accept` feature (benchmarks and the content
+    /// fuzzing harnesses), never in a shipped graph.
     #[cfg(any(test, feature = "insecure-content-without-accept"))]
     #[must_use]
     pub const fn assume_accepted_without_verification(binding: FileBinding) -> Self {
-        Self { binding }
-    }
-
-    /// For the fuzzing harnesses, which stand in for a verified Accept.
-    #[cfg(fuzzing)]
-    pub(crate) const fn for_fuzzing(binding: FileBinding) -> Self {
         Self { binding }
     }
 

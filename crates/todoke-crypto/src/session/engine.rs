@@ -142,12 +142,12 @@ pub(crate) enum Entropy {
     Os,
     /// Exact byte strings, consumed in order; any other request fails.
     /// Test and fuzzing builds only: never reachable from a release build.
-    #[cfg(any(test, fuzzing))]
+    #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
     Scripted(Arc<std::sync::Mutex<std::collections::VecDeque<Vec<u8>>>>),
 }
 
 impl Entropy {
-    #[cfg(any(test, fuzzing))]
+    #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
     pub(crate) fn scripted(chunks: Vec<Vec<u8>>) -> Self {
         Self::Scripted(Arc::new(std::sync::Mutex::new(chunks.into())))
     }
@@ -155,7 +155,7 @@ impl Entropy {
     pub(crate) fn fill(&self, dest: &mut [u8]) -> Result<(), rng::RandomError> {
         match self {
             Self::Os => rng::fill(dest),
-            #[cfg(any(test, fuzzing))]
+            #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
             Self::Scripted(chunks) => {
                 let mut chunks = chunks.lock().map_err(|_| rng::RandomError)?;
                 match chunks.pop_front() {
@@ -174,7 +174,7 @@ impl fmt::Debug for Entropy {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Os => f.write_str("Entropy::Os"),
-            #[cfg(any(test, fuzzing))]
+            #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
             Self::Scripted(_) => f.write_str("Entropy::Scripted"),
         }
     }

@@ -47,7 +47,7 @@ pub(crate) struct CodeTranscript {
 
 impl CodeTranscript {
     /// Wraps the exact public bodies.
-    #[cfg(any(test, fuzzing))]
+    #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
     #[must_use]
     pub(crate) fn new(
         code_offer: [u8; CODE_OFFER_LEN],
@@ -146,7 +146,7 @@ impl InitiatorPlan {
     /// Code-mode handshake with a caller-chosen PSK and transcript, for the
     /// public `XXpsk3` fixture and handshake tests only: real code pairing
     /// derives both from `CPace` (§3.2).
-    #[cfg(any(test, fuzzing))]
+    #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
     #[must_use]
     pub(crate) fn code_with_psk(
         pairing_id: [u8; 16],
@@ -250,7 +250,7 @@ impl ResponderPlan {
     }
 
     /// See [`InitiatorPlan::code_with_psk`]: fixture and tests only.
-    #[cfg(any(test, fuzzing))]
+    #[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
     #[must_use]
     pub(crate) fn code_with_psk(psk: PairingPsk, transcript: CodeTranscript) -> Self {
         Self {

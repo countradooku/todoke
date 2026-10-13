@@ -304,9 +304,10 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<BTreeMap<KeyId, Entry>, LocalFormat
     Ok(keys)
 }
 
-/// Deterministic keys for known-answer tests and fuzz harnesses. Never
-/// compiled into a release build.
-#[cfg(any(test, fuzzing))]
+/// Deterministic keys for known-answer tests and the session fuzz
+/// harnesses (which need `unaudited-suite-0001`). Never compiled into a
+/// release build.
+#[cfg(any(test, all(fuzzing, feature = "unaudited-suite-0001")))]
 impl<S: Sealer, B: BlobStorage> EncryptedKeyStore<S, B> {
     /// Inserts a fixed public test seed, for known-answer tests and
     /// deterministic fuzz setups only.
