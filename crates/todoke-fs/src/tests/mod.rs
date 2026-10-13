@@ -180,3 +180,23 @@ pub(crate) fn symlink_file(
         Err(error) => Err(error.into()),
     }
 }
+
+/// Creates an NTFS junction (a directory reparse point that needs no
+/// privilege, unlike a symbolic link) at `link`, pointing to `target`.
+#[cfg(windows)]
+pub(crate) fn junction(target: &std::path::Path, link: &std::path::Path) -> AnyResult<()> {
+    let output = std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .output()?;
+    if !output.status.success() {
+        return Err("mklink /J failed".into());
+    }
+    if !std::fs::symlink_metadata(link)?.file_type().is_symlink() {
+        return Err("mklink /J made no junction".into());
+    }
+    Ok(())
+}

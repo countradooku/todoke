@@ -67,6 +67,10 @@ impl Write for StagedFile {
 /// See [`Destination`] for the guarantees; `Debug` shows no path.
 pub struct DirDestination {
     root: DirHandle,
+    /// Held while the sink retains transfers (Windows: without
+    /// `FILE_SHARE_DELETE`, pinning the folder; Unix: a harmless
+    /// duplicate).
+    pin: Option<sys::Handle>,
     limit: PathLimit,
     marker: Option<Box<dyn OriginMarker>>,
 }
@@ -74,6 +78,7 @@ pub struct DirDestination {
 impl fmt::Debug for DirDestination {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DirDestination")
+            .field("held", &self.pin.is_some())
             .field("marker", &self.marker.is_some())
             .finish_non_exhaustive()
     }
@@ -92,6 +97,7 @@ impl DirDestination {
         let handle = sys::open_root(&path)?;
         Ok(Self {
             root: DirHandle { handle, path },
+            pin: None,
             limit: PathLimit::host(),
             marker: None,
         })
@@ -200,5 +206,14 @@ impl Destination for DirDestination {
 
     fn root_len(&self) -> usize {
         self.limit.measure(&self.root.path.to_string_lossy())
+    }
+
+    fn hold_root(&mut self, held: bool) -> Result<(), DestError> {
+        if !held {
+            self.pin = None;
+        } else if self.pin.is_none() {
+            self.pin = Some(sys::duplicate(&self.root.handle, &self.root.path)?);
+        }
+        Ok(())
     }
 }

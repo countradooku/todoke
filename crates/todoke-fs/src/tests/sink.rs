@@ -809,3 +809,29 @@ fn tombstones_are_on_disk_before_the_cancel_returns() -> TestResult {
     }
     Ok(())
 }
+
+/// Windows: with no transfer retained, the folder may be moved and a
+/// junction planted at its path. An offer is then refused before consent
+/// (the root cannot be opened), and nothing is written to the target.
+#[cfg(windows)]
+#[test]
+fn a_junction_at_the_root_path_refuses_offers_and_writes_nothing() -> TestResult {
+    let (mut harness, consented) = setup(26)?;
+    let outside = TempDir::new()?;
+    let moved = harness.state.path().join("moved-destination");
+    std::fs::rename(harness.dest.path(), &moved)?;
+    junction(outside.path(), harness.dest.path())?;
+    let sink = harness.sink()?;
+    assert_eq!(
+        sink.check_offer(&consented.manifest),
+        Err(SinkRefusal::UnsupportedDestination)
+    );
+    assert_eq!(
+        sink.record_accept(&consented.manifest, &consented.accept),
+        Err(SinkError::Storage)
+    );
+    assert_eq!(files_below(outside.path())?, Vec::<PathBuf>::new());
+    std::fs::remove_dir(harness.dest.path())?;
+    std::fs::rename(&moved, harness.dest.path())?;
+    Ok(())
+}

@@ -51,6 +51,8 @@ pub(crate) struct Hooks {
     pub(crate) fail_release: Cell<bool>,
     /// `sync_dir` fails.
     pub(crate) fail_sync: Cell<bool>,
+    /// What the sink last asked of `hold_root`.
+    pub(crate) held: Cell<Option<bool>>,
 }
 
 /// A [`DirDestination`] with [`Hooks`] for races and injected failures.
@@ -158,6 +160,10 @@ impl Destination for Hooked {
     }
     fn root_len(&self) -> usize {
         self.inner.root_len()
+    }
+    fn hold_root(&mut self, held: bool) -> Result<(), DestError> {
+        self.hooks.held.set(Some(held));
+        self.inner.hold_root(held)
     }
 }
 
@@ -450,5 +456,51 @@ fn a_publication_the_journal_cannot_record_is_not_repeated() -> TestResult {
         [run.dest.path().join("c.txt")]
     );
     std::fs::set_permissions(&journal, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+/// The sink holds the destination root while it retains any transfer
+/// (on Windows that pins the folder against rename, deletion, or a
+/// junction in its place) and lets it go when none is left.
+#[test]
+fn the_root_is_held_exactly_while_transfers_are_retained() -> TestResult {
+    let run = HookedRun::new(24)?;
+    assert_eq!(run.hooks.held.get(), Some(true), "after the Accept");
+    let transfer_id = *run.consented.manifest.transfer_id();
+    let HookedRun {
+        state,
+        dest,
+        hooks,
+        mut sink,
+        consented,
+    } = run;
+    sink.tombstone(&transfer_id, time(WALL + 7200)?);
+    assert_eq!(hooks.held.get(), Some(false), "after the cancel");
+    drop(sink);
+    // A restart with a retained transfer holds it again.
+    let fixture = fixture()?;
+    let other = build_manifest(&fixture, [25; 16], &entries(), 3600)?;
+    let accepted = Consented::new(&fixture, &other, &entries(), &FILES, false, 25)?;
+    let (destination, hooks) = Hooked::new(DirDestination::open(dest.path())?);
+    let mut sink = FsSink::open(
+        state.path(),
+        destination,
+        sealer(7),
+        SinkConfig::default(),
+        time(WALL)?,
+    )?;
+    assert_eq!(hooks.held.get(), Some(false));
+    receive_all(&mut sink, &accepted, &FILES)?;
+    drop(sink);
+    let (destination, hooks) = Hooked::new(DirDestination::open(dest.path())?);
+    let _sink = FsSink::open(
+        state.path(),
+        destination,
+        sealer(7),
+        SinkConfig::default(),
+        time(WALL)?,
+    )?;
+    assert_eq!(hooks.held.get(), Some(true), "after a restart");
+    let _ = consented;
     Ok(())
 }

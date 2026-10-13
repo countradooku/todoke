@@ -275,3 +275,68 @@ fn the_destination_folder_can_be_moved_while_open() -> TestResult {
     );
     Ok(())
 }
+
+/// Windows re-resolves the root's path on every call. Someone who can
+/// write the root's parent can rename the folder away and plant a junction
+/// at its path: the root is reopened without following it and refused, so
+/// nothing lands in the junction's target. While held (transfers are
+/// retained), the folder can be neither moved, deleted, nor replaced.
+#[cfg(windows)]
+#[test]
+fn a_junction_planted_at_the_root_path_redirects_nothing() -> TestResult {
+    let temp = TempDir::new()?;
+    let outside = TempDir::new()?;
+    let root = temp.path().join("Downloads");
+    let moved = temp.path().join("Moved");
+    std::fs::create_dir(&root)?;
+    let mut destination = DirDestination::open(&root)?;
+    // Not held: the user can move the folder, and so can anyone else who
+    // can write its parent, then plant a junction in its place.
+    std::fs::rename(&root, &moved)?;
+    junction(outside.path(), &root)?;
+    assert_eq!(destination.root().map(|_| ()), Err(DestError::WrongKind));
+    assert_eq!(destination.hold_root(true), Err(DestError::WrongKind));
+    assert_eq!(names(outside.path())?, Vec::<String>::new());
+    // The folder back in place and held: it cannot be moved, deleted, or
+    // replaced, and publication lands in it.
+    std::fs::remove_dir(&root)?;
+    std::fs::rename(&moved, &root)?;
+    destination.hold_root(true)?;
+    assert!(std::fs::rename(&root, &moved).is_err(), "moved while held");
+    assert!(std::fs::remove_dir(&root).is_err(), "deleted while held");
+    let handle = destination.root()?;
+    stage_and_publish(&destination, &handle, ".t", "a.txt", b"x")?;
+    drop(handle);
+    assert_eq!(std::fs::read(root.join("a.txt"))?, b"x");
+    assert_eq!(names(outside.path())?, Vec::<String>::new());
+    // Released: movable again.
+    destination.hold_root(false)?;
+    std::fs::rename(&root, &moved)?;
+    Ok(())
+}
+
+/// Every directory below the root is refused as a junction too (the
+/// symbolic-link variants of these tests need a privilege CI may lack).
+#[cfg(windows)]
+#[test]
+fn junctions_below_the_root_are_refused_never_followed() -> TestResult {
+    let temp = TempDir::new()?;
+    let outside = TempDir::new()?;
+    junction(outside.path(), &temp.path().join("linked"))?;
+    let destination = DirDestination::open(temp.path())?;
+    let root = destination.root()?;
+    assert_eq!(
+        destination.open_dir(&root, "linked").map(|_| ()),
+        Err(DestError::WrongKind)
+    );
+    assert!(matches!(
+        destination.create_dir(&root, "linked"),
+        Err(DestError::Exists)
+    ));
+    assert_eq!(
+        stage_and_publish(&destination, &root, ".t", "linked", b"payload"),
+        Err(DestError::Exists)
+    );
+    assert_eq!(names(outside.path())?, Vec::<String>::new());
+    Ok(())
+}

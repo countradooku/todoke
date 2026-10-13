@@ -276,4 +276,17 @@ pub trait Destination {
     /// The root's path length in the plan's units, for
     /// [`crate::DestinationPlan::new`].
     fn root_len(&self) -> usize;
+
+    /// Holds the destination root (`held`) so that it can be neither
+    /// renamed, deleted, nor replaced, or lets it go. The sink holds it
+    /// for as long as it retains any transfer, whose recorded names refer
+    /// to this root. A destination whose operations cannot be redirected
+    /// once it is open (Unix: everything is relative to a descriptor)
+    /// needs nothing.
+    ///
+    /// # Errors
+    ///
+    /// [`DestError`] if the root is gone or was replaced (on Windows, by a
+    /// junction or link): the sink then fails closed.
+    fn hold_root(&mut self, held: bool) -> Result<(), DestError>;
 }

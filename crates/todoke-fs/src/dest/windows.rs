@@ -32,11 +32,17 @@
 //!   dots and spaces, and short names are not interpreted.
 //!
 //! Residual risk, documented in ADR 0006: the path is re-resolved on each
-//! call. During an operation the held handles pin every directory from the
-//! root down to the entry, so only the root's own ancestors could change,
-//! and changing them needs local rights over the user's folders. No rename without
-//! replace exists in the standard library (`std::fs::rename` replaces),
-//! hence the hard link.
+//! call. The root itself is reopened with `FILE_FLAG_OPEN_REPARSE_POINT`
+//! and a reparse point there is refused. While transfers are retained the
+//! sink holds the root without `FILE_SHARE_DELETE`
+//! ([`super::Destination::hold_root`]), so it can be neither renamed,
+//! deleted, nor replaced; during an operation the held handles pin every
+//! directory from the root down to the entry. What stays open is a swap of
+//! one of the root's ancestors by any principal who can write that
+//! ancestor's parent, for example the user's own processes or anyone with
+//! write access to a shared parent folder. No rename without replace
+//! exists in the standard library (`std::fs::rename` replaces), hence the
+//! hard link.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Seek as _, SeekFrom};
@@ -74,19 +80,23 @@ fn open_directory(path: &Path) -> Result<Handle, DestError> {
 }
 
 /// `FILE_SHARE_DELETE` as well: for the long-lived root handle, so the
-/// user can still rename or move the destination folder while the app
-/// runs.
+/// user can still rename or move the destination folder while no transfer
+/// is retained.
 const SHARE_ALL: u32 = SHARE_READ_WRITE | 0x4;
 
+/// Opens the root's canonical path (the caller canonicalized the user's
+/// choice once, at [`super::DirDestination::open`]). The path is resolved
+/// again on every call, so anyone who can write the root's parent could
+/// rename the folder away and put a junction or symbolic link at its path;
+/// the root is opened itself (`FILE_FLAG_OPEN_REPARSE_POINT`) and a
+/// reparse point is refused, exactly as for every directory below it.
 fn open_root_with(path: &Path, share: u32) -> Result<Handle, DestError> {
-    // The root itself was chosen by the user and canonicalized by the
-    // caller; only its contents are untrusted.
     let handle = OpenOptions::new()
         .read(true)
         .share_mode(share)
-        .custom_flags(BACKUP_SEMANTICS)
+        .custom_flags(BACKUP_SEMANTICS | OPEN_REPARSE_POINT)
         .open(path)?;
-    if !handle.metadata()?.is_dir() {
+    if is_link(&handle)? || !handle.metadata()?.is_dir() {
         return Err(DestError::WrongKind);
     }
     Ok(handle)
@@ -97,7 +107,8 @@ pub(super) fn open_root(path: &Path) -> Result<Handle, DestError> {
 }
 
 /// A root handle for one operation, opened again from the root's path and
-/// held without `FILE_SHARE_DELETE` while the operation runs.
+/// held without `FILE_SHARE_DELETE` while the operation runs. Also the
+/// long-lived pin held while transfers are retained.
 pub(super) fn duplicate(_: &Handle, path: &Path) -> Result<Handle, DestError> {
     open_root_with(path, SHARE_READ_WRITE)
 }

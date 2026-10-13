@@ -51,14 +51,30 @@ does not apply and long paths work.
 **Residual risks, stated honestly.**
 
 - *Windows:* there is no `openat` in the standard library, so each call
-  re-resolves a path. During an operation every directory from the root to
-  the entry is pinned (it cannot be renamed, deleted, or replaced while held),
-  so only the root's own ancestors could be swapped, which needs local rights
-  over the user's profile. Between operations only a root handle that allows
-  renaming is kept, so the user can still move their Downloads folder. A
-  fully handle-relative implementation needs `NtCreateFile` with a root
-  directory handle, which is `unsafe` FFI and would belong in
-  `todoke-sys-windows`.
+  re-resolves a path, starting from the root's canonical path. The threat
+  is any principal who can write the root's parent (or the parent of any
+  of its ancestors): that is enough to rename the folder away and put a
+  junction, a symbolic link, or another directory at its path, and it does
+  not need rights over the user's profile when, for example, the
+  destination sits in a shared or removable folder. The root is therefore
+  reopened with `FILE_FLAG_OPEN_REPARSE_POINT` and a reparse point there is
+  refused, exactly as for every directory below it; and for as long as the
+  sink retains any transfer (whose recorded names refer to this root), it
+  holds the root without `FILE_SHARE_DELETE`, so it can be neither renamed,
+  deleted, nor replaced (`Destination::hold_root`). If the folder is gone
+  or was replaced when it is needed, the sink fails closed (`STORAGE`, or
+  an error at start-up). During an operation every directory from the root
+  to the entry is pinned too. While no transfer is retained the root is not
+  held, so the user can move their Downloads folder; a plain directory put
+  at the same path in that time is used as the destination (the standard
+  library cannot compare directory identities). What remains is a swap of
+  one of the root's ancestors, unverified on Windows. A fully
+  handle-relative implementation needs `NtCreateFile` with a root directory
+  handle, which is `unsafe` FFI and would belong in `todoke-sys-windows`.
+  A reparse point at the root is refused whatever its kind, so a
+  destination that is itself a cloud-files placeholder (for example a
+  OneDrive-backed folder) is refused too; telling those apart from
+  junctions and links is left as an open question.
 - *Exclusive-copy fallback:* nothing is overwritten, but the final name
   exists while the copy runs, and a crash leaves a truncated file there. Only
   filesystems with neither rename-without-replace nor hard links reach it.

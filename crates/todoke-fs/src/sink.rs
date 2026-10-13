@@ -274,7 +274,21 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
             unsynced: 0,
         };
         sink.load(now)?;
+        // Retained transfers refer to this root: hold it (fails closed if
+        // it was replaced while the app was not running).
+        let retained = !sink.transfers.is_empty();
+        sink.destination
+            .hold_root(retained)
+            .map_err(OpenError::Destination)?;
         Ok(sink)
+    }
+
+    /// Lets the destination root go once no transfer is retained (the user
+    /// can then move the folder again).
+    fn release_root_if_idle(&mut self) {
+        if self.transfers.is_empty() {
+            let _ = self.destination.hold_root(false);
+        }
     }
 
     /// Loads every retained transfer, deleting expired and positively
@@ -672,6 +686,7 @@ impl<D: Destination, S: Sealer> FsSink<D, S> {
         self.unreadable.remove(transfer_id);
         self.reports.retain(|(id, _), _| id != transfer_id);
         let _ = remove_tree(&self.state.transfer(transfer_id));
+        self.release_root_if_idle();
     }
 
     fn slots(
@@ -1076,6 +1091,12 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
             salt,
             selection: accept.selection().to_vec(),
         };
+        // From now on a transfer refers to this root: hold it, and refuse
+        // if it is gone or was replaced.
+        if self.destination.hold_root(true).is_err() {
+            self.release_root_if_idle();
+            return Err(SinkError::Storage);
+        }
         let dir = self.state.transfer(&transfer_id);
         let written = create_transfer_dir(&dir)
             .and_then(|()| write_atomic(&dir.join("manifest"), manifest.bytes()))
@@ -1083,6 +1104,7 @@ impl<D: Destination, S: Sealer> ReceiveSink for FsSink<D, S> {
             .and_then(|()| store::sync_dir(&self.state.transfers()));
         if written.is_err() {
             let _ = remove_tree(&dir);
+            self.release_root_if_idle();
             return Err(SinkError::Storage);
         }
         let journal_len = header.encode().len() as u64;

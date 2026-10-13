@@ -73,9 +73,13 @@
 //!   filesystems with neither (FAT, exFAT, some network shares), an
 //!   exclusive copy, which is not atomic.
 //! - **Nothing runs:** no execute permission, no opening, no previews.
-//! - **Windows residual race:** paths are re-resolved per call, with every
-//!   directory from the root down pinned while an operation runs; see
-//!   `docs/adr/0006-filesystem.md`.
+//! - **Windows residual race:** paths are re-resolved per call. A reparse
+//!   point at the root's path is refused like one anywhere below it, the
+//!   root is held (it cannot be renamed, deleted, or replaced) for as long
+//!   as any transfer is retained, and every directory from the root down is
+//!   pinned while an operation runs. Any principal who can write the
+//!   parent of one of the root's ancestors can still swap that ancestor;
+//!   see `docs/adr/0006-filesystem.md`.
 //! - **Not here:** the Android Storage Access Framework and iOS
 //!   security-scoped folder adapters ([`dest`] documents their contract),
 //!   and the Mark of the Web and `com.apple.quarantine` implementations
