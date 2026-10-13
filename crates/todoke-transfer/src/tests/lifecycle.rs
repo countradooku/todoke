@@ -679,3 +679,90 @@ fn a_receipt_that_cannot_be_signed_fails_the_transfer_on_both_sides() -> TestRes
     assert!(!alice.is_closed() && !bob.is_closed());
     Ok(())
 }
+
+/// A signed receipt whose completion time is outside the §7.7 window (the
+/// receiver's clock runs more than 120 seconds ahead) or whose totals
+/// differ from the Accept does not confirm delivery: the transfer ends as
+/// unconfirmed, like a receipt that never came, and the session stays
+/// open for the other transfers.
+#[test]
+fn receipts_outside_the_window_or_with_wrong_totals_leave_delivery_unconfirmed() -> TestResult {
+    let fixture = fixture()?;
+    for skewed_clock in [true, false] {
+        let mut source = MemorySource::new();
+        let offer = build_offer(
+            &fixture.alice.key(),
+            &fixture.bob.key(),
+            &standard_specs(),
+            &mut source,
+            3600,
+        )?;
+        let transfer_id = *offer.transfer_id();
+        let mut link = Link::new(
+            &fixture,
+            Which::First,
+            (source, MemorySource::new()),
+            (MemorySink::new(), MemorySink::new()),
+            (config(16)?, config(16)?),
+        )?;
+        if skewed_clock {
+            // Bob's trusted clock is 300 seconds ahead of Alice's.
+            link.b = TransferEngine::new(
+                fixture.first.1,
+                &fixture.bob.keys,
+                fixture.bob.signing_key,
+                MemorySource::new(),
+                MemorySink::new(),
+                config(16)?,
+                Clock::new(time(WALL + 300)?, START),
+                START,
+            )?;
+        }
+        link.settle()?;
+        link.a.offer(offer, link.now)?;
+        link.settle()?;
+        link.b.accept(&transfer_id, vec![6], link.now)?;
+        run_until(&mut link, false, FrameType::DELIVERY_RECEIPT)?;
+        if !skewed_clock {
+            // completed_count (offset 202) no longer equals the selection.
+            let OutgoingFrame::Frame { body, .. } = link.to_a.front_mut().ok_or("receipt")? else {
+                return Err("not a frame".into());
+            };
+            body[204] ^= 1;
+        }
+        link.deliver(false).ok_or("deliver")??;
+        link.settle()?;
+        assert!(has(&link.b_events, |e| matches!(
+            e,
+            TransferEvent::Completed { .. }
+        )));
+        assert!(has(
+            &link.a_events,
+            |e| matches!(e, TransferEvent::DeliveryUnconfirmed { transfer_id: t } if *t == transfer_id)
+        ));
+        assert!(!has(&link.a_events, |e| matches!(
+            e,
+            TransferEvent::DeliveryConfirmed { .. }
+        )));
+        assert!(!link.a.is_closed() && !link.b.is_closed());
+        // Never retransferred silently.
+        assert!(link.a.take_resumable().is_empty());
+        // The session still carries a new transfer.
+        let mut source = MemorySource::new();
+        let next = build_offer(
+            &fixture.alice.key(),
+            &fixture.bob.key(),
+            &standard_specs(),
+            &mut source,
+            3600,
+        )?;
+        let next_id = *next.transfer_id();
+        link.a.offer(next, link.now)?;
+        link.settle()?;
+        assert!(has(
+            &link.b_events,
+            |e| matches!(e, TransferEvent::OfferReceived(view) if view.transfer_id == next_id)
+        ));
+    }
+    Ok(())
+}

@@ -640,14 +640,29 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             _ => return Err(violation(FailureCode::State)),
         };
         // §7.7: every binding and the signature before confirmed delivery.
-        let receipt =
-            verify_receipt(body, &self.session, &awaiting.accept, wall).map_err(|error| {
-                violation(match error {
-                    ReceiptError::Malformed(_) => FailureCode::Malformed,
-                    ReceiptError::Signature => FailureCode::Authentication,
-                    _ => FailureCode::State,
-                })
-            })?;
+        let receipt = match verify_receipt(body, &self.session, &awaiting.accept, wall) {
+            Ok(receipt) => receipt,
+            // A receipt for this transfer, Accept, and session whose
+            // completion time is outside the window (for example a receiver
+            // clock more than 120 seconds ahead) or whose totals differ from
+            // the Accept proves nothing, like a receipt that never came:
+            // delivery is unconfirmed (§7.7). Only this transfer's receipt
+            // is unusable, and its content phase is over, so the session
+            // stays open; the receiver already ended the transfer, so no
+            // Error is sent.
+            Err(ReceiptError::Time | ReceiptError::Totals) => {
+                self.end_outgoing(&transfer_id, Outcome::Unconfirmed, Late::default(), false);
+                self.event(TransferEvent::DeliveryUnconfirmed { transfer_id });
+                return Ok(());
+            }
+            // §12: a bad layout is MALFORMED and a bad signature
+            // AUTHENTICATION; a receipt naming another session, transfer,
+            // manifest, Accept, or device is a replay or misdirected record
+            // (STATE). All are session-scoped.
+            Err(ReceiptError::Malformed(_)) => return Err(violation(FailureCode::Malformed)),
+            Err(ReceiptError::Signature) => return Err(violation(FailureCode::Authentication)),
+            Err(_) => return Err(violation(FailureCode::State)),
+        };
         self.end_outgoing(&transfer_id, Outcome::Delivered, Late::default(), false);
         self.event(TransferEvent::DeliveryConfirmed {
             transfer_id,
