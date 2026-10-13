@@ -5,7 +5,8 @@
 //!
 //! - Every directory on the way down is opened with
 //!   `FILE_FLAG_OPEN_REPARSE_POINT` (a symbolic link or junction is opened
-//!   itself, then refused) and without `FILE_SHARE_DELETE`, so while an
+//!   itself, then refused; other reparse points such as `OneDrive`
+//!   cloud-files placeholders are allowed) and without `FILE_SHARE_DELETE`, so while an
 //!   operation holds the handles nobody can rename, delete, or replace
 //!   those directories. Between operations nothing is held except the
 //!   root, and that with `FILE_SHARE_DELETE`, so the user can still move
@@ -33,7 +34,7 @@
 //!
 //! Residual risk, documented in ADR 0006: the path is re-resolved on each
 //! call. The root itself is reopened with `FILE_FLAG_OPEN_REPARSE_POINT`
-//! and a reparse point there is refused. While transfers are retained the
+//! and a symbolic link or junction there is refused. While transfers are retained the
 //! sink holds the root without `FILE_SHARE_DELETE`
 //! ([`super::Destination::hold_root`]), so it can be neither renamed,
 //! deleted, nor replaced; during an operation the held handles pin every
@@ -59,12 +60,15 @@ const SHARE_READ_WRITE: u32 = 0x1 | 0x2;
 const BACKUP_SEMANTICS: u32 = 0x0200_0000;
 /// `FILE_FLAG_OPEN_REPARSE_POINT`: open a link itself, not its target.
 const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-/// `FILE_ATTRIBUTE_REPARSE_POINT`.
-const ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-
+/// Whether an entry opened with `FILE_FLAG_OPEN_REPARSE_POINT` redirects
+/// elsewhere: a symbolic link or junction (a name-surrogate reparse tag,
+/// which is what the standard library's `FileType::is_symlink` reports on
+/// Windows). Other reparse points, such as cloud-files placeholders
+/// (`OneDrive` and similar sync clients) or deduplicated files, keep the
+/// entry where it is and are allowed: the maintainer chose to support
+/// `OneDrive`-backed folders.
 fn is_link(file: &File) -> Result<bool, DestError> {
-    let metadata = file.metadata()?;
-    Ok(metadata.file_attributes() & ATTRIBUTE_REPARSE_POINT != 0)
+    Ok(file.metadata()?.file_type().is_symlink())
 }
 
 fn open_directory(path: &Path) -> Result<Handle, DestError> {
@@ -217,9 +221,9 @@ pub(super) fn same_file(_: &Handle, dir: &Path, a: &str, b: &str) -> Result<bool
     let (Some(first), Some(second)) = (metadata(a)?, metadata(b)?) else {
         return Ok(false);
     };
+    // `is_file` is false for symbolic links (`FileType::is_symlink`).
     Ok(first.is_file()
         && second.is_file()
-        && first.file_attributes() & ATTRIBUTE_REPARSE_POINT == 0
         && first.file_attributes() == second.file_attributes()
         && first.file_size() == second.file_size()
         && first.creation_time() == second.creation_time()

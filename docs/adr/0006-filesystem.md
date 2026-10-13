@@ -38,11 +38,11 @@ component that the destination plan produced:
 
 | Need | Linux, Android, macOS, iOS (rustix 1.1.5) | Windows (std only) |
 | --- | --- | --- |
-| Walk below the root without following links | `openat(O_DIRECTORY \| O_NOFOLLOW)` per component | `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-directory; every handle from the root down held without `FILE_SHARE_DELETE` while the operation runs |
+| Walk below the root without following links | `openat(O_DIRECTORY \| O_NOFOLLOW)` per component | `CreateFile` with `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a symbolic link, junction, or non-directory; every handle from the root down held without `FILE_SHARE_DELETE` while the operation runs |
 | Create without touching an existing entry | `mkdirat`; `openat(O_CREAT \| O_EXCL \| O_NOFOLLOW)`, mode `0666` (umask applies, never execute bits) | `CreateDirectoryW`; `CREATE_NEW` |
 | Publish without replacing | `renameat2(RENAME_NOREPLACE)` on Linux, `renameatx_np(RENAME_EXCL)` on Apple platforms; if the filesystem refuses, `linkat` then `unlinkat`; if hard links are refused too, an exclusive copy read from the staged handle | `CreateHardLinkW` then delete the temporary name (`std::fs::rename` always replaces); if hard links are refused (FAT, exFAT, some shares), an exclusive copy read from the staged handle |
 | Bind publication to the hashed file | The staged file stays open from creation to publication; before the rename or link, `fstat` of it and `statat(temp, AT_SYMLINK_NOFOLLOW)` must give the same `(st_dev, st_ino)` with one link, and after it the final name must (one link after a rename, two after a hard link); otherwise nothing is journaled or acknowledged and the substitute is left as it is | The staged file is created without `FILE_SHARE_DELETE` and held until publication is done, so the temporary name (and, after the link, the final one) can be neither renamed, deleted, nor replaced; identity cannot be compared with the standard library (`file_index` is unstable, `GetFileInformationByHandle` is `unsafe` FFI), so the held handle is the protection |
-| Read back for re-verification | `openat(O_NOFOLLOW \| O_NONBLOCK)`, then `fstat` must say regular file (a planted FIFO cannot block) | `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a reparse point or non-file |
+| Read back for re-verification | `openat(O_NOFOLLOW \| O_NONBLOCK)`, then `fstat` must say regular file (a planted FIFO cannot block) | `FILE_FLAG_OPEN_REPARSE_POINT`, then refuse a symbolic link, junction, or non-file |
 | Durability | `fsync` of the file (`F_FULLFSYNC` on Apple) and of the directory | `FlushFileBuffers` of the file; NTFS journals the directory (the standard library has no directory flush) |
 
 Windows paths are the canonical verbatim (`\\?\`) form of the root plus
@@ -72,10 +72,15 @@ does not apply and long paths work.
   one of the root's ancestors, unverified on Windows. A fully
   handle-relative implementation needs `NtCreateFile` with a root directory
   handle, which is `unsafe` FFI and would belong in `todoke-sys-windows`.
-  A reparse point at the root is refused whatever its kind, so a
-  destination that is itself a cloud-files placeholder (for example a
-  OneDrive-backed folder) is refused too; telling those apart from
-  junctions and links is left as an open question.
+  Only reparse points that redirect (symbolic links and junctions: a
+  name-surrogate reparse tag, which is what the standard library's
+  `FileType::is_symlink` reports) are refused, at the root and below.
+  Other reparse points, such as cloud-files placeholders of a
+  OneDrive-backed folder or deduplicated files, stay where they are and are
+  allowed; the maintainer chose this on 2026-10-13 so OneDrive-backed
+  Downloads folders work. A published file that a sync client later turns
+  into an online-only placeholder may fail re-verification on resume,
+  which fails closed (STORAGE).
 - *Exclusive-copy fallback:* nothing is overwritten, but the final name
   exists while the copy runs, and a crash leaves a truncated file there. Only
   filesystems with neither rename-without-replace nor hard links reach it.

@@ -63,7 +63,8 @@
 //! - **No path escape:** every local name is one sanitized component, and
 //!   every operation is relative to a directory opened from the
 //!   destination root without following links (`openat` with
-//!   `O_NOFOLLOW` on Unix; reparse points opened and refused on Windows).
+//!   `O_NOFOLLOW` on Unix; symbolic links and junctions opened and refused on
+//!   Windows, while cloud-files placeholders, such as `OneDrive` ones, are allowed).
 //! - **Bound to the verified file:** the staged file stays open from
 //!   creation to publication, and publication requires the final name to
 //!   be that file (same device and inode on Unix; on Windows the handle is
@@ -75,11 +76,11 @@
 //!   filesystems with neither (FAT, exFAT, some network shares), an
 //!   exclusive copy, which is not atomic.
 //! - **Nothing runs:** no execute permission, no opening, no previews.
-//! - **Windows residual race:** paths are re-resolved per call. A reparse
-//!   point at the root's path is refused like one anywhere below it, the
-//!   root is held (it cannot be renamed, deleted, or replaced) for as long
-//!   as any transfer is retained, and every directory from the root down is
-//!   pinned while an operation runs. Any principal who can write the
+//! - **Windows residual race:** paths are re-resolved per call. A symbolic
+//!   link or junction at the root's path is refused like one anywhere below
+//!   it, the root is held (it cannot be renamed, deleted, or replaced) for
+//!   as long as any transfer is retained, and every directory from the root
+//!   down is pinned while an operation runs. Any principal who can write the
 //!   parent of one of the root's ancestors can still swap that ancestor;
 //!   see `docs/adr/0006-filesystem.md`.
 //! - **Not here:** the Android Storage Access Framework and iOS
