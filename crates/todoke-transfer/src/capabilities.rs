@@ -103,6 +103,16 @@ impl Negotiated {
         self.suite
     }
 
+    /// Whether both peers advertised `suite`. A resumed transfer keeps its
+    /// original suite if so, even where new files use another (§6).
+    #[must_use]
+    pub fn supports(&self, suite: ContentSuite) -> bool {
+        [&self.local, &self.peer].into_iter().all(|record| {
+            ContentSuites::from_bits(record.content_suites())
+                .is_some_and(|suites| suites.contains(suite))
+        })
+    }
+
     /// This device's record.
     #[must_use]
     pub const fn local(&self) -> &Capabilities {

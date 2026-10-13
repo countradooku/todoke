@@ -4,21 +4,24 @@
 
 use core::time::Duration;
 
-use todoke_crypto::consent::random_id;
+use todoke_crypto::consent::{CanonicalManifest, random_id};
+use todoke_crypto::content::{ContentSuite, ContentSuites};
 use todoke_crypto::identity::{
     Ed25519PublicKey, ExportPolicy, KeyId, KeyRole, KeyStore, KeyStoreError, Signature,
     SigningDomain, WrappedKey, WrappingKey,
 };
 use todoke_proto::session::{ErrorCode, FrameType};
-use todoke_proto::transfer::{CancelReason, Complete, TransferId};
+use todoke_proto::transfer::{
+    CancelReason, Complete, MAX_MANIFEST_PART_DATA, ManifestPart, ManifestStart, TransferId,
+};
 
 use super::basic::{
     has, offered, receiving, run_until, sent_transfer_error, session_failure, standard_specs,
 };
 use super::support::*;
 use crate::{
-    Clock, EngineError, FailureCode, MemorySink, MemorySource, OutgoingFrame, OutgoingOffer, Party,
-    ReceiveSink, TransferEngine, TransferEvent,
+    Clock, EngineConfig, EngineError, FailureCode, MemorySink, MemorySource, OutgoingFrame,
+    OutgoingOffer, Party, ReceiveSink, TransferEngine, TransferEvent,
 };
 
 #[test]
@@ -788,5 +791,239 @@ fn receipts_outside_the_window_or_with_wrong_totals_leave_delivery_unconfirmed()
             |e| matches!(e, TransferEvent::OfferReceived(view) if view.transfer_id == next_id)
         ));
     }
+    Ok(())
+}
+
+const XCHACHA: ContentSuite = ContentSuite::XChaCha20Poly1305Stream;
+
+fn xchacha_only() -> AnyResult<ContentSuites> {
+    Ok(ContentSuites::from_bits(0b10).ok_or("suites")?)
+}
+
+/// A transfer of `big_specs()` with every file in `suite`, accepted for
+/// files 2 and 4 in session 1 under `configs` and interrupted after three
+/// stored segments. Returns the resumable offer and both sides' storage.
+fn interrupted_in(
+    fixture: &Fixture,
+    suite: ContentSuite,
+    configs: (EngineConfig, EngineConfig),
+) -> AnyResult<Interrupted> {
+    let mut source = MemorySource::new();
+    let offer = build_offer_with_suite(
+        &fixture.alice.key(),
+        &fixture.bob.key(),
+        &big_specs(),
+        &mut source,
+        3600,
+        suite,
+    )?;
+    let transfer_id = *offer.transfer_id();
+    let mut link = Link::new(
+        fixture,
+        Which::First,
+        (source, MemorySource::new()),
+        (MemorySink::new(), MemorySink::new()),
+        configs,
+    )?;
+    link.settle()?;
+    assert_eq!(
+        link.a.negotiated().map(crate::Negotiated::suite),
+        Some(suite)
+    );
+    link.a.offer(offer, link.now)?;
+    link.settle()?;
+    link.b.accept(&transfer_id, vec![2, 4], link.now)?;
+    run_until_stored(&mut link, &transfer_id, 3)?;
+    link.a.close(None);
+    link.b.close(None);
+    link.collect();
+    let offer = link.a.take_resumable().pop().ok_or("resumable")?;
+    let now = link.now;
+    let (a_source, a_sink) = link.a.into_parts();
+    let (b_source, b_sink) = link.b.into_parts();
+    Ok((
+        offer,
+        transfer_id,
+        (a_source, b_source),
+        (a_sink, b_sink),
+        now,
+    ))
+}
+
+/// Hands `manifest` to Bob directly (`ManifestStart` and parts), as a
+/// sender that skipped its own checks would.
+fn inject_manifest(link: &mut Link<'_>, manifest: &CanonicalManifest) -> TestResult {
+    let bytes = manifest.bytes();
+    let id = *manifest.transfer_id();
+    let start = ManifestStart::new(id, *manifest.hash(), u32::try_from(bytes.len())?)?;
+    link.b
+        .handle_frame(FrameType::MANIFEST_START, &start.encode(), link.now)?;
+    for (index, data) in bytes.chunks(MAX_MANIFEST_PART_DATA).enumerate() {
+        let offset = u32::try_from(index * MAX_MANIFEST_PART_DATA)?;
+        let part = ManifestPart::new(id, offset, data)?.encode();
+        link.b
+            .handle_frame(FrameType::MANIFEST_PART, &part, link.now)?;
+    }
+    link.collect();
+    Ok(())
+}
+
+/// §6: "Resume MUST preserve the original suite". A transfer that started
+/// on `XChaCha` resumes on `XChaCha` in a session where both peers now
+/// advertise AES (new files there use AES), and keeps its retained data.
+#[test]
+fn resume_keeps_the_original_suite_when_the_session_selects_another() -> TestResult {
+    let fixture = fixture()?;
+    let (offer, transfer_id, sources, sinks, now) = interrupted_in(
+        &fixture,
+        XCHACHA,
+        (
+            config_with_suites(4, xchacha_only()?)?,
+            config_with_suites(4, xchacha_only()?)?,
+        ),
+    )?;
+    let retained = sinks.1.stored_segments(&transfer_id);
+    assert!(retained > 0);
+    // Session 2: both advertise every suite this device has (AES where the
+    // hardware supports it).
+    let mut link = Link::new(
+        &fixture,
+        Which::Second,
+        sources,
+        sinks,
+        (config(4)?, config(4)?),
+    )?;
+    link.now = now;
+    link.settle()?;
+    let local = ContentSuites::local();
+    assert_eq!(
+        link.a.negotiated().map(crate::Negotiated::suite),
+        local.select(local)
+    );
+    link.a.offer(offer, link.now)?;
+    link.settle()?;
+    assert!(has(&link.b_events, |e| matches!(e,
+        TransferEvent::OfferReceived(view) if view.resume_selection == Some(vec![2, 4]))));
+    link.b.accept(&transfer_id, vec![2, 4], link.now)?;
+    link.settle()?;
+    assert_eq!(
+        link.b.sink().published(&transfer_id, 2),
+        Some(content(16_384 * 12 + 77, 7).as_slice())
+    );
+    assert_eq!(
+        link.b.sink().published(&transfer_id, 4),
+        Some(content(999, 9).as_slice())
+    );
+    // Retained segments were revalidated, not fetched again.
+    assert!(link.delivered(true, FrameType::CHUNK) <= 13 + 1 - retained);
+    assert!(has(&link.a_events, |e| matches!(
+        e,
+        TransferEvent::DeliveryConfirmed { .. }
+    )));
+    Ok(())
+}
+
+/// A resumed transfer whose original suite one peer no longer supports
+/// cannot resume (§6: otherwise a new transfer and fresh consent), and a
+/// new transfer must use the negotiated suite: both sides refuse.
+#[test]
+fn a_suite_both_peers_no_longer_support_or_a_new_transfer_off_suite_is_refused() -> TestResult {
+    let fixture = fixture()?;
+    let aes = ContentSuite::Aes256GcmStream;
+    if !ContentSuites::local().contains(aes) {
+        // Without hardware AES this device cannot start an AES transfer.
+        return Ok(());
+    }
+    // Started on AES; in session 2 Bob advertises XChaCha only.
+    let (offer, transfer_id, sources, sinks, now) =
+        interrupted_in(&fixture, aes, (config(4)?, config(4)?))?;
+    let manifest = offer.manifest().clone();
+    let mut link = Link::new(
+        &fixture,
+        Which::Second,
+        sources,
+        sinks,
+        (config(4)?, config_with_suites(4, xchacha_only()?)?),
+    )?;
+    link.now = now;
+    link.settle()?;
+    assert_eq!(
+        link.a.offer(offer, link.now),
+        Err(EngineError::Offer(crate::OfferError::Suite))
+    );
+    inject_manifest(&mut link, &manifest)?;
+    assert!(sent_transfer_error(&mut link, false, ErrorCode::MANIFEST));
+    assert!(!has(&link.b_events, |e| matches!(
+        e,
+        TransferEvent::OfferReceived(_)
+    )));
+    assert!(link.b.sink().stored_segments(&transfer_id) > 0);
+
+    // A new transfer in XChaCha where both advertise AES.
+    let mut source = MemorySource::new();
+    let offer = build_offer_with_suite(
+        &fixture.alice.key(),
+        &fixture.bob.key(),
+        &big_specs(),
+        &mut source,
+        3600,
+        XCHACHA,
+    )?;
+    let manifest = offer.manifest().clone();
+    let mut link = Link::new(
+        &fixture,
+        Which::First,
+        (source, MemorySource::new()),
+        (MemorySink::new(), MemorySink::new()),
+        (config(4)?, config(4)?),
+    )?;
+    link.settle()?;
+    assert_eq!(
+        link.a.offer(offer, link.now),
+        Err(EngineError::Offer(crate::OfferError::Suite))
+    );
+    inject_manifest(&mut link, &manifest)?;
+    assert!(sent_transfer_error(&mut link, false, ErrorCode::MANIFEST));
+
+    // Offered in XChaCha but never accepted, then re-offered where both
+    // advertise AES: nothing was retained, so it is a new transfer.
+    let mut source = MemorySource::new();
+    let offer = build_offer_with_suite(
+        &fixture.alice.key(),
+        &fixture.bob.key(),
+        &big_specs(),
+        &mut source,
+        3600,
+        XCHACHA,
+    )?;
+    let mut link = Link::new(
+        &fixture,
+        Which::First,
+        (source, MemorySource::new()),
+        (MemorySink::new(), MemorySink::new()),
+        (
+            config_with_suites(4, xchacha_only()?)?,
+            config_with_suites(4, xchacha_only()?)?,
+        ),
+    )?;
+    link.settle()?;
+    link.a.offer(offer, link.now)?;
+    link.settle()?;
+    link.a.close(None);
+    let offer = link.a.take_resumable().pop().ok_or("resumable")?;
+    assert!(offer.is_resumption());
+    let (a_source, _) = link.a.into_parts();
+    let mut link = Link::new(
+        &fixture,
+        Which::Second,
+        (a_source, MemorySource::new()),
+        (MemorySink::new(), MemorySink::new()),
+        (config(4)?, config(4)?),
+    )?;
+    link.settle()?;
+    assert_eq!(
+        link.a.offer(offer, link.now),
+        Err(EngineError::Offer(crate::OfferError::Suite))
+    );
     Ok(())
 }

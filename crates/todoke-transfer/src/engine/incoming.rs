@@ -332,17 +332,25 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             self.fail_offer(transfer_id, announced, FailureCode::Manifest);
             return Ok(());
         };
-        let suite = negotiated.suite();
+        let wall = self.wall(now);
+        let resume = self.sink.retained(&transfer_id, wall);
+        // §6: every new file uses the negotiated suite; a resumed transfer
+        // (this side retained it under this manifest) keeps its original
+        // one, which both peers must support.
+        let resumed = resume
+            .as_ref()
+            .is_some_and(|retained| retained.manifest_hash == announced);
+        let suite_ok = |file_suite| {
+            file_suite == negotiated.suite() || (resumed && negotiated.supports(file_suite))
+        };
         if *manifest.transfer_id() != transfer_id
             || manifest.sender() != self.session.peer_device()
             || manifest.recipient() != self.session.local_device()
-            || manifest.files().iter().any(|file| file.suite() != suite)
+            || manifest.files().iter().any(|file| !suite_ok(file.suite()))
         {
             self.fail_offer(transfer_id, announced, FailureCode::Manifest);
             return Ok(());
         }
-        let wall = self.wall(now);
-        let resume = self.sink.retained(&transfer_id, wall);
         if resume
             .as_ref()
             .is_some_and(|retained| retained.manifest_hash != announced)

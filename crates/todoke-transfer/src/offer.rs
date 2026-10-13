@@ -198,7 +198,9 @@ pub enum OfferError {
     NotReady,
     /// The manifest is not from this device to the session's peer.
     Parties,
-    /// A file does not use the negotiated suite (§6).
+    /// A file does not use the negotiated suite (§6), and the offer is not
+    /// a resumption of an accepted transfer whose original suite both
+    /// peers still support.
     Suite,
     /// The manifest exceeds the peer's advertised limits (§6).
     Limits,
@@ -234,6 +236,7 @@ pub struct OutgoingOffer {
     manifest: CanonicalManifest,
     masters: BTreeMap<u32, FileMaster>,
     resumed: bool,
+    accepted: bool,
 }
 
 impl OutgoingOffer {
@@ -254,6 +257,7 @@ impl OutgoingOffer {
             manifest,
             masters,
             resumed: false,
+            accepted: false,
         })
     }
 
@@ -280,6 +284,17 @@ impl OutgoingOffer {
         self.resumed = true;
     }
 
+    /// Whether the receiver accepted it in an earlier session, so that it
+    /// may hold verified data to resume (§7.5).
+    #[must_use]
+    pub const fn was_accepted(&self) -> bool {
+        self.accepted
+    }
+
+    pub(crate) fn mark_accepted(&mut self) {
+        self.accepted = true;
+    }
+
     pub(crate) fn take_master(&mut self, file_id: u32) -> Option<FileMaster> {
         self.masters.remove(&file_id)
     }
@@ -294,6 +309,7 @@ impl fmt::Debug for OutgoingOffer {
         f.debug_struct("OutgoingOffer")
             .field("manifest", &self.manifest)
             .field("resumed", &self.resumed)
+            .field("accepted", &self.accepted)
             .finish_non_exhaustive()
     }
 }

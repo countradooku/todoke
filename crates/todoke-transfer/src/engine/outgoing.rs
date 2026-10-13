@@ -160,8 +160,10 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
 
     /// Offers `offer` to the peer: queues `ManifestStart` and the manifest
     /// in `ManifestPart`s (§7.1). The offer must be from this device to the
-    /// session's peer, use the negotiated suite for every file, fit the
-    /// peer's advertised limits, and not be expired. To resume after an
+    /// session's peer, use the negotiated suite for every file (a transfer
+    /// accepted in an earlier session keeps its original suite instead, if
+    /// both peers still support it, §6), fit the peer's advertised limits,
+    /// and not be expired. To resume after an
     /// interruption, offer the value [`Self::take_resumable`] returned in a
     /// fresh session; the receiver must accept again (§7.5).
     ///
@@ -183,11 +185,12 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         {
             return refuse(OfferError::Parties);
         }
-        if manifest
-            .files()
-            .iter()
-            .any(|file| file.suite() != negotiated.suite())
-        {
+        // §6: every new file uses the negotiated suite; a resumed transfer
+        // must keep its original one, which both peers must support.
+        let resumable = offer.was_accepted();
+        if manifest.files().iter().any(|file| {
+            file.suite() != negotiated.suite() && !(resumable && negotiated.supports(file.suite()))
+        }) {
             return refuse(OfferError::Suite);
         }
         let peer = negotiated.peer();
@@ -301,6 +304,7 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             resumption,
             ..
         } = *offering;
+        offer.mark_accepted();
         let (sealers, keys) = keys_for(&transfer_id, &accept, &mut offer)?;
         let resume_files: VecDeque<u32> = if resumption {
             accept.selection().iter().copied().collect()

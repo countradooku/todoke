@@ -14,7 +14,7 @@ use std::task::Wake;
 
 use futures_io::{AsyncRead, AsyncWrite};
 use todoke_crypto::consent::SessionBinding;
-use todoke_crypto::content::ContentSuites;
+use todoke_crypto::content::{ContentSuite, ContentSuites};
 use todoke_crypto::identity::{
     BindingRequest, ContactStore, Ed25519PublicKey, ExportPolicy, KeyId, KeyRole, KeyStore,
     MemoryStorage, SoftwareKeyStore, SoftwareSealer, StorageKey, VerifiedDeviceBinding,
@@ -477,6 +477,18 @@ pub(crate) fn build_offer(
     let suite = ContentSuites::local()
         .select(ContentSuites::local())
         .ok_or("suite")?;
+    build_offer_with_suite(sender, recipient, specs, source, lifetime, suite)
+}
+
+/// As [`build_offer`], every file using `suite`.
+pub(crate) fn build_offer_with_suite(
+    sender: &Ed25519PublicKey,
+    recipient: &Ed25519PublicKey,
+    specs: &[Spec],
+    source: &mut MemorySource,
+    lifetime: u64,
+    suite: ContentSuite,
+) -> AnyResult<OutgoingOffer> {
     let mut builder = ManifestBuilder::new(sender, recipient, time(WALL)?, time(WALL + lifetime)?)?;
     let mut files = Vec::new();
     for spec in specs {
@@ -506,9 +518,17 @@ pub(crate) fn build_offer(
 
 /// Engine configuration with a request budget of `outstanding`.
 pub(crate) fn config(outstanding: u16) -> AnyResult<EngineConfig> {
+    config_with_suites(outstanding, ContentSuites::local())
+}
+
+/// As [`config`], advertising `suites` (a subset of this device's).
+pub(crate) fn config_with_suites(
+    outstanding: u16,
+    suites: ContentSuites,
+) -> AnyResult<EngineConfig> {
     let maximums = Capabilities::PROTOCOL_MAXIMUMS;
     let record = Capabilities::new(
-        ContentSuites::local().bits(),
+        suites.bits(),
         maximums.max_manifest_bytes(),
         maximums.max_entries(),
         maximums.max_file_bytes(),
