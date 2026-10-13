@@ -88,7 +88,7 @@ expect fail "no classified license exceptions" "$scratch/unclassified.toml" "$wo
 workspace_copy() {
     local copy="$1"
     mkdir -p "$copy"
-    git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock crates \
+    git ls-files -co --exclude-standard -- Cargo.toml Cargo.lock crates bench \
         | tar -cf - -T - | tar -xf - -C "$copy"
 }
 
@@ -130,6 +130,17 @@ TOML
 cargo metadata --offline --format-version 1 --manifest-path "$scratch/code-gate/Cargo.toml" > /dev/null
 expect_manifest "unaudited code-pairing feature in a shipped graph" "$scratch/code-gate/Cargo.toml" \
     'todoke-crypto feature unaudited-code-pairing is enabled outside dev-dependencies'
+
+# A shipped crate enabling the content consent bypass (PROTOCOL §7.2).
+workspace_copy "$scratch/consent"
+cat >> "$scratch/consent/crates/todoke-core/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent/Cargo.toml" > /dev/null
+expect_manifest "content consent bypass in a shipped graph" "$scratch/consent/Cargo.toml" \
+    'todoke-crypto feature insecure-content-without-accept is enabled outside dev-dependencies'
 
 # The runtime Noise engine with Snow's raw traffic-key export.
 workspace_copy "$scratch/raw-split"

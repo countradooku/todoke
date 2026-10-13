@@ -15,8 +15,10 @@
 # - No target's non-dev graph may enable a feature in forbidden_features:
 #   todoke-crypto's `unaudited-suite-0001` and `unaudited-code-pairing` (the
 #   PROTOCOL §16 production gates for suite 0x0001 and, through O2, human-code
-#   pairing) or Snow's `risky-raw-split` (traffic-key export, used only by the
-#   offline fixture generator). Under resolver 2/3, dev-dependency features are only
+#   pairing) and `insecure-content-without-accept` (seals and opens content
+#   without a signed Accept, bypassing the PROTOCOL §7.2 consent gate; used
+#   only by benchmarks), or Snow's `risky-raw-split` (traffic-key export, used
+#   only by the offline fixture generator). Under resolver 2/3, dev-dependency features are only
 #   unified into builds of targets that need them (Cargo book, "Feature
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
@@ -61,6 +63,7 @@ build_time_only=("syn@2.0.119")
 forbidden_features=(
     "todoke-crypto:unaudited-suite-0001"
     "todoke-crypto:unaudited-code-pairing"
+    "todoke-crypto:insecure-content-without-accept"
     "snow:risky-raw-split"
 )
 
