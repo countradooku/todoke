@@ -1,7 +1,9 @@
 # ADR 0002: CPace library for human-code pairing
 
-- **Status:** accepted for the unaudited implementation; code pairing stays
-  disabled for production (PROTOCOL §16, gate O2). Needs maintainer review.
+- **Status:** accepted. On 2026-10-13 the maintainer approved `pakery-cpace`
+  for test and fuzzing builds only. Code pairing stays disabled for production
+  (PROTOCOL §16, gate O2) until an independent review of the pakery crates and
+  cross-checked todoke CPace context vectors exist.
 - **Date:** 2026-10-13
 - **Scope:** the `CPace` backend behind `todoke_crypto::pairing` and its
   production gate. The protocol choice itself (balanced
