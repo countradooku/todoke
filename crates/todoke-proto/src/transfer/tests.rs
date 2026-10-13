@@ -978,3 +978,22 @@ fn mime_labels_may_contain_digits() {
         assert_eq!(validate_mime(good.as_bytes()), Ok(good), "{good}");
     }
 }
+
+/// A name or MIME length that runs past the end of the manifest is a
+/// length error, not a panic or an out-of-bounds read.
+#[test]
+fn manifest_field_lengths_past_the_end_are_refused() -> TestResult {
+    let encoded = build(vec![file(1, 0, "a", 1)])?.encode();
+    // The entry's name_len is at 117..119 and its mime_len follows the
+    // one-byte name at 120..122.
+    for at in [117, 120] {
+        let mut long = encoded.clone();
+        long[at..at + 2].copy_from_slice(&u16::MAX.to_be_bytes());
+        assert_eq!(
+            Manifest::decode(&long, &ManifestLimits::SPEC),
+            Err(ManifestError::Length),
+            "field at {at}"
+        );
+    }
+    Ok(())
+}
