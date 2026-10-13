@@ -280,12 +280,36 @@ fn a_held_staged_file_cannot_be_renamed_or_deleted() -> TestResult {
         std::fs::rename(&path, temp.path().join("elsewhere")).is_err(),
         "renamed while held"
     );
-    destination.publish(&root, &staged, ".t", "final")?;
+    // NTFS has hard links: publication is the link, not the copy fallback.
+    assert_eq!(
+        destination.publish(&root, &staged, ".t", "final")?,
+        Atomicity::Atomic
+    );
     // The final name is a name of the held file too.
     assert!(std::fs::remove_file(temp.path().join("final")).is_err());
     destination.release(&root, staged, ".t")?;
     assert!(!path.exists());
     assert_eq!(std::fs::read(temp.path().join("final"))?, b"payload");
+    Ok(())
+}
+
+/// Windows: a hard link to the held staged file can be made while the
+/// handle (without `FILE_SHARE_DELETE`) is open; `CreateHardLinkW` opens
+/// the file for attribute access only, which share modes do not restrict.
+#[cfg(windows)]
+#[test]
+fn a_held_staged_file_can_be_hard_linked() -> TestResult {
+    let temp = TempDir::new()?;
+    let destination = DirDestination::open(temp.path())?;
+    let root = destination.root()?;
+    let staged = destination.stage(&root, ".t")?;
+    let linked = std::fs::hard_link(temp.path().join(".t"), temp.path().join("link"));
+    assert!(
+        linked.is_ok(),
+        "hard link refused while held: {:?}",
+        linked.map_err(|error| (error.kind(), error.raw_os_error()))
+    );
+    destination.release(&root, staged, ".t")?;
     Ok(())
 }
 
