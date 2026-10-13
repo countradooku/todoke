@@ -448,6 +448,180 @@ fn debug_shows_no_secrets() -> TestResult {
     Ok(())
 }
 
+/// `live` counts an offer only before its expiry on both clocks.
+#[test]
+fn live_counts_only_unexpired_offers() -> TestResult {
+    let device = Device::new()?;
+    let offers = PairingOffers::new();
+    qr_offer(&offers, &device)?;
+    assert_eq!(offers.live(OfferKind::Qr, later(299)?, MONO), 1);
+    assert_eq!(offers.live(OfferKind::Qr, later(300)?, MONO), 0);
+    let almost = MONO + OFFER_LIFETIME.saturating_sub(Duration::from_millis(1));
+    assert_eq!(offers.live(OfferKind::Qr, now()?, almost), 1);
+    assert_eq!(offers.live(OfferKind::Qr, now()?, MONO + OFFER_LIFETIME), 0);
+    assert_eq!(offers.live(OfferKind::Code, now()?, MONO), 0);
+    Ok(())
+}
+
+/// Authenticating or burning one attempt frees exactly its own place in
+/// the §13 budget, never another attempt's.
+#[test]
+fn ending_an_authenticated_attempt_frees_no_other_place() -> TestResult {
+    let device = Device::new()?;
+    let offers = PairingOffers::new();
+    let first = *qr_offer(&offers, &device)?.pairing_id();
+    let second = *qr_offer(&offers, &device)?.pairing_id();
+    let mut authenticated = offers.reserve(&hello(SessionMode::Qr, first)?, now()?, MONO)?;
+    let unauthenticated = offers.reserve(&hello(SessionMode::Qr, second)?, now()?, MONO)?;
+    assert_eq!(offers.active_attempts(), 2);
+    authenticated.authenticated();
+    assert_eq!(offers.active_attempts(), 1);
+    drop(authenticated);
+    assert_eq!(offers.active_attempts(), 1);
+    let mut burned = offers.reserve(&hello(SessionMode::Qr, first)?, now()?, MONO)?;
+    assert_eq!(offers.active_attempts(), 2);
+    burned.authenticated();
+    burned.burn()?;
+    drop(burned);
+    assert_eq!(offers.active_attempts(), 1);
+    drop(unauthenticated);
+    assert_eq!(offers.active_attempts(), 0);
+    Ok(())
+}
+
+/// A stream's permit (§13) becomes its reservation's attempt only for a
+/// reservation of the same offers, and only when the reservation
+/// succeeds; otherwise it stays with the stream and the reservation, if
+/// any, starts an attempt of its own.
+#[test]
+fn a_permit_moves_only_into_a_reservation_of_its_own_offers() -> TestResult {
+    let device = Device::new()?;
+    let offers = PairingOffers::new();
+    let other = PairingOffers::new();
+    let id = *qr_offer(&offers, &device)?.pairing_id();
+    let mut permit = Some(offers.admit(MONO)?);
+    assert_eq!(
+        offers
+            .reserve_attempt(
+                &hello(SessionMode::Qr, [0x99; 16])?,
+                false,
+                &mut permit,
+                now()?,
+                MONO
+            )
+            .err(),
+        Some(PairingError::UnknownOffer)
+    );
+    assert!(permit.is_some());
+    assert_eq!(offers.active_attempts(), 1);
+    let mut foreign = Some(other.admit(MONO)?);
+    let reservation = offers.reserve_attempt(
+        &hello(SessionMode::Qr, id)?,
+        false,
+        &mut foreign,
+        now()?,
+        MONO,
+    )?;
+    assert!(foreign.is_some());
+    assert_eq!(other.active_attempts(), 1);
+    assert_eq!(offers.active_attempts(), 2);
+    drop(reservation);
+    assert_eq!(offers.active_attempts(), 1);
+    let reservation = offers.reserve_attempt(
+        &hello(SessionMode::Qr, id)?,
+        false,
+        &mut permit,
+        now()?,
+        MONO,
+    )?;
+    assert!(permit.is_none());
+    assert_eq!(offers.active_attempts(), 1);
+    drop(reservation);
+    assert_eq!(offers.active_attempts(), 0);
+    drop(foreign);
+    assert_eq!(other.active_attempts(), 0);
+    // The permit's start is the reservation's: the twentieth start in a
+    // minute may still reserve with it, but not without it.
+    let busy = PairingOffers::new();
+    let id = *qr_offer(&busy, &device)?.pairing_id();
+    for _ in 1..MAX_ATTEMPT_STARTS_PER_MINUTE {
+        drop(busy.admit(MONO)?);
+    }
+    let mut last = Some(busy.admit(MONO)?);
+    let mut none = None;
+    assert_eq!(
+        busy.reserve_attempt(&hello(SessionMode::Qr, id)?, false, &mut none, now()?, MONO)
+            .err(),
+        Some(PairingError::RateLimited)
+    );
+    assert!(
+        busy.reserve_attempt(&hello(SessionMode::Qr, id)?, false, &mut last, now()?, MONO)
+            .is_ok()
+    );
+    Ok(())
+}
+
+/// Poisons the shared table, as a panic elsewhere while it is locked
+/// would. `resume_unwind` skips the panic hook, so nothing is printed.
+fn poison(offers: &PairingOffers) {
+    let table = Arc::clone(&offers.table);
+    let _ = std::thread::spawn(move || {
+        let _guard = table.lock();
+        std::panic::resume_unwind(Box::new("poison the offer table"));
+    })
+    .join();
+}
+
+/// After a panic elsewhere left the table poisoned, nothing can be
+/// offered, answered, admitted, reserved, or burned any more, and nothing
+/// held is released (fail closed).
+#[test]
+fn a_poisoned_table_fails_closed() -> TestResult {
+    let device = Device::new()?;
+    let offers = PairingOffers::new();
+    let id = *qr_offer(&offers, &device)?.pairing_id();
+    offers.create_code(CODE_GATE, now()?, MONO)?;
+    let mut held = offers.reserve(&hello(SessionMode::Qr, id)?, now()?, MONO)?;
+    let permit = offers.admit(MONO)?;
+    assert!(format!("{permit:?}").starts_with("AttemptPermit { held: true"));
+    poison(&offers);
+    let local = device.local()?;
+    assert_eq!(
+        offers.create_qr(&local, now()?, MONO).err(),
+        Some(PairingError::Unavailable)
+    );
+    assert_eq!(
+        offers.create_code(CODE_GATE, now()?, MONO).err(),
+        Some(PairingError::Unavailable)
+    );
+    let request = CodeOfferRequest::new([0x5e; 8])?;
+    assert_eq!(
+        offers
+            .answer_code_request(CODE_GATE, &request, &[0x5e; 8], now()?, MONO)
+            .err(),
+        Some(PairingError::Unavailable)
+    );
+    assert_eq!(offers.admit(MONO).err(), Some(PairingError::Unavailable));
+    assert_eq!(offers.live(OfferKind::Qr, now()?, MONO), 0);
+    assert!(!held.still_offered());
+    assert_eq!(held.burn(), Err(PairingError::Unavailable));
+    held.authenticated();
+    offers.cancel_all();
+    drop(held);
+    drop(permit);
+    assert_eq!(
+        offers
+            .reserve(&hello(SessionMode::Qr, id)?, now()?, MONO)
+            .err(),
+        Some(PairingError::Unavailable)
+    );
+    assert_eq!(
+        format!("{offers:?}"),
+        "PairingOffers { offers: 0, active_attempts: 0 }"
+    );
+    Ok(())
+}
+
 /// Offer-registry operations, including a process restart.
 #[derive(Clone, Debug)]
 enum Op {
