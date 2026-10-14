@@ -1,0 +1,67 @@
+# Flatpak manifest. Offline build: generate cargo-sources.json next to this
+# file first, with flatpak-builder-tools' cargo generator (pinned commit and
+# SHA-256 in .github/workflows/packaging.yml):
+#
+#   python3 flatpak-cargo-generator.py Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+#   flatpak-builder --user --install-deps-from=flathub --install --force-clean \
+#       build-dir packaging/linux/flatpak/org.todoke.todoke.yml
+#
+# For Flathub, replace the "dir" source with the release's git tag and
+# commit. Inside the sandbox the app uses portals (file chooser, Background
+# for autostart, GlobalShortcuts); the daemon's socket is in
+# $XDG_RUNTIME_DIR. The command line: flatpak run --command=todoke org.todoke.todoke
+id: org.todoke.todoke
+runtime: org.freedesktop.Platform
+runtime-version: '26.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: todoke-desktop
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # Received files go to ~/Downloads.
+  - --filesystem=xdg-download
+  # The tray item, the Secret Service, and notifications.
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.secrets
+  - --talk-name=org.freedesktop.Notifications
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  env:
+    CARGO_HOME: /run/build/todoke/cargo
+    CARGO_NET_OFFLINE: 'true'
+modules:
+  - name: todoke
+    buildsystem: simple
+    build-commands:
+      # Release build: sessions stay disabled (no unaudited-dev).
+      - cargo --offline build --release --locked -p todoke-desktop -p todoke-cli
+      - install -Dm755 target/release/todoke-desktop /app/bin/todoke-desktop
+      - install -Dm755 target/release/todoke /app/bin/todoke
+      - install -Dm644 packaging/linux/org.todoke.todoke.desktop /app/share/applications/org.todoke.todoke.desktop
+      - install -Dm644 packaging/linux/org.todoke.todoke.metainfo.xml /app/share/metainfo/org.todoke.todoke.metainfo.xml
+      - |
+        for size in 16 24 32 48 64 128 256 512; do
+          install -Dm644 "packaging/icons/todoke-$size.png" \
+            "/app/share/icons/hicolor/${size}x${size}/apps/org.todoke.todoke.png"
+        done
+      - install -Dm644 packaging/icons/todoke.svg /app/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg
+      - install -Dm644 -t /app/share/licenses/org.todoke.todoke LICENSE-APACHE LICENSE-MIT
+    sources:
+      - type: dir
+        path: ../../..
+        skip:
+          - .git
+          - target
+          - dist
+          - sources
+          - mutants.out
+          - fuzz
+          - bench
+          - apps
+          - web
+      - cargo-sources.json

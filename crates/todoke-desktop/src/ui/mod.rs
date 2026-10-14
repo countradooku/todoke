@@ -1549,14 +1549,14 @@ pub fn run() {
             }
         }
     }
-    // Started by the Share sheet (MSIX).
+    // Started by the package's startup task or its Share target (MSIX).
     #[cfg(windows)]
-    if let Some(paths) = todoke_sys_windows::share_target::shared_files() {
-        launch.handoff = if paths.is_empty() {
-            Handoff::Show
-        } else {
-            Handoff::Send { paths }
-        };
+    match todoke_sys_windows::activation::activation() {
+        todoke_sys_windows::activation::Activation::Startup => launch.background = true,
+        todoke_sys_windows::activation::Activation::Share(paths) if !paths.is_empty() => {
+            launch.handoff = Handoff::Send { paths };
+        }
+        _ => {}
     }
     if launch.version {
         println!("todoke-desktop {}", env!("CARGO_PKG_VERSION"));

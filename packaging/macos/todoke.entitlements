@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- todoke.app under the hardened runtime (Developer ID, not sandboxed).
+     The data-protection keychain needs an access group, and macOS accepts
+     these entitlements only with a provisioning profile that authorises
+     them: build-app.sh applies this file only with MACOS_TEAM_ID and
+     MACOS_PROVISIONING_PROFILE, replacing $(TeamIdentifierPrefix) with
+     "<team ID>." and $(TeamIdentifier) with the team ID. Without them the
+     app is signed with no entitlements (the file-based keychain). -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.application-identifier</key>
+	<string>$(TeamIdentifierPrefix)org.todoke.todoke</string>
+	<key>com.apple.developer.team-identifier</key>
+	<string>$(TeamIdentifier)</string>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(TeamIdentifierPrefix)org.todoke.todoke</string>
+	</array>
+</dict>
+</plist>

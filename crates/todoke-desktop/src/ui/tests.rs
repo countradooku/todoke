@@ -1419,7 +1419,9 @@ fn handed_over_paths_gather_in_one_picker(cx: &mut TestAppContext) {
     let send = |path: &str| todoke_daemon::handoff::Handoff::Send {
         paths: vec![PathBuf::from(path)],
     };
-    view.update_in(cx, |app, window, cx| app.handoff(send("/tmp/a"), window, cx));
+    view.update_in(cx, |app, window, cx| {
+        app.handoff(send("/tmp/a"), window, cx)
+    });
     cx.run_until_parked();
     pick(cx, NEAR);
     cx.executor().advance_clock(tokens::DECISION_DELAY);

@@ -137,7 +137,8 @@ without the receive sheet.
   The user sees and can remove it in System Settings → Login Items; when
   macOS wants approval, the app opens that pane.
 - **Windows:** the package's startup task (`windows.startupTask`, off until
-  the user turns it on; enabling goes through `StartupTask`), or for
+  the user turns it on; enabling goes through `StartupTask`; it cannot pass
+  `--background`, so the app reads its activation kind), or for
   unpackaged installs this user's `Run` key. Both honour Task Manager's
   Startup apps switch.
 - **Linux:** an XDG autostart entry in `~/.config/autostart` (an AppImage
@@ -200,19 +201,31 @@ without the receive sheet.
 - The app ID is `org.todoke.todoke` everywhere. Icons are generated from
   the mark drawn in code (`cargo run -p todoke-desktop --example icons
   --features mock`), the same drawing as the tray.
-- Signing happens only with the maintainers' secrets in CI (Developer ID
-  and notarytool on macOS; a code-signing certificate on Windows); without
-  them builds are ad-hoc (macOS) or test-signed (Windows) and fit only for
-  CI.
+- Signing happens only where a maintainer runs the scripts with the
+  signing variables (Developer ID, a provisioning profile for the keychain
+  access group, and notarytool on macOS; a code-signing certificate on
+  Windows). CI holds no signing secret: its builds are ad-hoc (macOS) or
+  test-signed (Windows) and fit only for CI. The keychain entitlement is
+  applied only with a provisioning profile, since macOS kills an app whose
+  restricted entitlements no profile authorises.
 - **No store or registry submission is made by CI.** Flathub, winget,
   Homebrew, and AUR updates are pull requests a maintainer opens.
 - `.github/workflows/packaging.yml` builds each package and, per OS in the
   runner VM, installs it, upgrades it to a higher version, and uninstalls
-  it (user data kept), then checks that a context-menu send reaches the
-  running window (`TODOKE_HANDOFF_LOG`, below).
+  it (user data kept). End to end, it checks that each installed
+  integration reaches the running window (`TODOKE_HANDOFF_LOG`, below):
+  the Dolphin and Nemo `Exec` lines and the Nautilus extension on Linux,
+  the "Send with todoke" service on macOS (`NSPerformService`), and the
+  Explorer command through COM on Windows.
 - `TODOKE_HANDOFF_LOG`, when set for the first launch, makes the window
   append each request it receives (its kind and paths, never text) to that
   file, owner-only: the end-to-end tests read it.
+
+- Release Windows builds are GUI-subsystem binaries (no console window);
+  inside the MSIX, the profile lives in the package's redirected AppData
+  and goes with the package on uninstall.
+- macOS asks for local-network access (macOS 15): `Info.plist` gives the
+  reason and declares the Bonjour service (`_todoke._tcp`).
 
 ### No admin rights
 
@@ -278,6 +291,10 @@ that exact version in `deny-desktop.toml` only.
   and manifests, and drives the Explorer command's COM entry and the
   Services provider, but no CI test clicks Finder's Share menu or
   Explorer's context menu. Fix: UI automation on signed builds.
+- **Uninstalling the MSIX deletes the profile** (Windows removes the
+  package's redirected AppData): contacts and history go with it. Fix:
+  `desktop6` unvirtualized resources (a restricted capability) or an
+  export before uninstall.
 - **The handoff log is production code** behind an environment variable:
   it writes paths (never text) only to a file the person starting the app
   names.

@@ -1,0 +1,599 @@
+name: Packaging
+
+# Builds every package (packaging/README.md) and installs, upgrades, and
+# uninstalls each one on a fresh runner. Packages are ad-hoc or test-signed
+# here; no release is published and no store is contacted.
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+  pull_request:
+    paths:
+      - "packaging/**"
+      - "scripts/packaging/**"
+      - "crates/todoke-desktop/**"
+      - "crates/todoke-sys-*/**"
+      - "crates/todoke-shell-windows/**"
+      - ".github/workflows/packaging.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  linux:
+    name: Linux (deb, rpm, AppImage)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Install build and validation tools
+        run: |
+          bash scripts/ci/install-desktop-deps.sh
+          sudo apt-get install -y -qq --no-install-recommends appstream clang cmake desktop-file-utils rpm \
+            dbus mesa-vulkan-drivers libegl1 libgl1-mesa-dri xvfb
+      - name: Read the version
+        run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
+      - name: Validate the static files
+        run: |
+          desktop-file-validate packaging/linux/org.todoke.todoke.desktop
+          appstreamcli validate --no-net packaging/linux/org.todoke.todoke.metainfo.xml
+          python3 -I -c 'import ast, sys; ast.parse(open(sys.argv[1]).read())' packaging/linux/nautilus/todoke.py
+      - name: Build the release binaries
+        run: cargo build --release --locked -p todoke-desktop -p todoke-cli
+      - name: Build the packages, and a newer deb and rpm for the upgrade
+        env:
+          TODOKE_BIN_DIR: target/release
+        run: |
+          packaging/linux/build-deb.sh
+          packaging/linux/build-rpm.sh
+          packaging/linux/build-appimage.sh
+          TODOKE_DIST=dist/upgrade TODOKE_PACKAGE_VERSION="$VERSION+ci2" packaging/linux/build-deb.sh
+          TODOKE_DIST=dist/upgrade TODOKE_RPM_RELEASE=2 packaging/linux/build-rpm.sh
+          ls -l dist dist/upgrade
+      - name: Install the deb
+        run: |
+          mkdir -p ~/.local/share/todoke
+          echo kept > ~/.local/share/todoke/marker
+          sudo apt-get install -y -qq "./dist/todoke_${VERSION}_amd64.deb"
+          test "$(todoke-desktop --version)" = "todoke-desktop $VERSION"
+          test "$(todoke --version)" = "todoke $VERSION"
+          desktop-file-validate /usr/share/applications/org.todoke.todoke.desktop
+          appstreamcli validate --no-net /usr/share/metainfo/org.todoke.todoke.metainfo.xml
+          for file in \
+            /usr/share/kio/servicemenus/org.todoke.todoke.desktop \
+            /usr/share/nemo/actions/todoke.nemo_action \
+            /usr/share/nautilus-python/extensions/todoke.py \
+            /usr/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg \
+            /usr/share/icons/hicolor/256x256/apps/org.todoke.todoke.png \
+            /usr/share/doc/todoke/copyright; do
+            test -f "$file"
+          done
+          dpkg --verify todoke
+      # What the file managers do: a second launch with --send hands the
+      # paths to the running window (TODOKE_HANDOFF_LOG records them).
+      # Xvfb and Mesa's software renderers stand in for a desktop.
+      - name: Hand a send to the running window
+        run: |
+          script="$RUNNER_TEMP/handoff.sh"
+          cat > "$script" << 'EOF'
+          set -euo pipefail
+          home="$(mktemp -d)"
+          file="$home/files/a b.txt"
+          log="$home/handoff.log"
+          mkdir -p "$home/files"
+          echo hello > "$file"
+          export TODOKE_HOME="$home"
+          TODOKE_HANDOFF_LOG="$log" todoke-desktop --background > "$home/app.log" 2>&1 &
+          app=$!
+          fail() {
+            echo "$1" >&2
+            cat "$home/app.log" >&2
+            kill "$app" 2> /dev/null || true
+            exit 1
+          }
+          for _ in $(seq 300); do
+            [[ -S "$home/state/desktop.sock" ]] && break
+            kill -0 "$app" 2> /dev/null || fail "the app exited"
+            sleep 0.2
+          done
+          [[ -S "$home/state/desktop.sock" ]] || fail "the app does not listen for launches"
+          todoke-desktop --send "$file" &
+          sender=$!
+          for _ in $(seq 100); do
+            kill -0 "$sender" 2> /dev/null || break
+            sleep 0.2
+          done
+          kill -0 "$sender" 2> /dev/null && fail "the second launch did not hand its request over"
+          wait "$sender" || fail "the second launch failed"
+          for _ in $(seq 300); do
+            grep -qF "\"$file\"" "$log" 2> /dev/null && break
+            sleep 0.2
+          done
+          grep -F "\"$file\"" "$log" || fail "the window did not receive the paths"
+          # The installed Dolphin, Nemo, and Nautilus items, as each file
+          # manager runs them: three more requests with the file.
+          python3 -I "$GITHUB_WORKSPACE/scripts/ci/linux-context-menus.py" "$file" || fail "a file-manager item failed"
+          for _ in $(seq 300); do
+            [[ "$(grep -cF "\"$file\"" "$log")" -ge 4 ]] && break
+            sleep 0.2
+          done
+          [[ "$(grep -cF "\"$file\"" "$log")" -ge 4 ]] || fail "a file-manager item's request did not arrive"
+          kill "$app"
+          EOF
+          xvfb-run --auto-servernum dbus-run-session -- bash "$script"
+      - name: Upgrade the deb
+        run: |
+          sudo apt-get install -y -qq "./dist/upgrade/todoke_${VERSION}+ci2_amd64.deb"
+          test "$(dpkg-query --show --showformat='${Version}' todoke)" = "$VERSION+ci2"
+          test "$(todoke-desktop --version)" = "todoke-desktop $VERSION"
+      - name: Uninstall the deb (the profile stays)
+        run: |
+          sudo apt-get remove -y -qq todoke
+          for file in \
+            /usr/bin/todoke-desktop \
+            /usr/bin/todoke \
+            /usr/share/applications/org.todoke.todoke.desktop \
+            /usr/share/metainfo/org.todoke.todoke.metainfo.xml \
+            /usr/share/kio/servicemenus/org.todoke.todoke.desktop \
+            /usr/share/nemo/actions/todoke.nemo_action \
+            /usr/share/nautilus-python/extensions/todoke.py; do
+            test ! -e "$file"
+          done
+          test "$(cat ~/.local/share/todoke/marker)" = kept
+      # A clean system checks the declared dependencies: every linked
+      # library resolves, and the renderer finds Vulkan or EGL.
+      - name: Install the deb on a clean Ubuntu 24.04
+        env:
+          DEB: todoke_${{ env.VERSION }}_amd64.deb
+        run: |
+          docker run --rm -e DEB -e VERSION -v "$PWD/dist:/dist:ro" ubuntu:24.04 bash -euo pipefail -c '
+            apt-get update -qq
+            DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "/dist/$DEB"
+            if ldd /usr/bin/todoke-desktop | grep "not found"; then exit 1; fi
+            ldconfig -p | grep -E "libvulkan\.so\.1|libEGL\.so\.1"
+            test "$(todoke-desktop --version)" = "todoke-desktop $VERSION"
+          '
+      - name: Install, upgrade, and uninstall the rpm on Fedora
+        env:
+          RPM: todoke-${{ env.VERSION }}-1.x86_64.rpm
+          RPM_UPGRADE: todoke-${{ env.VERSION }}-2.x86_64.rpm
+        run: |
+          docker run --rm -e RPM -e RPM_UPGRADE -e VERSION -v "$PWD/dist:/dist:ro" fedora:latest bash -euo pipefail -c '
+            mkdir -p ~/.local/share/todoke
+            echo kept > ~/.local/share/todoke/marker
+            dnf install -y -q "/dist/$RPM"
+            test "$(todoke-desktop --version)" = "todoke-desktop $VERSION"
+            test "$(todoke --version)" = "todoke $VERSION"
+            if ldd /usr/bin/todoke-desktop | grep "not found"; then exit 1; fi
+            rpm --verify todoke
+            test -f /usr/share/kio/servicemenus/org.todoke.todoke.desktop
+            test -f /usr/share/nemo/actions/todoke.nemo_action
+            test -f /usr/share/nautilus-python/extensions/todoke.py
+            dnf upgrade -y -q "/dist/upgrade/$RPM_UPGRADE"
+            test "$(rpm --query --queryformat "%{RELEASE}" todoke)" = 2
+            dnf remove -y -q todoke
+            for file in /usr/bin/todoke-desktop /usr/bin/todoke /usr/share/applications/org.todoke.todoke.desktop \
+              /usr/share/kio/servicemenus /usr/share/nemo/actions /usr/share/nautilus-python/extensions; do
+              test ! -e "$file"
+            done
+            test "$(cat ~/.local/share/todoke/marker)" = kept
+          '
+      - name: Run the AppImage
+        run: |
+          image="$PWD/dist/todoke-$VERSION-x86_64.AppImage"
+          test "$(APPIMAGE_EXTRACT_AND_RUN=1 "$image" --version)" = "todoke-desktop $VERSION"
+          # Started as "todoke", it is the command line.
+          ln -s "$image" "$RUNNER_TEMP/todoke"
+          test "$(APPIMAGE_EXTRACT_AND_RUN=1 "$RUNNER_TEMP/todoke" --version)" = "todoke $VERSION"
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-packages
+          path: |
+            dist/*.deb
+            dist/*.rpm
+            dist/*.AppImage
+          if-no-files-found: error
+          retention-days: 14
+
+  # The storage key in the Secret Service (todoke-sys-linux), against a
+  # real gnome-keyring in a private session bus.
+  secret-service:
+    name: Linux Secret Service
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Install gnome-keyring
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dbus-x11 gnome-keyring
+      - name: Test against the keyring
+        run: |
+          # An empty password would make the keyring prompt (and fail headless).
+          dbus-run-session -- bash -c 'printf todoke-ci | gnome-keyring-daemon --unlock --components=secrets > /dev/null; TODOKE_SECRET_SERVICE_TEST=1 cargo test -p todoke-sys-linux --features desktop --locked'
+
+  flatpak:
+    name: Flatpak (build, install, run)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      # flatpak-builder-tools' cargo generator, pinned by commit and digest.
+      GENERATOR_COMMIT: 41c20aa10819cdb2a4f3ca171758a96d1955c018
+      GENERATOR_SHA256: 0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install flatpak-builder and the generator's dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            dbus flatpak flatpak-builder python3-aiohttp python3-tomlkit python3-yaml
+          # Ubuntu 24.04 confines unprivileged user namespaces, which
+          # bubblewrap needs on this runner.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Read the version
+        run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
+      - name: Generate the offline cargo sources
+        run: |
+          generator="$RUNNER_TEMP/flatpak-cargo-generator.py"
+          curl --fail --silent --show-error --location --proto '=https' --user-agent todoke-dev \
+            --output "$generator" \
+            "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/$GENERATOR_COMMIT/cargo/flatpak-cargo-generator.py"
+          echo "$GENERATOR_SHA256  $generator" | sha256sum --check
+          python3 -I "$generator" Cargo.lock -o packaging/linux/flatpak/cargo-sources.json
+      - name: Build and install for this user
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak-builder --user --install-deps-from=flathub --install --force-clean \
+            --disable-rofiles-fuse "$RUNNER_TEMP/flatpak-build" packaging/linux/flatpak/org.todoke.todoke.yml
+      - name: Run both commands, then uninstall
+        run: |
+          test "$(dbus-run-session -- flatpak run --command=todoke-desktop org.todoke.todoke --version)" = "todoke-desktop $VERSION"
+          test "$(dbus-run-session -- flatpak run --command=todoke org.todoke.todoke --version)" = "todoke $VERSION"
+          flatpak uninstall --user -y org.todoke.todoke
+          if flatpak info --user org.todoke.todoke > /dev/null 2>&1; then
+            echo "org.todoke.todoke is still installed" >&2
+            exit 1
+          fi
+
+  macos:
+    name: macOS (app, zip, dmg, Homebrew cask)
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_ANALYTICS: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and both targets
+        run: |
+          rustup show
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - name: Read the version
+        run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
+      - name: Build todoke.app (universal, ad-hoc signed)
+        run: packaging/macos/build-app.sh universal
+      - name: Verify the bundle
+        run: |
+          app=target/packaging/macos/todoke.app
+          codesign --verify --deep --strict --verbose=2 "$app"
+          for bin in "$app/Contents/MacOS/todoke-desktop" "$app/Contents/MacOS/todoke" \
+            "$app/Contents/PlugIns/TodokeShare.appex/Contents/MacOS/TodokeShare"; do
+            lipo "$bin" -verify_arch arm64 x86_64
+          done
+          test -f "$app/Contents/Library/LaunchAgents/org.todoke.todoke.agent.plist"
+          test "$(plutil -extract CFBundleIdentifier raw "$app/Contents/Info.plist")" = org.todoke.todoke
+          hdiutil verify "dist/todoke-$VERSION-macos-universal.dmg"
+      - name: Install into ~/Applications
+        run: |
+          app="$HOME/Applications/todoke.app"
+          profile="$HOME/Library/Application Support/org.todoke.todoke"
+          mkdir -p "$HOME/Applications" "$profile"
+          echo kept > "$profile/marker"
+          ditto -x -k "dist/todoke-$VERSION-macos-universal.zip" "$HOME/Applications"
+          codesign --verify --deep --strict "$app"
+          test "$("$app/Contents/MacOS/todoke-desktop" --version)" = "todoke-desktop $VERSION"
+          test "$("$app/Contents/MacOS/todoke" --version)" = "todoke $VERSION"
+      # What Finder's Open With, the Quick Action, and the Share extension
+      # end in: a second launch hands the paths to the running window
+      # (TODOKE_HANDOFF_LOG records them).
+      - name: Hand a send to the running window
+        run: |
+          bin="$HOME/Applications/todoke.app/Contents/MacOS/todoke-desktop"
+          home="$(mktemp -d)"
+          file="$home/files/a b.txt"
+          log="$home/handoff.log"
+          mkdir -p "$home/files"
+          echo hello > "$file"
+          export TODOKE_HOME="$home"
+          TODOKE_HANDOFF_LOG="$log" "$bin" --background > "$home/app.log" 2>&1 &
+          app=$!
+          fail() {
+            echo "$1" >&2
+            cat "$home/app.log" >&2
+            kill "$app" 2> /dev/null || true
+            exit 1
+          }
+          for _ in $(seq 300); do
+            [[ -S "$home/state/desktop.sock" ]] && break
+            kill -0 "$app" 2> /dev/null || fail "the app exited"
+            sleep 0.2
+          done
+          [[ -S "$home/state/desktop.sock" ]] || fail "the app does not listen for launches"
+          "$bin" --send "$file" &
+          sender=$!
+          for _ in $(seq 100); do
+            kill -0 "$sender" 2> /dev/null || break
+            sleep 0.2
+          done
+          kill -0 "$sender" 2> /dev/null && fail "the second launch did not hand its request over"
+          wait "$sender" || fail "the second launch failed"
+          for _ in $(seq 300); do
+            grep -qF "\"$file\"" "$log" 2> /dev/null && break
+            sleep 0.2
+          done
+          grep -F "\"$file\"" "$log" || fail "the window did not receive the paths"
+          # Finder's Quick Action: the bundle's "Send with todoke" service,
+          # answered by the running app's Services provider.
+          /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \
+            -f "$HOME/Applications/todoke.app"
+          /System/Library/CoreServices/pbs -update
+          swift scripts/ci/macos-service.swift "$file" || fail "the service was not performed"
+          for _ in $(seq 300); do
+            [[ "$(grep -cF "\"$file\"" "$log")" -ge 2 ]] && break
+            sleep 0.2
+          done
+          [[ "$(grep -cF "\"$file\"" "$log")" -ge 2 ]] || fail "the service's request did not arrive"
+          kill "$app"
+      - name: Upgrade and uninstall
+        run: |
+          app="$HOME/Applications/todoke.app"
+          # The same build with a newer bundle version.
+          TODOKE_DIST=dist/upgrade TODOKE_PACKAGE_VERSION=99.0.0 packaging/macos/build-app.sh universal
+          rm -rf "$app"
+          ditto -x -k dist/upgrade/todoke-99.0.0-macos-universal.zip "$HOME/Applications"
+          codesign --verify --deep --strict "$app"
+          test "$(plutil -extract CFBundleShortVersionString raw "$app/Contents/Info.plist")" = 99.0.0
+          test "$("$app/Contents/MacOS/todoke-desktop" --version)" = "todoke-desktop $VERSION"
+          rm -rf "$app"
+          test ! -e "$app"
+          test "$(cat "$HOME/Library/Application Support/org.todoke.todoke/marker")" = kept
+      # Homebrew refuses casks by path: a local tap holds one whose url is
+      # the zip built above.
+      - name: Install and uninstall with the cask
+        run: |
+          zip="$PWD/dist/todoke-$VERSION-macos-universal.zip"
+          sha="$(shasum -a 256 "$zip" | cut -d ' ' -f 1)"
+          brew tap-new --no-git local/todoke
+          casks="$(brew --repository)/Library/Taps/local/homebrew-todoke/Casks"
+          mkdir -p "$casks"
+          sed -e "s|@VERSION@|$VERSION|" -e "s|@SHA256@|$sha|" \
+            -e "s|^  url .*|  url \"file://$zip\"|" packaging/homebrew/todoke.rb > "$casks/todoke.rb"
+          brew install --cask local/todoke/todoke
+          test -d /Applications/todoke.app
+          bin="$(brew --prefix)/bin/todoke"
+          test -L "$bin"
+          # Ad-hoc signed: Gatekeeper refuses it while quarantined.
+          xattr -cr /Applications/todoke.app
+          test "$("$bin" --version)" = "todoke $VERSION"
+          brew uninstall --cask todoke
+          test ! -e /Applications/todoke.app
+          test ! -e "$bin"
+          brew untap local/todoke
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-packages
+          path: |
+            dist/todoke-*-macos-*.zip
+            dist/todoke-*-macos-*.dmg
+          if-no-files-found: error
+          retention-days: 14
+
+  windows:
+    name: Windows (MSIX, zip, Scoop, winget)
+    runs-on: windows-2022
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Read the version
+        run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
+      - name: Build the release binaries and the Explorer command
+        run: |
+          packages=(-p todoke-desktop -p todoke-cli)
+          if [[ -f crates/todoke-shell-windows/Cargo.toml ]]; then
+            packages+=(-p todoke-shell-windows)
+          else
+            echo "::warning::crates/todoke-shell-windows does not exist yet: the MSIX has no Explorer command"
+          fi
+          cargo build --release --locked "${packages[@]}"
+      - name: Build the MSIX (test-signed), a newer one, and the zip
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          ./packaging/windows/build-msix.ps1 -Arch x64 -OutDir dist
+          ./packaging/windows/build-msix.ps1 -Arch x64 -OutDir dist/upgrade -Version "$($env:VERSION).1"
+          ./packaging/windows/build-zip.ps1 -Arch x64 -OutDir dist
+      # Runner only: the test certificates go to the machine's TrustedPeople
+      # store, which needs admin. Users install packages signed by a trusted
+      # CA, per user, without admin.
+      - name: Install, upgrade, and uninstall the MSIX
+        shell: pwsh
+        run: |
+          $PSNativeCommandUseErrorActionPreference = $true
+          foreach ($cer in 'dist\todoke-test-signing.cer', 'dist\upgrade\todoke-test-signing.cer') {
+            Import-Certificate -FilePath $cer -CertStoreLocation Cert:\LocalMachine\TrustedPeople | Out-Null
+          }
+          $aliases = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps'
+
+          Add-AppxPackage -Path "dist\todoke-$env:VERSION-windows-x64.msix"
+          $package = Get-AppxPackage -Name org.todoke.todoke
+          if (-not $package) { throw 'org.todoke.todoke is not installed' }
+          # A release GUI binary has no console to print to: its exit code
+          # tells, and the package's version is checked below.
+          $version = Start-Process -FilePath (Join-Path $aliases 'todoke-desktop.exe') -ArgumentList '--version' -NoNewWindow -PassThru -Wait
+          if ($version.ExitCode -ne 0) { throw "todoke-desktop --version exited with $($version.ExitCode)" }
+          if ($package.Version -ne "$($env:VERSION).0") { throw "the package's version is $($package.Version)" }
+          $cli = & (Join-Path $aliases 'todoke.exe') --version
+          if ($cli -ne "todoke $env:VERSION") { throw "todoke --version printed: $cli" }
+          $manifest = Get-Content -Raw (Join-Path $package.InstallLocation 'AppxManifest.xml')
+          if ((Test-Path 'target\release\todoke_shell.dll') -and $manifest -notmatch 'windows\.fileExplorerContextMenus') {
+            throw 'the Explorer command is missing from the installed manifest'
+          }
+
+          # What the Explorer command and the registry verbs end in: a second
+          # launch hands the paths to the running window (TODOKE_HANDOFF_LOG
+          # records them). The profile is outside AppData, which the
+          # package's writes would be redirected from.
+          $handoff = Join-Path $env:RUNNER_TEMP 'handoff'
+          New-Item -ItemType Directory -Force -Path (Join-Path $handoff 'files') | Out-Null
+          $file = Join-Path $handoff 'files\a b.txt'
+          Set-Content -LiteralPath $file -Value hello
+          $log = Join-Path $handoff 'handoff.log'
+          $env:TODOKE_HOME = $handoff
+          $env:TODOKE_HANDOFF_LOG = $log
+          $gui = Join-Path $aliases 'todoke-desktop.exe'
+          $app = Start-Process -FilePath $gui -ArgumentList '--background' -NoNewWindow -PassThru
+          $endpoint = Join-Path $handoff 'state\desktop.endpoint'
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not (Test-Path -LiteralPath $endpoint)) {
+            if ($app.HasExited) { throw "the app exited ($($app.ExitCode))" }
+            if ((Get-Date) -gt $deadline) { throw 'the app does not listen for launches' }
+            Start-Sleep -Milliseconds 200
+          }
+          Remove-Item Env:TODOKE_HANDOFF_LOG
+          $sender = Start-Process -FilePath $gui -ArgumentList '--send', "`"$file`"" -NoNewWindow -PassThru
+          $null = $sender.Handle
+          if (-not $sender.WaitForExit(20000)) {
+            Stop-Process -Id $sender.Id -Force
+            throw 'the second launch did not hand its request over'
+          }
+          if ($sender.ExitCode -ne 0) { throw "the second launch failed ($($sender.ExitCode))" }
+          $received = $false
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not $received -and (Get-Date) -lt $deadline) {
+            if (Test-Path -LiteralPath $log) {
+              $paths = Get-Content -LiteralPath $log | ForEach-Object { ($_ | ConvertFrom-Json).body.paths }
+              $received = @($paths) -contains $file
+            }
+            if (-not $received) { Start-Sleep -Milliseconds 200 }
+          }
+          Stop-Process -Id $app.Id -Force
+          Remove-Item Env:TODOKE_HOME
+          if (-not $received) { throw 'the window did not receive the paths' }
+
+          # The Explorer command, through COM as Explorer calls it. It starts
+          # the app from the package without this shell's environment, so
+          # the window here uses the default (package) profile too.
+          if (Test-Path 'target\release\todoke_shell.dll') {
+            $comLog = Join-Path $handoff 'explorer.log'
+            $env:TODOKE_HANDOFF_LOG = $comLog
+            $app = Start-Process -FilePath $gui -ArgumentList '--background' -NoNewWindow -PassThru
+            Remove-Item Env:TODOKE_HANDOFF_LOG
+            Start-Sleep -Seconds 10
+            if ($app.HasExited) { throw "the app exited ($($app.ExitCode))" }
+            $env:TODOKE_SHELL_E2E_FILE = $file
+            cargo test --release --locked -p todoke-shell-windows --test explorer_command
+            if ($LASTEXITCODE -ne 0) { throw 'the Explorer command failed' }
+            Remove-Item Env:TODOKE_SHELL_E2E_FILE
+            $received = $false
+            $deadline = (Get-Date).AddSeconds(60)
+            while (-not $received -and (Get-Date) -lt $deadline) {
+              if (Test-Path -LiteralPath $comLog) {
+                $paths = Get-Content -LiteralPath $comLog | ForEach-Object { ($_ | ConvertFrom-Json).body.paths }
+                $received = @($paths) -contains $file
+              }
+              if (-not $received) { Start-Sleep -Milliseconds 200 }
+            }
+            Stop-Process -Id $app.Id -Force
+            if (-not $received) { throw "the Explorer command's request did not arrive" }
+          }
+
+          Add-AppxPackage -Path "dist\upgrade\todoke-$($env:VERSION).1-windows-x64.msix"
+          $version = (Get-AppxPackage -Name org.todoke.todoke).Version
+          if ($version -ne "$($env:VERSION).1") { throw "after the upgrade the version is $version" }
+
+          Get-AppxPackage -Name org.todoke.todoke | Remove-AppxPackage
+          if (Get-AppxPackage -Name org.todoke.todoke) { throw 'org.todoke.todoke is still installed' }
+          foreach ($alias in 'todoke.exe', 'todoke-desktop.exe') {
+            if (Test-Path (Join-Path $aliases $alias)) { throw "the $alias alias is still there" }
+          }
+      # Scoop itself is not installed (its installer fetches an unpinned
+      # script); the manifest is checked against the zip instead.
+      - name: Check the Scoop manifest against the zip
+        run: |
+          python - "dist/todoke-$VERSION-windows-x64.zip" packaging/windows/scoop/todoke.json << 'EOF'
+          import json, os, sys, zipfile
+          archive, manifest_path = sys.argv[1:]
+          with open(manifest_path, encoding="utf-8") as handle:
+              manifest = json.load(handle)
+          names = set(zipfile.ZipFile(archive).namelist())
+          for entry in manifest["bin"]:
+              name = entry if isinstance(entry, str) else entry[0]
+              assert name in names, f"bin {name} is not in the zip"
+          for shortcut in manifest["shortcuts"]:
+              assert shortcut[0] in names, f"shortcut {shortcut[0]} is not in the zip"
+          pattern = manifest["autoupdate"]["architecture"]["64bit"]["url"]
+          assert pattern.replace("$version", manifest["version"]) == manifest["architecture"]["64bit"]["url"]
+          expected = pattern.replace("$version", os.environ["VERSION"]).rsplit("/", 1)[1]
+          assert expected == os.path.basename(archive), f"{expected} is not {archive}"
+          print("scoop manifest matches", archive)
+          EOF
+      - name: Fill and validate the winget manifests
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'winget'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          $msix = (Get-FileHash "dist\todoke-$env:VERSION-windows-x64.msix" -Algorithm SHA256).Hash
+          $zip = (Get-FileHash "dist\todoke-$env:VERSION-windows-x64.zip" -Algorithm SHA256).Hash
+          foreach ($file in Get-ChildItem 'packaging\windows\winget\*.yaml') {
+            $text = (Get-Content -Raw $file.FullName).Replace('@VERSION@', $env:VERSION)
+            $text = $text.Replace('@SHA256_MSIX_X64@', $msix).Replace('@SHA256_ZIP_X64@', $zip)
+            if ($text -match '@[A-Z0-9_]+@') { throw "$($file.Name) has an unfilled placeholder: $($Matches[0])" }
+            Set-Content -NoNewline -Encoding utf8NoBOM -Path (Join-Path $dir $file.Name) -Value $text
+          }
+          if (Get-Command winget -ErrorAction SilentlyContinue) {
+            winget validate --manifest $dir
+            if ($LASTEXITCODE -ne 0) { throw "winget validate failed ($LASTEXITCODE)" }
+          } else {
+            Write-Output '::warning::winget is not on this runner: the manifests were filled but not validated'
+          }
+      - name: Keep the packages
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows-packages
+          path: |
+            dist/todoke-*-windows-*.msix
+            dist/todoke-*-windows-*.zip
+          if-no-files-found: error
+          retention-days: 14

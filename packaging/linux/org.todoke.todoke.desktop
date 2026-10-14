@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=todoke
+GenericName=File Transfer
+Comment=End-to-end encrypted file transfer between your devices
+Icon=org.todoke.todoke
+Exec=todoke-desktop
+Terminal=false
+Categories=Network;FileTransfer;
+Keywords=send;share;transfer;files;encrypted;
+StartupNotify=true
+StartupWMClass=org.todoke.todoke
+Actions=send-clipboard;
+
+[Desktop Action send-clipboard]
+Name=Send Clipboard
+Exec=todoke-desktop --send-clipboard
