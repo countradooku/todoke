@@ -41,6 +41,11 @@ impl Listener {
         #[cfg(unix)]
         {
             use std::os::unix::fs::{FileTypeExt as _, PermissionsExt as _};
+            if let Some(parent) = path.parent()
+                && parent == crate::paths::shared_tmp()
+            {
+                private_socket_dir(parent)?;
+            }
             match std::fs::symlink_metadata(path) {
                 Ok(metadata) if metadata.file_type().is_socket() => {
                     if tokio::net::UnixStream::connect(path).await.is_ok() {
@@ -103,6 +108,25 @@ impl Listener {
             }
         }
     }
+}
+
+/// Creates `dir` (0700) if missing and refuses it unless it is a real
+/// directory this user owns that nobody else can enter: a directory under
+/// `/tmp` could have been created by someone else first.
+#[cfg(unix)]
+fn private_socket_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt as _, MetadataExt as _, PermissionsExt as _};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error),
+    }
+    let metadata = std::fs::symlink_metadata(dir)?;
+    let ours = rustix::process::getuid().as_raw();
+    if !metadata.is_dir() || metadata.uid() != ours || metadata.permissions().mode() & 0o077 != 0 {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    Ok(())
 }
 
 impl Drop for Listener {
