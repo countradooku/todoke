@@ -13,6 +13,7 @@
 //! | [`host`] | The same inside another process (the desktop app): the core for it, served on the endpoint from a thread of its own |
 //! | [`ipc`] | The IPC messages, the client the CLI uses, and who may connect (only this user) |
 //! | [`paths`] | Configuration, state, and Downloads locations (`TODOKE_HOME` overrides) |
+//! | [`handoff`] | The desktop app's single window: a second launch hands its request over |
 //! | [`keys`] | Where the storage key is kept: the platform's secret storage, behind the core's policy |
 //! | [`service`] | Service definitions: a systemd user unit, a launchd agent, a Windows logon task |
 //!
@@ -23,6 +24,8 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod endpoint;
+#[cfg(not(target_family = "wasm"))]
+pub mod handoff;
 #[cfg(not(target_family = "wasm"))]
 pub mod ipc;
 #[cfg(not(target_family = "wasm"))]

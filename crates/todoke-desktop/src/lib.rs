@@ -17,6 +17,7 @@
 //! | --- | --- |
 //! | [`tokens`] | Every color, space, radius, type size, and duration |
 //! | [`format`] | Sizes, durations, fingerprints, kinds of file, escaping |
+//! | [`launch`] | Command-line arguments, and handing them to a running window |
 //! | [`model`] | The state, driven by events and answers (pure) |
 //! | [`backend`] | Hosting the daemon, or attaching to a running one |
 //! | [`prefs`] | `config.json`, relay lists, and the theme preference |
@@ -33,6 +34,8 @@ pub mod tokens;
 pub mod backend;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod format;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod launch;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod model;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

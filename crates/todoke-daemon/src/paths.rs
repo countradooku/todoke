@@ -80,17 +80,28 @@ impl Paths {
     /// path (repeated or trailing separators) share it.
     #[must_use]
     pub fn endpoint(&self) -> PathBuf {
+        self.named_endpoint("daemon", "todoke")
+    }
+
+    /// The desktop app's handoff endpoint ([`crate::handoff`]): placed and
+    /// protected as [`Self::endpoint`] is.
+    #[must_use]
+    pub fn handoff_endpoint(&self) -> PathBuf {
+        self.named_endpoint("desktop", "todoke-desktop")
+    }
+
+    fn named_endpoint(&self, stem: &str, prefix: &str) -> PathBuf {
         if !cfg!(unix) {
-            return self.state_dir.join("daemon.endpoint");
+            return self.state_dir.join(format!("{stem}.endpoint"));
         }
-        let inside = self.state_dir.join("daemon.sock");
+        let inside = self.state_dir.join(format!("{stem}.sock"));
         if fits(&inside) {
             return inside;
         }
         // Hashed by components: `a//b` and `a/b/` name the same directory.
         let normal: PathBuf = self.state_dir.components().collect();
         let name = format!(
-            "todoke-{:016x}.sock",
+            "{prefix}-{:016x}.sock",
             fnv1a(normal.as_os_str().as_encoded_bytes())
         );
         for variable in ["XDG_RUNTIME_DIR", "TMPDIR"] {

@@ -13,6 +13,7 @@ pub mod fixtures;
 mod history;
 mod home;
 mod pair;
+mod picker;
 mod qr;
 mod receive;
 // Off-screen rendering is Metal: macOS only.
@@ -41,6 +42,7 @@ use gpui_kit::{
 use todoke_core::api::{Event, Request, Response};
 use todoke_core::config::CoreConfig;
 use todoke_daemon::Paths;
+use todoke_daemon::handoff::{self, Handoff};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::backend::{self, Backend};
@@ -72,6 +74,8 @@ actions!(
         AcceptAll,
         /// Hide the receive sheet (the offer stays until it expires).
         CloseSheet,
+        /// Close the "Send to…" picker, sending nothing.
+        ClosePicker,
     ]
 );
 
@@ -79,6 +83,8 @@ actions!(
 const CONTEXT: &str = "Todoke";
 /// The key context of the receive sheet.
 const SHEET: &str = "TodokeSheet";
+/// The key context of the "Send to…" picker.
+const PICKER: &str = "TodokePicker";
 
 /// The key bindings: the platform's command key with a digit for each
 /// page, O to choose files, Shift-V to send the clipboard, F to search.
@@ -99,6 +105,7 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(&format!("{m}-shift-v"), SendClipboard, Some(CONTEXT)),
         KeyBinding::new(&format!("{m}-f"), FocusSearch, Some(CONTEXT)),
         KeyBinding::new("escape", CloseSheet, Some(SHEET)),
+        KeyBinding::new("escape", ClosePicker, Some(PICKER)),
     ]
 }
 
@@ -207,6 +214,9 @@ pub struct Todoke {
     pair_tab: PairTab,
     stranger: Option<String>,
     sheet: Sheet,
+    /// "Send to…": what a launch, the clipboard, or the global shortcut
+    /// offered, until the user chooses contacts or cancels.
+    picker: picker::State,
     /// The configuration as stored, and the one being edited.
     saved: Option<CoreConfig>,
     draft: Option<CoreConfig>,
@@ -298,6 +308,7 @@ impl Todoke {
             pair_tab: PairTab::ShowQr,
             stranger: None,
             sheet: Sheet::default(),
+            picker: picker::State::new(cx),
             saved: None,
             draft: None,
             prefs,
@@ -760,8 +771,19 @@ impl Todoke {
         task.detach();
     }
 
+    /// Sends the clipboard to the selected contacts, or asks who to send it
+    /// to when none is selected among several.
     fn send_clipboard(&mut self, cx: &mut Context<Self>) {
         let targets = self.targets();
+        if targets.is_empty() && !self.model.contacts.is_empty() {
+            self.pick(picker::Offered::Clipboard, cx);
+            return;
+        }
+        self.send_clipboard_to(targets, cx);
+    }
+
+    /// Sends what the clipboard holds to `targets`.
+    fn send_clipboard_to(&mut self, targets: Vec<String>, cx: &mut Context<Self>) {
         let Some(item) = cx.read_from_clipboard() else {
             self.model.notify(Level::Info, "The clipboard is empty.");
             cx.notify();
@@ -820,6 +842,19 @@ impl Todoke {
             });
         })
         .detach();
+    }
+
+    /// A request from another launch (a file manager's "Send with todoke",
+    /// the global shortcut, a login item): shows the window and, for a
+    /// send, asks who to send to. Nothing is sent without that choice.
+    pub fn handoff(&mut self, handoff: Handoff, window: &mut Window, cx: &mut Context<Self>) {
+        window.activate_window();
+        match handoff {
+            Handoff::Show => {}
+            Handoff::Send { paths } => self.pick(picker::Offered::Paths(paths), cx),
+            Handoff::SendClipboard => self.pick(picker::Offered::Clipboard, cx),
+        }
+        cx.notify();
     }
 
     /// Accepts the offer shown: all files, or those chosen.
@@ -1223,7 +1258,19 @@ impl Render for Todoke {
             };
             window.focus(handle, cx);
         }
+        // The picker takes focus while it is open (a dialog), unless the
+        // receive sheet is over it.
+        let picking = self.picker.open.is_some() && self.sheet.transfer.is_none();
+        if self.picker.focused != picking {
+            self.picker.focused = picking;
+            if picking {
+                window.focus(&self.picker.focus, cx);
+            } else if self.sheet.transfer.is_none() {
+                window.focus(&self.focus, cx);
+            }
+        }
         let banner = self.render_banner(cx);
+        let picker = self.render_picker(cx);
         let sheet = self.render_sheet(cx);
         let notices = widgets::notices(&self.model, cx);
         div()
@@ -1282,6 +1329,7 @@ impl Render for Todoke {
                             .child(page),
                     ),
             )
+            .children(picker)
             .children(sheet)
             .child(notices)
     }
@@ -1289,8 +1337,23 @@ impl Render for Todoke {
 
 use gpui_kit::prelude::FluentBuilder as _;
 
-/// Opens the window and runs the app until it quits.
+/// Opens the window and runs the app until it quits; or, when this
+/// profile's window already runs, hands it what this launch asks for.
 pub fn run() {
+    let launch = std::env::current_dir()
+        .map_err(|error| format!("no working directory: {error}"))
+        .and_then(|cwd| crate::launch::parse(std::env::args_os().skip(1), &cwd));
+    let launch = match launch {
+        Ok(launch) => launch,
+        Err(error) => {
+            eprintln!("todoke: {error}");
+            std::process::exit(2);
+        }
+    };
+    if launch.version {
+        println!("todoke-desktop {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     let paths = match Paths::discover() {
         Ok(paths) => paths,
         Err(error) => {
@@ -1298,45 +1361,140 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    gpui_kit::application()
-        .with_assets(assets::Assets)
-        .run(move |cx: &mut App| {
-            gpui_kit::init(cx);
-            cx.bind_keys(bindings());
-            let bounds = gpui_kit::Bounds::centered(
-                None,
-                gpui_kit::size(px(size::WINDOW.0), px(size::WINDOW.1)),
-                cx,
-            );
-            let options = gpui_kit::WindowOptions {
-                window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)),
-                window_min_size: Some(gpui_kit::size(
-                    px(size::MIN_WINDOW.0),
-                    px(size::MIN_WINDOW.1),
-                )),
-                titlebar: Some(gpui_kit::TitlebarOptions {
-                    title: Some("todoke".into()),
-                    ..Default::default()
-                }),
-                app_id: Some("org.todoke.todoke".into()),
-                ..Default::default()
-            };
-            let opened = gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| {
-                    let mut app = Todoke::new(paths, window, cx);
-                    app.start(window, cx);
-                    app
-                })
-            });
-            if let Err(error) = opened {
-                eprintln!("todoke: the window could not open: {error}");
-                cx.quit();
+    let Some((listening, deliver, delivered)) = listen_or_hand_over(&paths, &launch.handoff) else {
+        return;
+    };
+    let application = gpui_kit::application().with_assets(assets::Assets);
+    {
+        // Finder's Open With and drops on the Dock icon (macOS), and a
+        // click on the Dock icon.
+        let opened = deliver.clone();
+        application.on_open_urls(move |urls| {
+            let paths: Vec<PathBuf> = urls
+                .iter()
+                .filter_map(|url| crate::launch::file_url(url))
+                .collect();
+            if !paths.is_empty() {
+                let _ = opened.send(Handoff::Send { paths });
             }
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
         });
+        application.on_reopen(move |_| {
+            let _ = deliver.send(Handoff::Show);
+        });
+    }
+    application.run(move |cx: &mut App| {
+        gpui_kit::init(cx);
+        cx.set_app_identity("org.todoke.todoke", "todoke");
+        cx.bind_keys(bindings());
+        open_window(paths, launch, listening, delivered, cx);
+    });
+}
+
+type Delivered = tokio::sync::mpsc::UnboundedReceiver<Handoff>;
+type Deliver = tokio::sync::mpsc::UnboundedSender<Handoff>;
+
+/// Hands `request` to this profile's running window (`None`: done), or
+/// listens for other launches' requests (one window per profile).
+fn listen_or_hand_over(
+    paths: &Paths,
+    request: &Handoff,
+) -> Option<(Option<handoff::Listening>, Deliver, Delivered)> {
+    if handoff::send(paths, request).is_ok() {
+        return None;
+    }
+    let (deliver, delivered) = tokio::sync::mpsc::unbounded_channel();
+    let listening = {
+        let deliver = deliver.clone();
+        handoff::listen(paths, move |handoff| {
+            let _ = deliver.send(handoff);
+        })
+    };
+    let listening = match listening {
+        Ok(listening) => Some(listening),
+        // Another launch started listening since: it takes the request.
+        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+            if handoff::send(paths, request).is_ok() {
+                return None;
+            }
+            eprintln!("todoke: another window of this profile does not answer");
+            None
+        }
+        Err(error) => {
+            eprintln!("todoke: other launches cannot reach this window: {error}");
+            None
+        }
+    };
+    Some((listening, deliver, delivered))
+}
+
+/// Opens the window, which takes the launch's request and then those of
+/// later launches.
+fn open_window(
+    paths: Paths,
+    launch: crate::launch::Launch,
+    listening: Option<handoff::Listening>,
+    mut delivered: Delivered,
+    cx: &mut App,
+) {
+    let crate::launch::Launch {
+        handoff: request,
+        background,
+        ..
+    } = launch;
+    let bounds = gpui_kit::Bounds::centered(
+        None,
+        gpui_kit::size(px(size::WINDOW.0), px(size::WINDOW.1)),
+        cx,
+    );
+    let options = gpui_kit::WindowOptions {
+        window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)),
+        window_min_size: Some(gpui_kit::size(
+            px(size::MIN_WINDOW.0),
+            px(size::MIN_WINDOW.1),
+        )),
+        titlebar: Some(gpui_kit::TitlebarOptions {
+            title: Some("todoke".into()),
+            ..Default::default()
+        }),
+        app_id: Some("org.todoke.todoke".into()),
+        show: !background,
+        focus: !background,
+        ..Default::default()
+    };
+    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+        cx.new(|cx| {
+            let mut app = Todoke::new(paths, window, cx);
+            app.start(window, cx);
+            if !background {
+                app.handoff(request, window, cx);
+            }
+            app
+        })
+    });
+    let (window, view) = match opened {
+        Ok(opened) => opened,
+        Err(error) => {
+            eprintln!("todoke: the window could not open: {error}");
+            cx.quit();
+            return;
+        }
+    };
+    cx.spawn(async move |cx| {
+        let _listening = listening;
+        while let Some(handoff) = delivered.recv().await {
+            let handed = window.update(cx, |_, window, cx| {
+                view.update(cx, |app, cx| app.handoff(handoff, window, cx));
+            });
+            if handed.is_err() {
+                break;
+            }
+        }
+    })
+    .detach();
+    cx.on_window_closed(|cx, _| {
+        if cx.windows().is_empty() {
+            cx.quit();
+        }
+    })
+    .detach();
 }
