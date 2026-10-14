@@ -14,6 +14,8 @@ use futures_io::{AsyncRead, AsyncWrite};
 pub enum LinkKind {
     /// TCP on the local network, found through mDNS (§9).
     Lan,
+    /// A tunnel through an untrusted relay (§10).
+    Relay,
     /// An in-memory pipe with simulated latency, bandwidth, and loss
     /// (tests only).
     #[cfg(test)]
@@ -27,6 +29,7 @@ impl LinkKind {
     pub const fn rank(self) -> u8 {
         match self {
             Self::Lan => 10,
+            Self::Relay => 1,
             #[cfg(test)]
             Self::Simulated => 10,
         }

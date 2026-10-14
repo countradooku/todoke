@@ -56,7 +56,7 @@ pub enum Availability {
 #[must_use]
 pub const fn availability(transport: Transport) -> Availability {
     match transport {
-        Transport::LanTcp => {
+        Transport::LanTcp | Transport::Relay => {
             if cfg!(target_family = "wasm") {
                 Availability::Unsupported
             } else {
@@ -68,7 +68,6 @@ pub const fn availability(transport: Transport) -> Availability {
         | Transport::WifiP2p
         | Transport::Awdl
         | Transport::Usb => Availability::SpecGated,
-        Transport::Relay => Availability::NotImplemented,
     }
 }
 
@@ -86,11 +85,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_lan_tcp_is_available_and_o7_transports_stay_gated() {
+    fn lan_and_relay_are_available_and_o7_transports_stay_gated() {
         let expected = if cfg!(target_family = "wasm") {
             Vec::new()
         } else {
-            vec![Transport::LanTcp]
+            vec![Transport::LanTcp, Transport::Relay]
         };
         assert_eq!(available(), expected);
         for transport in [
@@ -102,6 +101,5 @@ mod tests {
         ] {
             assert_eq!(availability(transport), Availability::SpecGated);
         }
-        assert_eq!(availability(Transport::Relay), Availability::NotImplemented);
     }
 }

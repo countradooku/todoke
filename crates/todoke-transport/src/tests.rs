@@ -33,7 +33,7 @@ use todoke_transfer::{
 use zeroize::Zeroizing;
 
 use crate::LinkKind;
-use crate::link::LinkInfo;
+use crate::link::{Link, LinkInfo};
 use crate::manager::{
     ConnectError, Established, Incoming, MigrationPolicy, OutgoingClaim, TransportManager,
 };
@@ -672,8 +672,8 @@ fn engine_config(label: &'static str) -> AnyResult<EngineConfig> {
 
 type Engine<'k> = TransferEngine<'k, Keys, MemorySource, MemorySink>;
 
-fn engine<'k>(
-    established: &mut Established<SimLink>,
+fn engine<'k, L: Link>(
+    established: &mut Established<L>,
     device: &'k Device,
     source: MemorySource,
     sink: MemorySink,
@@ -725,8 +725,8 @@ struct Run<'k> {
 
 /// Drives the sender until a terminal event, the session's end, or `stop`
 /// returns true for its engine.
-async fn send<'k>(
-    established: &mut Established<SimLink>,
+async fn send<'k, L: Link>(
+    established: &mut Established<L>,
     mut engine: Engine<'k>,
     mut offer: Option<OutgoingOffer>,
 ) -> Run<'k> {
@@ -762,8 +762,8 @@ async fn send<'k>(
 /// Drives the receiver, accepting every offer (the user's decision, made
 /// again for the resumed transfer), until a terminal event, the session's
 /// end, or (if `migrate_after` is set) that many stored segments.
-async fn receive<'k>(
-    established: &mut Established<SimLink>,
+async fn receive<'k, L: Link>(
+    established: &mut Established<L>,
     mut engine: Engine<'k>,
     migrate_after: Option<usize>,
 ) -> (Run<'k>, bool) {
@@ -1325,3 +1325,5 @@ async fn the_responder_store_decides_after_the_claim() -> TestResult {
     assert!(!bob_manager.is_busy(&alice.key()));
     Ok(())
 }
+
+mod relay;

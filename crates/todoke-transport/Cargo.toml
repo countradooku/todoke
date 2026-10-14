@@ -27,6 +27,16 @@ futures-io.workspace = true
 # options; tokio's `net` feature already depends on it.
 socket2 = "=0.6.5"
 tokio = { workspace = true, features = ["net", "time", "rt", "sync"] }
+# The relay transport (§10): QUIC v1 / TLS 1.3, validated by the platform
+# or a pinned key.
+quinn.workspace = true
+rustls.workspace = true
+rustls-platform-verifier.workspace = true
+webpki.workspace = true
+libcrux-sha2.workspace = true
+# Rendezvous hashing over the relay list.
+blake3.workspace = true
+getrandom.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
@@ -40,3 +50,5 @@ todoke-transfer.workspace = true
 libcrux-ml-kem.workspace = true
 tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros", "test-util", "io-util"] }
 zeroize.workspace = true
+# The malicious-relay tests run sessions through a real relay node.
+todoke-relay.workspace = true
