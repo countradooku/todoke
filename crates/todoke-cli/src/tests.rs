@@ -126,3 +126,19 @@ fn json_output_escapes_what_a_terminal_would_act_on() -> Result<(), serde_json::
     assert_eq!(serde_json::from_str::<Event>(&line)?, event);
     Ok(())
 }
+
+/// Event lines escape what a peer could choose (failure messages).
+#[test]
+fn event_lines_escape_peer_text() {
+    let line = event(&Event::Ended {
+        transfer: "abcdef0123456789".into(),
+        reason: todoke_core::api::TransferState::Failed,
+        message: "\u{1b}[2Jgone\u{202e}".into(),
+    });
+    assert!(
+        !line.contains('\u{1b}') && !line.contains('\u{202e}'),
+        "{line}"
+    );
+    assert!(line.starts_with("abcdef012345 failed: "), "{line}");
+    assert!(event(&Event::Missed { events: 3 }).contains("3 events were missed"));
+}

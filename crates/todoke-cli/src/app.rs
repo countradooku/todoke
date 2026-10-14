@@ -184,9 +184,17 @@ pub(crate) fn main() -> ExitCode {
             };
             std::env::current_exe()
                 .map_err(|error| Failure::new(error.to_string(), 1))
-                .map(|exe| {
+                .and_then(|exe| {
+                    let definition = service::definition(kind, &exe).ok_or_else(|| {
+                        Failure::new(
+                            "this program's path cannot go in a service definition \
+                             (not Unicode, or control characters)",
+                            1,
+                        )
+                    })?;
                     eprintln!("# install as {}", kind.location());
-                    print!("{}", service::definition(kind, &exe));
+                    print!("{definition}");
+                    Ok(())
                 })
         }
         command => match tokio::runtime::Builder::new_current_thread()

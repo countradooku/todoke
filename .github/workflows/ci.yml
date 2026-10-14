@@ -41,6 +41,18 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -W clippy::pedantic
       - name: Test, including documentation
         run: cargo test --workspace --locked
+      # The workspace's tests enable the development gates; built alone,
+      # the core and the shipped binary must refuse to start sessions.
+      - name: Check that release builds keep sessions disabled
+        run: |
+          cargo test -p todoke-core --lib --locked
+          cargo build -p todoke-cli --locked
+          home="$(mktemp -d)"
+          if TODOKE_HOME="$home" target/debug/todoke daemon run 2> "$home/err"; then
+            echo "the daemon started without the development gates" >&2
+            exit 1
+          fi
+          grep -q "sessions are disabled" "$home/err"
 
   supply-chain:
     name: Dependency policy and audits

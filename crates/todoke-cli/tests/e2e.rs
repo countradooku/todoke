@@ -274,7 +274,43 @@ async fn pair(displayer: &Device, entrant: &Device) -> AnyResult<()> {
     }
 }
 
-async fn resume_after_crash(large: u64, limit: Duration) -> AnyResult<()> {
+/// Every chosen file arrived intact (BLAKE3 of what was written); no other
+/// did.
+fn check_downloads(
+    downloads: &Path,
+    files: &[(PathBuf, [u8; 32])],
+    chosen: impl Fn(&str) -> bool,
+) -> AnyResult<()> {
+    for (path, expected) in files {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if !chosen(name) {
+            assert!(!downloads.join(path).exists(), "{}", path.display());
+            continue;
+        }
+        assert_eq!(
+            &hash_file(&downloads.join(path))?,
+            expected,
+            "{}",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
+/// Which files of the folder Alice accepts.
+#[derive(Clone, Copy)]
+enum Choice {
+    All,
+    /// Only the large file and `notes.md`: the resumed offer must be
+    /// accepted with the same selection (§7.5), which `accept` without
+    /// files repeats.
+    Some,
+}
+
+async fn resume_after_crash(large: u64, limit: Duration, choice: Choice) -> AnyResult<()> {
     let scratch = Scratch::new("resume")?;
     let discovery = scratch.0.join("discovery");
     let mut alice = Device::new(&scratch.0, "alice", &discovery)?;
@@ -299,12 +335,25 @@ async fn resume_after_crash(large: u64, limit: Duration) -> AnyResult<()> {
     else {
         return Err("not offered".into());
     };
-    wait_for_offer(&alice, &mut alice_events, &transfer, limit).await?;
+    let offer = wait_for_offer(&alice, &mut alice_events, &transfer, limit).await?;
+    let chosen =
+        |name: &str| matches!(choice, Choice::All) || ["video.bin", "notes.md"].contains(&name);
+    let selection = match choice {
+        Choice::All => None,
+        Choice::Some => Some(
+            offer
+                .entries
+                .iter()
+                .filter(|entry| !entry.directory && chosen(&entry.name))
+                .map(|entry| entry.id)
+                .collect(),
+        ),
+    };
     assert_eq!(
         alice
             .request(Request::Accept {
                 transfer: transfer.clone(),
-                files: None,
+                files: selection,
             })
             .await?,
         Response::Done
@@ -354,16 +403,7 @@ async fn resume_after_crash(large: u64, limit: Duration) -> AnyResult<()> {
     })
     .await?;
 
-    // Every file arrived intact (BLAKE3 of what was written).
-    let downloads = alice.paths().downloads_dir;
-    for (path, expected) in &files {
-        assert_eq!(
-            &hash_file(&downloads.join(path))?,
-            expected,
-            "{}",
-            path.display()
-        );
-    }
+    check_downloads(&alice.paths().downloads_dir, &files, chosen)?;
     alice.stop().await?;
     bob.stop().await?;
     Ok(())
@@ -371,13 +411,18 @@ async fn resume_after_crash(large: u64, limit: Duration) -> AnyResult<()> {
 
 #[tokio::test]
 async fn two_daemons_resume_a_folder_after_a_crash() -> AnyResult<()> {
-    resume_after_crash(96 * MIB, Duration::from_mins(5)).await
+    resume_after_crash(96 * MIB, Duration::from_mins(5), Choice::All).await
+}
+
+#[tokio::test]
+async fn a_partial_selection_resumes_with_the_same_files() -> AnyResult<()> {
+    resume_after_crash(48 * MIB, Duration::from_mins(5), Choice::Some).await
 }
 
 #[tokio::test]
 #[ignore = "2 GiB: CI runs it in release mode"]
 async fn two_gigabytes() -> AnyResult<()> {
-    resume_after_crash(2048 * MIB, Duration::from_mins(30)).await
+    resume_after_crash(2048 * MIB, Duration::from_mins(30), Choice::All).await
 }
 
 /// A second daemon for the same home stops at the endpoint, before it
@@ -413,5 +458,43 @@ async fn a_second_daemon_is_refused() -> AnyResult<()> {
     assert!(!refused.status.success());
     assert!(String::from_utf8_lossy(&refused.stderr).contains("state_dir must be"));
     assert!(!scratch.0.join("other-state").exists());
+    Ok(())
+}
+
+/// The client commands: exit code 3 with no daemon, 2 for a bad argument,
+/// and `--json` prints one JSON value per line.
+#[tokio::test]
+async fn the_cli_reports_with_exit_codes_and_json() -> AnyResult<()> {
+    let scratch = Scratch::new("cli")?;
+    let discovery = scratch.0.join("discovery");
+    let mut alice = Device::new(&scratch.0, "alice", &discovery)?;
+    let home = alice.home.clone();
+    let todoke = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_todoke"))
+            .args(args)
+            .env("TODOKE_HOME", &home)
+            .stdin(Stdio::null())
+            .output()
+    };
+    assert_eq!(todoke(&["status"])?.status.code(), Some(3));
+    alice.start().await?;
+    let status = todoke(&["--json", "status"])?;
+    assert!(status.status.success());
+    let line = String::from_utf8(status.stdout)?;
+    assert_eq!(line.lines().count(), 1);
+    assert!(matches!(
+        serde_json::from_str::<Response>(&line)?,
+        Response::Status(_)
+    ));
+    let transfers = todoke(&["--json", "transfers"])?;
+    assert!(matches!(
+        serde_json::from_slice::<Response>(&transfers.stdout)?,
+        Response::Transfers(list) if list.is_empty()
+    ));
+    assert_eq!(todoke(&["accept", "zz"])?.status.code(), Some(2));
+    assert_eq!(todoke(&["cancel", "ffffffffffff"])?.status.code(), Some(2));
+    let human = todoke(&["status"])?;
+    assert!(String::from_utf8(human.stdout)?.contains("sessions  enabled"));
+    alice.stop().await?;
     Ok(())
 }
