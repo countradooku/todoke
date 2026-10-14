@@ -40,6 +40,9 @@ zeroize.workspace = true
 # graph for the relay's platform certificate checks). OSX_10_15: the
 # data-protection keychain.
 security-framework = { version = "=3.7.0", default-features = false, features = ["OSX_10_15"] }
+# Adding an item without the "create or update" of security-framework's
+# password helpers: a stored key is never replaced.
+core-foundation = "=0.10.1"
 # The login item (SMAppService) and the Services provider behind "Send with
 # todoke" in Finder; the same objc2 crates the tray already brings.
 objc2 = { workspace = true, optional = true }

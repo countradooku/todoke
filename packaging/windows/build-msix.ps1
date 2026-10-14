@@ -121,6 +121,7 @@ if (-not $withShell) {
 
 # The signing certificate, in the user's store while this script runs.
 $pfx = $env:WINDOWS_CERT_PFX
+$imported = $false
 $testSigned = -not $pfx
 if ($testSigned) {
     if (-not $Publisher) { $Publisher = if ($env:WINDOWS_PUBLISHER) { $env:WINDOWS_PUBLISHER } else { 'CN=todoke' } }
@@ -132,6 +133,9 @@ if ($testSigned) {
 } else {
     if (-not $env:WINDOWS_CERT_PASSWORD) { throw 'WINDOWS_CERT_PFX needs WINDOWS_CERT_PASSWORD' }
     $password = ConvertTo-SecureString -String $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+    # A certificate already in the store (the maintainer's own) stays there.
+    $existing = (Get-PfxData -FilePath $pfx -Password $password).EndEntityCertificates[0].Thumbprint
+    $imported = -not (Test-Path -LiteralPath "Cert:\CurrentUser\My\$existing")
     $certificate = Import-PfxCertificate -FilePath $pfx -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password
     if (-not $Publisher) { $Publisher = if ($env:WINDOWS_PUBLISHER) { $env:WINDOWS_PUBLISHER } else { $certificate.Subject } }
     if ($Publisher -ne $certificate.Subject) {
@@ -187,6 +191,9 @@ try {
     }
     Write-Output $package
 } finally {
-    # The private key never outlives the build.
-    Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -DeleteKey -ErrorAction SilentlyContinue
+    # The private key this script put in the store never outlives the
+    # build; one that was there before stays.
+    if ($testSigned -or $imported) {
+        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -DeleteKey -ErrorAction SilentlyContinue
+    }
 }

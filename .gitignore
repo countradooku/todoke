@@ -75,3 +75,4 @@ Thumbs.db
 # Packages built by packaging/ scripts, and the Flatpak's generated cargo sources.
 /dist/
 /packaging/linux/flatpak/cargo-sources.json
+__pycache__/

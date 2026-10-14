@@ -23,7 +23,8 @@ pub struct Launch {
 }
 
 /// Parses `args` (without the program name), resolving relative paths
-/// against `cwd`.
+/// against `cwd`. Arguments that are not options are paths to send, as
+/// "Open With" passes them (`todoke-desktop FILE...` is `--send FILE...`).
 ///
 /// # Errors
 ///
@@ -36,14 +37,18 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
         send_stdin: false,
     };
     let mut sending: Option<Vec<PathBuf>> = None;
+    let absolute = |arg: OsString| {
+        let path = cwd.join(unquote(arg));
+        if path.is_absolute() {
+            Ok(path)
+        } else {
+            Err(format!("cannot tell where {} is", path.display()))
+        }
+    };
     for arg in args {
         if let Some(paths) = &mut sending {
             // Everything after --send is a path, even if it starts with "-".
-            let path = cwd.join(arg);
-            if !path.is_absolute() {
-                return Err(format!("cannot tell where {} is", path.display()));
-            }
-            paths.push(path);
+            paths.push(absolute(arg)?);
             continue;
         }
         match arg.to_str() {
@@ -53,6 +58,11 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
             Some("--background") => launch.background = true,
             Some("--version" | "-V") => launch.version = true,
             Some(other) if other.starts_with("-psn_") => {} // macOS Finder's process serial
+            // A path (not an option): Open With.
+            Some(other) if !other.starts_with('-') => {
+                sending = Some(vec![absolute(arg)?]);
+            }
+            None => sending = Some(vec![absolute(arg)?]),
             _ => {
                 return Err(format!(
                     "unknown argument {:?}; usage: todoke-desktop [--background] [--send PATH... | --send-stdin | --send-clipboard] [--version]",
@@ -71,6 +81,19 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
         launch.handoff = Handoff::Send { paths };
     }
     Ok(launch)
+}
+
+/// Windows: Explorer quotes a verb's `"%1"`, and a folder ending in a
+/// backslash (a drive, `C:\`) turns the closing quote into a literal one
+/// (`C:"`). Such a quote is the backslash it replaced.
+fn unquote(arg: OsString) -> OsString {
+    #[cfg(windows)]
+    if let Some(text) = arg.to_str()
+        && let Some(path) = text.strip_suffix('"')
+    {
+        return OsString::from(format!("{path}\\"));
+    }
+    arg
 }
 
 /// At most this many bytes of paths on standard input.
@@ -192,6 +215,13 @@ mod tests {
         assert_eq!(parse(args(&["-psn_0_12345"]), cwd)?.handoff, Handoff::Show);
         assert!(parse(args(&["--send"]), cwd).is_err());
         assert!(parse(args(&["--nope"]), cwd).is_err());
+        // Open With passes bare paths.
+        assert_eq!(
+            parse(args(&["b.txt", "/abs/c"]), cwd)?.handoff,
+            Handoff::Send {
+                paths: vec!["/home/me/b.txt".into(), "/abs/c".into()]
+            }
+        );
         assert!(parse(args(&["--send", "a"]), Path::new("relative")).is_err());
         Ok(())
     }

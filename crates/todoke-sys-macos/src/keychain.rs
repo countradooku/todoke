@@ -9,14 +9,13 @@
 //! access list names the binary that created it.
 
 use std::io;
-use std::path::Path;
 use std::sync::Mutex;
 
 use security_framework::access_control::{ProtectionMode, SecAccessControl};
 use security_framework::item::{ItemClass, ItemSearchOptions, Location, Reference, SearchResult};
 use security_framework::key::{Algorithm, GenerateKeyOptions, KeyType, SecKey, Token};
 use security_framework::passwords::{
-    self, AccessControlOptions, PasswordOptions, generic_password, set_generic_password_options,
+    self, AccessControlOptions, PasswordOptions, generic_password,
 };
 use zeroize::Zeroizing;
 
@@ -61,15 +60,39 @@ fn os(error: security_framework::base::Error) -> io::Error {
     io::Error::other(format!("Keychain error {}", error.code()))
 }
 
+/// Adds `blob` as a new item with `options` (`SecItemAdd`): fails with
+/// `errSecDuplicateItem` rather than updating an item already there, as
+/// security-framework's password helpers would.
+fn add(blob: &[u8], options: &PasswordOptions) -> Result<(), security_framework::base::Error> {
+    use core_foundation::base::TCFType as _;
+    use core_foundation::data::CFData;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    #[allow(
+        deprecated,
+        reason = "the query is the documented way to read the options"
+    )]
+    let mut pairs = options.query.clone();
+    // kSecValueData.
+    pairs.push((
+        CFString::from_static_string("v_Data"),
+        CFData::from_buffer(blob).into_CFType(),
+    ));
+    let query = CFDictionary::<CFString, core_foundation::base::CFType>::from_CFType_pairs(&pairs);
+    // ItemAddOptions cannot carry the access control the protected item
+    // needs; this is the same SecItemAdd.
+    #[allow(deprecated, reason = "ItemAddOptions has no access control")]
+    security_framework::item::add_item(query.to_untyped())
+}
+
 impl Keychain {
-    /// The item for the profile whose state is in `state_dir` (its path
-    /// names the item: profiles under different homes are separate).
+    /// The item for the profile with ID `profile` (random, kept beside the
+    /// state: moving the state keeps its key).
     #[must_use]
-    pub fn for_state(state_dir: &Path) -> Self {
-        let account = format!("storage key: {}", state_dir.display());
+    pub fn for_profile(profile: &str) -> Self {
         Self {
-            wrap_label: format!("{SERVICE} wrap: {}", state_dir.display()),
-            account,
+            account: format!("storage key: {profile}"),
+            wrap_label: format!("{SERVICE} wrap: {profile}"),
             protection: Mutex::new(KeyProtection::Keychain),
         }
     }
@@ -251,7 +274,7 @@ impl Keychain {
         let mut blob = Zeroizing::new(Vec::with_capacity(33));
         blob.push(RAW);
         blob.extend_from_slice(key);
-        match set_generic_password_options(&blob, self.legacy()) {
+        match add(&blob, &self.legacy()) {
             Ok(()) => {}
             Err(error) if error.code() == DUPLICATE => {
                 return Err(io::ErrorKind::AlreadyExists.into());
@@ -300,7 +323,7 @@ impl Keychain {
             0,
         )?;
         options.set_access_control(access);
-        set_generic_password_options(&blob, options)?;
+        add(&blob, &options)?;
         Ok(protection)
     }
 }
@@ -321,7 +344,7 @@ mod tests {
             "todoke-keychain-test-{}",
             u64::from_le_bytes(random)
         ));
-        let keychain = Keychain::for_state(&state);
+        let keychain = Keychain::for_profile(&state.display().to_string());
         let cleanup = scopeguard(|| {
             let _ = keychain.delete();
         });
@@ -337,6 +360,14 @@ mod tests {
             keychain.store(&[1; 32]).map_err(|e| e.kind()),
             Err(io::ErrorKind::AlreadyExists)
         );
+        // Below the check too, adding never replaces the item.
+        let mut blob = vec![RAW];
+        blob.extend_from_slice(&[2; 32]);
+        assert_eq!(
+            add(&blob, &keychain.legacy()).map_err(security_framework::base::Error::code),
+            Err(DUPLICATE)
+        );
+        assert_eq!(keychain.load()?.map(|k| *k), Some(key));
         keychain.delete()?;
         assert!(keychain.load()?.is_none());
         drop(cleanup);

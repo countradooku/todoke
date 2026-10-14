@@ -8,17 +8,19 @@ use std::path::Path;
 
 use todoke_core::api::KeyProtection;
 use todoke_core::config::CoreConfig;
-use todoke_core::storage_key::{PlatformKeyStore, Selected};
+use todoke_core::storage_key::{PlatformKeyStore, Selected, profile_id};
 use zeroize::Zeroizing;
 
-/// The source for the profile `config` describes.
+/// The source for the profile `config` describes. The platform stores
+/// name the key by the profile's ID ([`profile_id`]); without one (the
+/// state directory cannot be made) there is no platform store, and the
+/// policy decides.
 #[must_use]
 pub fn source(config: &CoreConfig) -> Selected {
-    Selected::new(
-        &config.state_dir,
-        platform(&config.state_dir),
-        config.key_storage,
-    )
+    let platform = profile_id(&config.state_dir)
+        .ok()
+        .and_then(|id| platform(&config.state_dir, &id));
+    Selected::new(&config.state_dir, platform, config.key_storage)
 }
 
 #[cfg(target_os = "macos")]
@@ -26,9 +28,9 @@ pub fn source(config: &CoreConfig) -> Selected {
     clippy::unnecessary_wraps,
     reason = "builds without a platform store return None"
 )]
-fn platform(state_dir: &Path) -> Option<Box<dyn PlatformKeyStore>> {
+fn platform(_: &Path, profile: &str) -> Option<Box<dyn PlatformKeyStore>> {
     Some(Box::new(Platform(
-        todoke_sys_macos::keychain::Keychain::for_state(state_dir),
+        todoke_sys_macos::keychain::Keychain::for_profile(profile),
     )))
 }
 
@@ -37,10 +39,10 @@ fn platform(state_dir: &Path) -> Option<Box<dyn PlatformKeyStore>> {
     clippy::unnecessary_wraps,
     reason = "builds without a platform store return None"
 )]
-fn platform(state_dir: &Path) -> Option<Box<dyn PlatformKeyStore>> {
-    Some(Box::new(Platform(
-        todoke_sys_windows::dpapi::Dpapi::for_state(state_dir),
-    )))
+fn platform(state_dir: &Path, profile: &str) -> Option<Box<dyn PlatformKeyStore>> {
+    Some(Box::new(Platform(todoke_sys_windows::dpapi::Dpapi::new(
+        state_dir, profile,
+    ))))
 }
 
 #[cfg(target_os = "linux")]
@@ -48,14 +50,24 @@ fn platform(state_dir: &Path) -> Option<Box<dyn PlatformKeyStore>> {
     clippy::unnecessary_wraps,
     reason = "builds without a platform store return None"
 )]
-fn platform(state_dir: &Path) -> Option<Box<dyn PlatformKeyStore>> {
+fn platform(state_dir: &Path, profile: &str) -> Option<Box<dyn PlatformKeyStore>> {
+    // Inside Flatpak: sealed under the Secret portal's per-app secret, with
+    // no access to the keyring itself.
+    if todoke_sys_linux::portal::sandboxed() {
+        return Some(Box::new(todoke_core::storage_key::SealedFile::new(
+            state_dir.join("storage.key.sealed"),
+            profile,
+            KeyProtection::Portal,
+            Box::new(todoke_sys_linux::secret_portal::retrieve),
+        )));
+    }
     Some(Box::new(Platform(
-        todoke_sys_linux::secret_service::SecretService::for_state(state_dir),
+        todoke_sys_linux::secret_service::SecretService::for_profile(profile),
     )))
 }
 
 #[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
-fn platform(_: &Path) -> Option<Box<dyn PlatformKeyStore>> {
+fn platform(_: &Path, _: &str) -> Option<Box<dyn PlatformKeyStore>> {
     None
 }
 

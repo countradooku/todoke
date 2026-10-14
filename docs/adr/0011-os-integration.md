@@ -70,9 +70,22 @@ without the receive sheet.
   back to a file, and a later failure of the store is an error, never a
   silent fallback to a new key.
 - **Migration** from an existing key file: store in the platform, read it
-  back, compare, record the marker, then overwrite and delete the file.
-  A key already in the store that differs from the file's is never
-  overwritten (the profile would become unreadable): the start fails.
+  back, compare, and record the marker; the move is then done. The file is
+  renamed aside (so its name never holds a partly wiped key), overwritten,
+  and deleted; if that fails, the next start finishes it (a leftover file
+  that holds the same key goes; any other stays, unused). A wiped
+  (all-zero) key file is never taken for a key, and nothing reads the file
+  once the marker says "platform". A key already in the store that differs
+  from the file's is never overwritten: under `auto` the profile keeps its
+  key file, under `platform` the start fails.
+- **The stores name the key by the profile's ID** (`storage.id`: 32 random
+  hexadecimal digits beside the state, made once), not by the state
+  directory's path: moving or renaming the directory keeps its key.
+- Every write that matters is durable: files are synced, then their
+  directory (Unix), before the next step.
+- The Keychain store adds items only (`SecItemAdd`), never updating one;
+  DPAPI's blob is written aside and linked into place (never torn, never
+  replaced).
 - **macOS:** the data-protection keychain, readable only while the Mac is
   unlocked and never synchronised or migrated, the key wrapped by a P-256
   key in the Secure Enclave (ECIES, X9.63 SHA-256, AES-GCM) when the build
@@ -82,28 +95,54 @@ without the receive sheet.
   entropy naming the profile), wrapped first by a non-exportable RSA-2048
   key of the TPM's Platform Crypto Provider (OAEP SHA-256) where present.
 - **Linux:** the Secret Service (GNOME Keyring, KWallet, KeePassXC) over the
-  session bus, through `zbus` (already in the graph; `oo7` would duplicate
-  RustCrypto crates). Without a session bus (a server) the store is
-  unavailable and `auto` keeps the key file.
+  session bus, through `zbus` (in the desktop graph through GPUI, and now
+  in the daemon's and the CLI's on Linux too; `oo7` would duplicate
+  RustCrypto crates). A keyring with no default collection uses GNOME's
+  login keyring or creates one, as libsecret does. A prompt (unlocking,
+  creating) waits at most two minutes, then is dismissed and the store
+  counts as unavailable. Signals are matched against the service's unique
+  bus name. Without a session bus (a server) the store is unavailable and
+  `auto` keeps the key file.
+- **Flatpak:** the sandbox gets no access to the keyring (no
+  `org.freedesktop.secrets`, which would expose every item in it). The
+  storage key is sealed in a file beside the state (ChaCha20-Poly1305,
+  the profile's ID as associated data) under the app's own secret from the
+  Secret portal, which the desktop's keyring keeps and gives only to this
+  app (`KeyProtection::Portal`).
 - The status reports what protects the key (`key_protection`); the CLI and
   Settings show it.
-- Tests never touch the developer's keyring: they set `key_storage = File`.
+- The core's, daemon's, CLI's, and desktop's tests never touch the
+  developer's keyring: they set `key_storage = File`. The platform crates'
+  own tests use a throwaway item of their own (a random name) in the real
+  store, and remove it.
 
 ### One window per profile, and the handoff
 
 - A launch first tries the running window's **handoff endpoint**
   (`paths.handoff_endpoint()`), authenticated like the daemon's: the
   socket or pipe is the user's alone, and a token from the private state
-  directory proves the caller is this user. It sends one request (show;
-  send these absolute paths, at most 10,000; send the clipboard) and exits.
-  Otherwise it opens the window and listens there.
+  directory proves the caller is this user. It sends its request (show;
+  send these absolute paths, at most 10,000, in parts under the message
+  limit that the window gathers; send the clipboard) and exits. Only when
+  no window listens does it open one, after taking the profile's instance
+  lock (`desktop.lock`, held for the window's life): concurrent cold
+  starts (Explorer starts one per selected file) wait for the first
+  window and hand over to it. A window that does not take a request is
+  reported, never answered with a second window.
+- The endpoint serves up to eight connections at once (more are closed),
+  each authenticated within two seconds and finished within five: a
+  silent or hostile local client cannot hold it.
+- Bare paths on the command line are sends too, as "Open With" passes
+  them (Finder, the Linux desktop entry, Flatpak).
 - File managers, the Explorer command, the Quick Action, the Share target,
   the tray, the Dock, and notifications all end up as such requests.
 - **Every send asks.** A handed-over send opens the "Send to…" picker: the
   user picks contacts (those selected on Home are preselected) and presses
-  Send. The picker shows the paths (escaped) and, for text, its length and
-  start. Send stays disabled for the decision delay after the picker opens
-  or changes, because the window comes to the front under the pointer.
+  Send. The picker shows the first paths (escaped) and how many more and,
+  for text, its length and start. Send stays disabled for the decision
+  delay after the picker opens or changes, and whenever the window comes
+  to the front (under the pointer); the receive sheet's decisions re-arm
+  the same way. Closing the window drops an open picker and what it held.
 - **Requests are taken when the picker opens.** The clipboard is read then,
   not when Send is pressed: what the user sees is what is sent.
 - Explorer starts one process per selected item for registry verbs; paths
@@ -212,7 +251,11 @@ without the receive sheet.
   Homebrew, and AUR updates are pull requests a maintainer opens.
 - `.github/workflows/packaging.yml` builds each package and, per OS in the
   runner VM, installs it, upgrades it to a higher version, and uninstalls
-  it (user data kept). End to end, it checks that each installed
+  it (user data kept), where the format allows: the deb, the rpm (in a
+  Fedora container), the MSIX, and the macOS bundle and cask are
+  installed, upgraded, and removed; the Flatpak is built, installed, run,
+  and removed; the AppImage is run; the winget and Scoop manifests are
+  validated against the built packages. End to end, it checks that each installed
   integration reaches the running window (`TODOKE_HANDOFF_LOG`, below):
   the Dolphin and Nemo `Exec` lines and the Nautilus extension on Linux,
   the "Send with todoke" service on macOS (`NSPerformService`), and the
@@ -297,7 +340,29 @@ that exact version in `deny-desktop.toml` only.
   export before uninstall.
 - **The handoff log is production code** behind an environment variable:
   it writes paths (never text) only to a file the person starting the app
-  names.
+  names, owner-only and never through a link.
+- **macOS: the app and the command line cannot share a Secure Enclave
+  wrapped key.** The keychain access group belongs to the signed app; the
+  `todoke` command in the bundle (and `todoke daemon run`) has no
+  entitlement, so it cannot read a key the app keeps in the
+  data-protection keychain: with the marker at "platform" it refuses to
+  start rather than make a new key. Fix: one process hosts the core (the
+  app, or a launch agent signed with the same entitlement) and the command
+  always attaches.
+- **The daemon and the CLI now link `zbus` on Linux** (the Secret Service
+  and the Secret portal), about 60 crates under the stricter `deny.toml`,
+  exempted in cargo-vet pending audits. Fix: audits of `zbus` and its
+  async runtime, or a smaller D-Bus client.
+- **The tray, menu, and shortcut crates run in the process that holds the
+  storage key** (the desktop hosts the core): `tray-icon`, `muda`, `ksni`,
+  and `global-hotkey` are exempted, not audited. Fix: audit those four
+  first; or the daemon hosts the core and the app only attaches.
+- **A released global shortcut's listener thread lingers** until the
+  portal's connection closes (switching the shortcut off and on leaves one
+  idle thread each time). Fix: a stoppable signal stream.
+- **Received files go anywhere in `~/Downloads` in Flatpak**
+  (`--filesystem=xdg-download`, read-write). Fix: a `todoke` subfolder
+  (`xdg-download/todoke:create`) as the Flatpak's default.
 
 ## Known test gaps
 

@@ -8001,6 +8001,7 @@ dependencies = [
  "image",
  "objc2 0.6.5",
  "qrcode",
+ "rustix",
  "serde",
  "serde_json",
  "todoke-core",
@@ -8117,6 +8118,7 @@ dependencies = [
 name = "todoke-sys-macos"
 version = "0.1.0"
 dependencies = [
+ "core-foundation 0.10.1",
  "getrandom 0.4.3",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",

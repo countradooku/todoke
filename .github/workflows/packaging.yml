@@ -163,7 +163,7 @@ jobs:
         env:
           DEB: todoke_${{ env.VERSION }}_amd64.deb
         run: |
-          docker run --rm -e DEB -e VERSION -v "$PWD/dist:/dist:ro" ubuntu:24.04 bash -euo pipefail -c '
+          docker run --rm -e DEB -e VERSION -v "$PWD/dist:/dist:ro" "ubuntu:24.04@sha256:534baea6a22c03a63003dbc8dbe78fe34bc0d7e595d9a9dc9834884ff530eb55" bash -euo pipefail -c '
             apt-get update -qq
             DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "/dist/$DEB"
             if ldd /usr/bin/todoke-desktop | grep "not found"; then exit 1; fi
@@ -175,7 +175,7 @@ jobs:
           RPM: todoke-${{ env.VERSION }}-1.x86_64.rpm
           RPM_UPGRADE: todoke-${{ env.VERSION }}-2.x86_64.rpm
         run: |
-          docker run --rm -e RPM -e RPM_UPGRADE -e VERSION -v "$PWD/dist:/dist:ro" fedora:latest bash -euo pipefail -c '
+          docker run --rm -e RPM -e RPM_UPGRADE -e VERSION -v "$PWD/dist:/dist:ro" "fedora:43@sha256:a651ddf48ea28a06ed4e1e6519f51c9f47e7a5a138722ade87369b8fbb7e5b42" bash -euo pipefail -c '
             mkdir -p ~/.local/share/todoke
             echo kept > ~/.local/share/todoke/marker
             dnf install -y -q "/dist/$RPM"
@@ -430,13 +430,8 @@ jobs:
         run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
       - name: Build the release binaries and the Explorer command
         run: |
-          packages=(-p todoke-desktop -p todoke-cli)
-          if [[ -f crates/todoke-shell-windows/Cargo.toml ]]; then
-            packages+=(-p todoke-shell-windows)
-          else
-            echo "::warning::crates/todoke-shell-windows does not exist yet: the MSIX has no Explorer command"
-          fi
-          cargo build --release --locked "${packages[@]}"
+          cargo build --release --locked -p todoke-desktop -p todoke-cli -p todoke-shell-windows
+          test -f target/release/todoke_shell.dll
       - name: Build the MSIX (test-signed), a newer one, and the zip
         shell: pwsh
         run: |
@@ -467,7 +462,7 @@ jobs:
           $cli = & (Join-Path $aliases 'todoke.exe') --version
           if ($cli -ne "todoke $env:VERSION") { throw "todoke --version printed: $cli" }
           $manifest = Get-Content -Raw (Join-Path $package.InstallLocation 'AppxManifest.xml')
-          if ((Test-Path 'target\release\todoke_shell.dll') -and $manifest -notmatch 'windows\.fileExplorerContextMenus') {
+          if ($manifest -notmatch 'windows\.fileExplorerContextMenus') {
             throw 'the Explorer command is missing from the installed manifest'
           }
 
@@ -515,29 +510,27 @@ jobs:
           # The Explorer command, through COM as Explorer calls it. It starts
           # the app from the package without this shell's environment, so
           # the window here uses the default (package) profile too.
-          if (Test-Path 'target\release\todoke_shell.dll') {
-            $comLog = Join-Path $handoff 'explorer.log'
-            $env:TODOKE_HANDOFF_LOG = $comLog
-            $app = Start-Process -FilePath $gui -ArgumentList '--background' -NoNewWindow -PassThru
-            Remove-Item Env:TODOKE_HANDOFF_LOG
-            Start-Sleep -Seconds 10
-            if ($app.HasExited) { throw "the app exited ($($app.ExitCode))" }
-            $env:TODOKE_SHELL_E2E_FILE = $file
-            cargo test --release --locked -p todoke-shell-windows --test explorer_command
-            if ($LASTEXITCODE -ne 0) { throw 'the Explorer command failed' }
-            Remove-Item Env:TODOKE_SHELL_E2E_FILE
-            $received = $false
-            $deadline = (Get-Date).AddSeconds(60)
-            while (-not $received -and (Get-Date) -lt $deadline) {
-              if (Test-Path -LiteralPath $comLog) {
-                $paths = Get-Content -LiteralPath $comLog | ForEach-Object { ($_ | ConvertFrom-Json).body.paths }
-                $received = @($paths) -contains $file
-              }
-              if (-not $received) { Start-Sleep -Milliseconds 200 }
+          $comLog = Join-Path $handoff 'explorer.log'
+          $env:TODOKE_HANDOFF_LOG = $comLog
+          $app = Start-Process -FilePath $gui -ArgumentList '--background' -NoNewWindow -PassThru
+          Remove-Item Env:TODOKE_HANDOFF_LOG
+          Start-Sleep -Seconds 10
+          if ($app.HasExited) { throw "the app exited ($($app.ExitCode))" }
+          $env:TODOKE_SHELL_E2E_FILE = $file
+          cargo test --release --locked -p todoke-shell-windows --test explorer_command
+          if ($LASTEXITCODE -ne 0) { throw 'the Explorer command failed' }
+          Remove-Item Env:TODOKE_SHELL_E2E_FILE
+          $received = $false
+          $deadline = (Get-Date).AddSeconds(60)
+          while (-not $received -and (Get-Date) -lt $deadline) {
+            if (Test-Path -LiteralPath $comLog) {
+              $paths = Get-Content -LiteralPath $comLog | ForEach-Object { ($_ | ConvertFrom-Json).body.paths }
+              $received = @($paths) -contains $file
             }
-            Stop-Process -Id $app.Id -Force
-            if (-not $received) { throw "the Explorer command's request did not arrive" }
+            if (-not $received) { Start-Sleep -Milliseconds 200 }
           }
+          Stop-Process -Id $app.Id -Force
+          if (-not $received) { throw "the Explorer command's request did not arrive" }
 
           Add-AppxPackage -Path "dist\upgrade\todoke-$($env:VERSION).1-windows-x64.msix"
           $version = (Get-AppxPackage -Name org.todoke.todoke).Version

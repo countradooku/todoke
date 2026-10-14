@@ -106,9 +106,7 @@
   </Applications>
 
   <Capabilities>
-    <Capability Name="internetClient" />
-    <Capability Name="internetClientServer" />
-    <Capability Name="privateNetworkClientServer" />
+    <!-- A full-trust app has no sandbox to declare network access for. -->
     <rescap:Capability Name="runFullTrust" />
   </Capabilities>
 </Package>

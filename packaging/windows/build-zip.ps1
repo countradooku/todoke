@@ -72,6 +72,9 @@ Copy-Item -LiteralPath (Join-Path $root 'LICENSE-APACHE'), (Join-Path $root 'LIC
 if ($env:WINDOWS_CERT_PFX) {
     if (-not $env:WINDOWS_CERT_PASSWORD) { throw 'WINDOWS_CERT_PFX needs WINDOWS_CERT_PASSWORD' }
     $password = ConvertTo-SecureString -String $env:WINDOWS_CERT_PASSWORD -AsPlainText -Force
+    # A certificate already in the store (the maintainer's own) stays there.
+    $existing = (Get-PfxData -FilePath $env:WINDOWS_CERT_PFX -Password $password).EndEntityCertificates[0].Thumbprint
+    $imported = -not (Test-Path -LiteralPath "Cert:\CurrentUser\My\$existing")
     $certificate = Import-PfxCertificate -FilePath $env:WINDOWS_CERT_PFX -CertStoreLocation 'Cert:\CurrentUser\My' -Password $password
     try {
         $timestamp = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
@@ -80,7 +83,9 @@ if ($env:WINDOWS_CERT_PFX) {
             ($binaries | ForEach-Object { Join-Path $stage $_ })
         if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
     } finally {
-        Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue
+        if ($imported) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($certificate.Thumbprint)" -DeleteKey -ErrorAction SilentlyContinue
+        }
     }
 } else {
     Write-Warning 'WINDOWS_CERT_PFX is not set: the executables are unsigned'

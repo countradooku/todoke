@@ -25,9 +25,10 @@ finish-args:
   - --device=dri
   # Received files go to ~/Downloads.
   - --filesystem=xdg-download
-  # The tray item, the Secret Service, and notifications.
+  # The tray item and notifications. No org.freedesktop.secrets: the
+  # storage key is sealed under the Secret portal's per-app secret, so the
+  # sandbox never sees the rest of the keyring.
   - --talk-name=org.kde.StatusNotifierWatcher
-  - --talk-name=org.freedesktop.secrets
   - --talk-name=org.freedesktop.Notifications
 build-options:
   append-path: /usr/lib/sdk/rust-stable/bin

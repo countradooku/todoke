@@ -1420,7 +1420,7 @@ fn handed_over_paths_gather_in_one_picker(cx: &mut TestAppContext) {
         paths: vec![PathBuf::from(path)],
     };
     view.update_in(cx, |app, window, cx| {
-        app.handoff(send("/tmp/a"), window, cx)
+        app.handoff(send("/tmp/a"), window, cx);
     });
     cx.run_until_parked();
     pick(cx, NEAR);

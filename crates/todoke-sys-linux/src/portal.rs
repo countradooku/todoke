@@ -35,6 +35,17 @@ pub(crate) fn token() -> String {
     )
 }
 
+/// The unique bus name of the portal service now: answers and signals are
+/// matched against it on the bus and here, so another program cannot
+/// answer for the portal.
+pub(crate) fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
+    let name = zbus::names::BusName::try_from(DESKTOP).map_err(|error| bus(error.into()))?;
+    zbus::blocking::fdo::DBusProxy::new(connection)
+        .map_err(bus)?
+        .get_name_owner(name)
+        .map_err(|error| bus(error.into()))
+}
+
 /// A proxy for `interface` of the portal.
 pub(crate) fn proxy<'a>(connection: &'a Connection, interface: &'a str) -> io::Result<Proxy<'a>> {
     Proxy::new(connection, DESKTOP, PATH, interface).map_err(bus)
@@ -62,6 +73,8 @@ pub(crate) fn request(
     // Listen before calling: the answer may come before the call returns.
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
+        .sender(owner(connection)?)
+        .map_err(bus)?
         .interface("org.freedesktop.portal.Request")
         .map_err(bus)?
         .member("Response")

@@ -9,7 +9,6 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
 
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
@@ -21,6 +20,8 @@ const SERVICE: &str = "org.freedesktop.Secret.Service";
 const COLLECTION: &str = "org.freedesktop.Secret.Collection";
 const ITEM: &str = "org.freedesktop.Secret.Item";
 const PROMPT: &str = "org.freedesktop.Secret.Prompt";
+/// How long a keyring prompt may wait for the user.
+const PROMPT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// A secret as the API carries it: session, parameters, value, type.
 type Secret = (OwnedObjectPath, Vec<u8>, Vec<u8>, String);
@@ -28,6 +29,16 @@ type Secret = (OwnedObjectPath, Vec<u8>, Vec<u8>, String);
 #[expect(clippy::needless_pass_by_value, reason = "used as map_err(bus)")]
 fn bus(error: zbus::Error) -> io::Error {
     io::Error::other(format!("Secret Service: {error}"))
+}
+
+/// The unique bus name that owns `name` now: signals are matched against it
+/// on the bus and here, so another program cannot answer for the service.
+fn owner(connection: &Connection, name: &str) -> io::Result<zbus::names::OwnedUniqueName> {
+    let name = zbus::names::BusName::try_from(name).map_err(|error| bus(error.into()))?;
+    zbus::blocking::fdo::DBusProxy::new(connection)
+        .map_err(bus)?
+        .get_name_owner(name)
+        .map_err(|error| bus(error.into()))
 }
 
 /// The storage key of one profile in the Secret Service.
@@ -56,11 +67,12 @@ impl Drop for Session {
 }
 
 impl SecretService {
-    /// The item for the profile whose state is in `state_dir`.
+    /// The item for the profile with ID `profile` (random, kept beside the
+    /// state: moving the state keeps its key).
     #[must_use]
-    pub fn for_state(state_dir: &Path) -> Self {
+    pub fn for_profile(profile: &str) -> Self {
         Self {
-            profile: state_dir.display().to_string(),
+            profile: profile.to_owned(),
         }
     }
 
@@ -92,18 +104,52 @@ impl SecretService {
         Self::prompt(session, &prompt)
     }
 
-    /// Runs a prompt (unless there is none: "/") and waits for its answer.
+    /// Runs a prompt (unless there is none: "/") and waits for its answer,
+    /// at most [`PROMPT_DEADLINE`]: an unanswered prompt (a locked keyring
+    /// early in the session, a dialog no one sees) dismisses it, and the
+    /// store counts as unavailable.
     fn prompt(session: &Session, prompt: &ObjectPath<'_>) -> io::Result<()> {
         if prompt.as_str() == "/" {
             return Ok(());
         }
         let proxy =
             Proxy::new(&session.connection, BUS_NAME, prompt.as_str(), PROMPT).map_err(bus)?;
-        let mut completed = proxy.receive_signal("Completed").map_err(bus)?;
+        // Listen before prompting: the answer may come first.
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender(owner(&session.connection, BUS_NAME)?)
+            .map_err(bus)?
+            .interface(PROMPT)
+            .map_err(bus)?
+            .member("Completed")
+            .map_err(bus)?
+            .path(prompt.as_str())
+            .map_err(bus)?
+            .build();
+        let mut completed =
+            zbus::blocking::MessageIterator::for_match_rule(rule, &session.connection, Some(4))
+                .map_err(bus)?;
+        let (answer, answered) = std::sync::mpsc::channel();
+        std::thread::Builder::new()
+            .name("todoke-keyring-prompt".into())
+            .spawn(move || {
+                let _ = answer.send(completed.next());
+            })?;
         let _: () = proxy.call("Prompt", &("",)).map_err(bus)?;
-        let message = completed
-            .next()
-            .ok_or_else(|| io::Error::other("the keyring prompt went away"))?;
+        let message = match answered.recv_timeout(PROMPT_DEADLINE) {
+            Ok(Some(message)) => message.map_err(bus)?,
+            Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                return Err(io::Error::other("the keyring prompt went away"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Dismissing it also ends the waiting thread.
+                let _: Result<(), _> = proxy.call("Dismiss", &());
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the keyring prompt was not answered",
+                ));
+            }
+        };
         let (dismissed, _): (bool, OwnedValue) = message.body().deserialize().map_err(bus)?;
         if dismissed {
             return Err(io::Error::new(
@@ -253,10 +299,10 @@ mod tests {
     fn a_key_round_trips_through_the_secret_service() -> TestResult {
         let mut random = [0_u8; 8];
         getrandom::fill(&mut random)?;
-        let store = SecretService::for_state(Path::new(&format!(
-            "/nonexistent/todoke-secret-service-test-{}",
+        let store = SecretService::for_profile(&format!(
+            "todoke-secret-service-test-{}",
             u64::from_le_bytes(random)
-        )));
+        ));
         if std::env::var_os("TODOKE_SECRET_SERVICE_TEST").is_none() {
             if let Ok(loaded) = store.load() {
                 assert!(loaded.is_none());

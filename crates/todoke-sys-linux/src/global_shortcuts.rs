@@ -107,8 +107,12 @@ pub fn bind(
             ),
         )
     })?;
+    // Only the portal's signals: another program on the bus cannot press
+    // the shortcut.
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
+        .sender(portal::owner(&connection)?)
+        .map_err(portal::bus)?
         .interface(INTERFACE)
         .map_err(portal::bus)?
         .member("Activated")

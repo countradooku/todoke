@@ -143,7 +143,7 @@ pub fn file_manager() -> Integration {
         let Ok(program) = program() else {
             return Integration::Unavailable("The app's location is unknown.");
         };
-        if packaged(&program) {
+        if packaged() {
             Integration::Packaged
         } else if todoke_sys_linux::file_managers::FileManagers::new(program).installed() {
             Integration::On
@@ -153,13 +153,21 @@ pub fn file_manager() -> Integration {
     }
 }
 
-/// Installed by a package manager: the package installs the actions for
-/// every user.
+/// Installed by a package: its file-manager items are in a system data
+/// directory (`$XDG_DATA_DIRS`, as the file managers search it).
 #[cfg(target_os = "linux")]
-fn packaged(program: &std::path::Path) -> bool {
-    ["/usr/", "/nix/store/", "/opt/"]
-        .iter()
-        .any(|prefix| program.starts_with(prefix))
+fn packaged() -> bool {
+    let dirs = std::env::var_os("XDG_DATA_DIRS")
+        .filter(|dirs| !dirs.is_empty())
+        .unwrap_or_else(|| "/usr/local/share:/usr/share".into());
+    std::env::split_paths(&dirs)
+        .filter(|dir| dir.is_absolute())
+        .any(|dir| {
+            dir.join("kio/servicemenus/org.todoke.todoke.desktop")
+                .is_file()
+                || dir.join("nemo/actions/todoke.nemo_action").is_file()
+                || dir.join("nautilus-python/extensions/todoke.py").is_file()
+        })
 }
 
 /// Adds or removes "Send with todoke" in the file manager.

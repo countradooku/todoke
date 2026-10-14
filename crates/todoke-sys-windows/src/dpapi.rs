@@ -61,14 +61,6 @@ impl core::fmt::Debug for Dpapi {
     }
 }
 
-/// FNV-1a, 64-bit: names the TPM key after the state directory (not a
-/// security property; only distinct names for distinct profiles).
-fn fnv1a(bytes: &[u8]) -> u64 {
-    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3)
-    })
-}
-
 fn wide(text: &str) -> Vec<u16> {
     text.encode_utf16().chain(Some(0)).collect()
 }
@@ -97,19 +89,16 @@ impl Drop for Handle {
 }
 
 impl Dpapi {
-    /// The protected key of the profile whose state is in `state_dir`.
+    /// The protected key of the profile with ID `profile` (random, kept
+    /// beside the state), whose state is in `state_dir`.
     #[must_use]
-    pub fn for_state(state_dir: &Path) -> Self {
-        let display = state_dir.display().to_string();
+    pub fn new(state_dir: &Path, profile: &str) -> Self {
         let mut entropy = b"todoke/v1/storage-key\0".to_vec();
-        entropy.extend_from_slice(display.as_bytes());
+        entropy.extend_from_slice(profile.as_bytes());
         Self {
             path: state_dir.join("storage.key.dpapi"),
             entropy,
-            tpm_key_name: wide(&format!(
-                "todoke-storage-{:016x}",
-                fnv1a(display.as_bytes())
-            )),
+            tpm_key_name: wide(&format!("todoke-storage-{profile}")),
             protection: Mutex::new(KeyProtection::Dpapi),
         }
     }
@@ -396,12 +385,20 @@ impl Dpapi {
             KeyProtection::Dpapi
         };
         let sealed = self.dpapi(&payload, true)?;
+        // Written aside, then linked into place: a crash never leaves a
+        // torn blob under the real name, and a blob there is never
+        // replaced.
+        let partial = self.path.with_extension("dpapi.tmp");
+        let _ = std::fs::remove_file(&partial);
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
-            .open(&self.path)?;
-        file.write_all(&sealed)?;
-        file.sync_all()?;
+            .open(&partial)?;
+        let written = file.write_all(&sealed).and_then(|()| file.sync_all());
+        drop(file);
+        let linked = written.and_then(|()| std::fs::hard_link(&partial, &self.path));
+        let _ = std::fs::remove_file(&partial);
+        linked?;
         self.set_protection(protection);
         Ok(())
     }
@@ -422,7 +419,7 @@ mod tests {
         let state =
             std::env::temp_dir().join(format!("todoke-dpapi-{}", u64::from_le_bytes(random)));
         std::fs::create_dir_all(&state)?;
-        let store = Dpapi::for_state(&state);
+        let store = Dpapi::new(&state, "0123456789abcdef0123456789abcdef");
         assert!(store.load()?.is_none());
         let key = [0x3c; 32];
         store.store(&key)?;
@@ -438,7 +435,7 @@ mod tests {
             Err(io::ErrorKind::AlreadyExists)
         );
         // Another profile's entropy opens nothing.
-        let other = Dpapi::for_state(&state.join("other"));
+        let other = Dpapi::new(&state.join("other"), "fedcba9876543210fedcba9876543210");
         std::fs::create_dir_all(state.join("other"))?;
         std::fs::copy(
             state.join("storage.key.dpapi"),

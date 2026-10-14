@@ -4,7 +4,12 @@ Name=todoke
 GenericName=File Transfer
 Comment=End-to-end encrypted file transfer between your devices
 Icon=org.todoke.todoke
-Exec=todoke-desktop
+# Files opened with it (Open With) are offered: "Send to…" asks who.
+# Only application/octet-stream: listed under Open With for any file; it
+# may open files of unknown type by default, which only asks who to send
+# them to.
+Exec=todoke-desktop %F
+MimeType=application/octet-stream;
 Terminal=false
 Categories=Network;FileTransfer;
 Keywords=send;share;transfer;files;encrypted;

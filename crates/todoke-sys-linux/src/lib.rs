@@ -15,6 +15,7 @@
 //! | [`file_managers`] | "Send with todoke" in Dolphin, Nemo, and Nautilus |
 //! | [`global_shortcuts`] | A global shortcut through the `GlobalShortcuts` portal |
 //! | [`portal`] | XDG desktop portal requests |
+//! | [`secret_portal`] | The app's secret from the Secret portal (Flatpak) |
 //! | [`secret_service`] | The storage key in the freedesktop Secret Service |
 //! | [`tray`] | Whether a `StatusNotifierItem` host shows tray items |
 //!
@@ -30,8 +31,10 @@ pub mod desktop_entry;
 pub mod file_managers;
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 pub mod global_shortcuts;
-#[cfg(all(target_os = "linux", feature = "desktop"))]
+#[cfg(target_os = "linux")]
 pub mod portal;
+#[cfg(target_os = "linux")]
+pub mod secret_portal;
 #[cfg(target_os = "linux")]
 pub mod secret_service;
 #[cfg(all(target_os = "linux", feature = "desktop"))]

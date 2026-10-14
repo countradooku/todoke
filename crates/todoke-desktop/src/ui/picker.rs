@@ -4,9 +4,9 @@
 //! Any program of this user can ask the window to send files; the picker is
 //! where the user consents. Nothing is sent until they choose contacts and
 //! press Send, and Send stays disabled for [`tokens::DECISION_DELAY`] after
-//! the picker appears (the window comes to the front under the pointer: a
-//! click aimed at what was there before must not send). The paths offered
-//! are shown in full.
+//! the picker appears, changes, or comes to the front (under the pointer:
+//! a click aimed at what was there before must not send). The first paths
+//! are shown (escaped), then how many more.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -47,8 +47,8 @@ pub struct Picker {
     pub chosen: BTreeSet<String>,
     /// Whether Send works yet.
     pub armed: bool,
-    /// Bumped with each picker: a timer started for an earlier one arms
-    /// nothing.
+    /// Which arming this is: a timer started for an earlier picker, or
+    /// before the picker last changed, arms nothing.
     generation: u64,
 }
 
@@ -60,6 +60,8 @@ pub struct State {
     pub focus: FocusHandle,
     /// Whether it has focus now.
     pub focused: bool,
+    /// The last arming's number; it only grows, across pickers.
+    armings: u64,
 }
 
 impl State {
@@ -68,6 +70,7 @@ impl State {
             open: None,
             focus: cx.focus_handle(),
             focused: false,
+            armings: 0,
         }
     }
 }
@@ -81,11 +84,6 @@ impl Todoke {
     /// (Explorer starts one process per selected file); anything else
     /// replaces it. Either way Send waits the decision delay again.
     pub(crate) fn pick(&mut self, offered: Offered, cx: &mut Context<Self>) {
-        let generation = self
-            .picker
-            .open
-            .as_ref()
-            .map_or(0, |picker| picker.generation + 1);
         let (offered, chosen) = match (self.picker.open.take(), offered) {
             (
                 Some(Picker {
@@ -95,8 +93,9 @@ impl Todoke {
                 }),
                 Offered::Paths(more),
             ) => {
+                let mut seen: std::collections::HashSet<PathBuf> = open.iter().cloned().collect();
                 for path in more {
-                    if open.len() < MAX_PATHS && !open.contains(&path) {
+                    if open.len() < MAX_PATHS && seen.insert(path.clone()) {
                         open.push(path);
                     }
                 }
@@ -108,8 +107,23 @@ impl Todoke {
             offered,
             chosen,
             armed: false,
-            generation,
+            generation: 0,
         });
+        self.arm_picker_later(cx);
+        cx.notify();
+    }
+
+    /// Disarms Send and arms it again after [`tokens::DECISION_DELAY`]:
+    /// when the picker opens or changes, and when the window comes to the
+    /// front.
+    pub(super) fn arm_picker_later(&mut self, cx: &mut Context<Self>) {
+        self.picker.armings += 1;
+        let generation = self.picker.armings;
+        let Some(picker) = &mut self.picker.open else {
+            return;
+        };
+        picker.armed = false;
+        picker.generation = generation;
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(tokens::DECISION_DELAY).await;
             let _ = this.update(cx, |app, cx| {
@@ -122,7 +136,6 @@ impl Todoke {
             });
         })
         .detach();
-        cx.notify();
     }
 
     fn send_picked(&mut self, cx: &mut Context<Self>) {

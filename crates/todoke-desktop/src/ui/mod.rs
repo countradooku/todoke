@@ -249,6 +249,8 @@ pub struct Todoke {
     /// This computer's settings, once read (never in tests: they would
     /// change the machine running them).
     system: Option<computer::System>,
+    /// The preferences changed off the window: apply the theme when drawing.
+    theme_pending: bool,
     /// Where the global shortcut sends its presses; `None` in tests.
     commander: Option<Commander>,
     shortcut: Option<crate::hotkey::Shortcut>,
@@ -305,6 +307,7 @@ impl Todoke {
             active: true,
             notified: BTreeSet::new(),
             system: None,
+            theme_pending: false,
             commander: None,
             shortcut: None,
             now: unix_now(),
@@ -389,8 +392,12 @@ impl Todoke {
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             this.apply_theme(window, cx);
         }));
-        subscriptions.push(cx.observe_window_activation(window, |this, window, _| {
-            this.active = window.is_window_active();
+        subscriptions.push(cx.observe_window_activation(window, |this, window, cx| {
+            let active = window.is_window_active();
+            if active && !this.active {
+                this.came_forward(cx);
+            }
+            this.active = active;
         }));
         WindowParts {
             search,
@@ -402,8 +409,29 @@ impl Todoke {
 
     /// The window was closed while todoke keeps running (the tray or menu
     /// bar item brings it back): offers and transfers now notify.
+    /// An open picker goes too: what it held (clipboard text) is dropped,
+    /// and it never comes back already armed.
     pub fn closed(&mut self) {
         self.active = false;
+        self.picker.open = None;
+    }
+
+    /// Started without showing the window (a login item): offers notify.
+    pub fn in_background(&mut self) {
+        self.active = false;
+    }
+
+    /// The window came to the front, under the pointer: a click aimed at
+    /// what was there must not decide the offer or send, so the sheet's
+    /// decisions and the picker's Send wait the decision delay again.
+    fn came_forward(&mut self, cx: &mut Context<Self>) {
+        if self.sheet.transfer.is_some() {
+            self.sheet.armed = false;
+            self.sheet.generation += 1;
+            self.arm_later(cx);
+        }
+        self.arm_picker_later(cx);
+        cx.notify();
     }
 
     /// Shows this view in a new `window` after the last one closed.
@@ -423,19 +451,26 @@ impl Todoke {
         self.focused_sheet = None;
         self.picker.focused = false;
         self.active = true;
+        self.came_forward(cx);
         self.apply_theme(window, cx);
         window.focus(&self.focus, cx);
+        // A start that ended with the earlier window: start again.
+        if self.backend.is_none() && !matches!(self.model.connection, Connection::Starting) {
+            self.start(cx);
+        }
         cx.notify();
     }
 
     /// Loads the preferences, then attaches to a daemon or hosts one, on
     /// the background executor.
-    pub fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Not tied to a window: closing the window while it runs (with a
+    /// tray) keeps what it starts.
+    pub fn start(&mut self, cx: &mut Context<Self>) {
         self.model.connection = Connection::Starting;
         let paths = self.paths.clone();
         // A core this app still holds must stop first: it holds the profile.
         let old = self.backend.take();
-        cx.spawn_in(window, async move |this, cx| {
+        cx.spawn(async move |this, cx| {
             let started = cx
                 .background_spawn(async move {
                     drop(old);
@@ -443,10 +478,11 @@ impl Todoke {
                     (prefs, backend::start(&paths))
                 })
                 .await;
-            let _ = this.update_in(cx, |app, window, cx| {
+            let _ = this.update(cx, |app, cx| {
                 let (prefs, started) = started;
                 app.prefs = prefs;
-                app.apply_theme(window, cx);
+                // The theme needs the window: applied when it next draws.
+                app.theme_pending = true;
                 app.apply_shortcut(cx);
                 match started {
                     Ok(started) => app.attach(started.backend, started.connection, cx),
@@ -919,7 +955,15 @@ impl Todoke {
             return Some(picker::Offered::Paths(paths));
         }
         if let Some(text) = item.text() {
-            return Some(picker::Offered::Text(zeroize::Zeroizing::new(text)));
+            let text = zeroize::Zeroizing::new(text);
+            // The outbox's limit, checked before the picker holds it.
+            if text.len() > outbox::MAX_TEXT {
+                self.model
+                    .notify(Level::Error, "The clipboard text is larger than 16 MiB.");
+                cx.notify();
+                return None;
+            }
+            return Some(picker::Offered::Text(text));
         }
         self.model.notify(
             Level::Info,
@@ -1256,14 +1300,14 @@ impl Todoke {
                     }
                 })
                 .await;
-            let _ = this.update_in(cx, |app, window, cx| {
+            let _ = this.update(cx, |app, cx| {
                 if let Err(error) = saved {
                     app.model.notify(
                         Level::Error,
                         format!("The settings could not be applied: {error}"),
                     );
                 }
-                app.start(window, cx);
+                app.start(cx);
             });
         });
         task.detach();
@@ -1396,7 +1440,7 @@ impl Todoke {
                 .when(retry, |banner| {
                     banner.child(
                         widgets::button("retry", "Start again", "Start todoke again")
-                            .on_click(cx.listener(|this, _, window, cx| this.start(window, cx))),
+                            .on_click(cx.listener(|this, _, _, cx| this.start(cx))),
                     )
                 })
                 .test_support()
@@ -1407,6 +1451,10 @@ impl Todoke {
 
 impl Render for Todoke {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.theme_pending {
+            self.theme_pending = false;
+            self.apply_theme(window, cx);
+        }
         let palette = tokens::palette(cx);
         let page = match self.page {
             Page::Home => self.render_home(window, cx).into_any_element(),
@@ -1521,7 +1569,7 @@ pub(crate) type Commander = tokio::sync::mpsc::UnboundedSender<Command>;
 
 /// What the app holds while it runs: dropping any of it undoes it.
 struct Held {
-    _listening: Option<handoff::Listening>,
+    _listening: Listening,
     tray: Option<crate::tray::Tray>,
     #[cfg(target_os = "macos")]
     _services: Option<todoke_sys_macos::services::Services>,
@@ -1645,22 +1693,73 @@ fn log_command(log: &std::path::Path, command: &Command) {
     };
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);
+    // Owner-only, and never through a link someone left in its place.
     #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options
+            .mode(0o600)
+            .custom_flags(i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits()).unwrap_or(0));
+    }
     if let Ok(mut file) = options.open(log) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let _ = file.set_permissions(std::fs::Permissions::from_mode(0o600));
+        }
         let _ = writeln!(file, "{line}");
     }
 }
 
-/// Hands `request` to this profile's running window (`None`: done), or
-/// listens for other launches' requests (one window per profile).
+/// What a window holds so other launches reach it: the instance lock and
+/// the listening endpoint.
+type Listening = (handoff::InstanceLock, Option<handoff::Listening>);
+
+/// Hands `request` to this profile's running window (`None`: done, or
+/// failed with a message), or takes the profile's instance lock and
+/// listens for other launches' requests (one window per profile). Only "no
+/// window listens" opens a window: a window that failed to take the
+/// request is never answered with a second one.
 fn listen_or_hand_over(
     paths: &Paths,
     request: &Handoff,
-) -> Option<(Option<handoff::Listening>, Commander, Commands)> {
-    if handoff::send(paths, request).is_ok() {
-        return None;
+) -> Option<(Listening, Commander, Commands)> {
+    match handoff::send(paths, request) {
+        Ok(()) => return None,
+        Err(error) if handoff::no_window(&error) => {}
+        Err(error) => {
+            eprintln!("todoke: the window of this profile did not take the request: {error}");
+            std::process::exit(1);
+        }
     }
+    let lock = match handoff::lock(paths) {
+        Ok(Some(lock)) => lock,
+        // Another launch is opening its window: hand the request to it once
+        // it listens.
+        Ok(None) => {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            loop {
+                match handoff::send(paths, request) {
+                    Ok(()) => return None,
+                    Err(error)
+                        if handoff::no_window(&error) && std::time::Instant::now() < deadline =>
+                    {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "todoke: another window of this profile does not answer: {error}"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            eprintln!("todoke: cannot hold this profile: {error}");
+            std::process::exit(1);
+        }
+    };
     let (commander, commands) = tokio::sync::mpsc::unbounded_channel();
     let listening = {
         let commander = commander.clone();
@@ -1670,20 +1769,12 @@ fn listen_or_hand_over(
     };
     let listening = match listening {
         Ok(listening) => Some(listening),
-        // Another launch started listening since: it takes the request.
-        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-            if handoff::send(paths, request).is_ok() {
-                return None;
-            }
-            eprintln!("todoke: another window of this profile does not answer");
-            None
-        }
         Err(error) => {
             eprintln!("todoke: other launches cannot reach this window: {error}");
             None
         }
     };
-    Some((listening, commander, commands))
+    Some(((lock, listening), commander, commands))
 }
 
 fn window_options(background: bool, cx: &App) -> gpui_kit::WindowOptions {
@@ -1728,8 +1819,10 @@ fn open_window(
         cx.new(|cx| {
             let mut app = Todoke::new(paths, window, cx);
             app.connect_system(commander, cx);
-            app.start(window, cx);
-            if !background {
+            app.start(cx);
+            if background {
+                app.in_background();
+            } else {
                 app.handoff(request, window, cx);
             }
             app

@@ -9,6 +9,7 @@
 //! from malware running as this user or from a full-disk copy.
 
 use core::fmt;
+use core::fmt::Write as _;
 use std::io::{self, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -30,8 +31,10 @@ pub trait StorageKeySource {
 }
 
 /// A key already fetched: the core asks its source once.
+#[cfg(all(not(target_family = "wasm"), feature = "unaudited-dev"))]
 pub(crate) struct Fetched(pub(crate) Zeroizing<[u8; 32]>);
 
+#[cfg(all(not(target_family = "wasm"), feature = "unaudited-dev"))]
 impl StorageKeySource for Fetched {
     fn storage_key(&self) -> io::Result<Zeroizing<[u8; 32]>> {
         Ok(Zeroizing::new(*self.0))
@@ -63,20 +66,40 @@ impl KeyFile {
         std::fs::symlink_metadata(&self.path).is_ok()
     }
 
-    /// Overwrites the key file with zeros, syncs, and deletes it (after its
-    /// key moved to platform storage). Copy-on-write and journaling file
-    /// systems may still hold the old blocks: the platform store is the
-    /// protection, not this.
+    /// The name the key file is moved to before it is wiped.
+    fn retired(&self) -> PathBuf {
+        self.path.with_extension("key.retired")
+    }
+
+    /// Removes the key file (after its key moved to platform storage): it
+    /// is first renamed, so the key file's name never holds a partly wiped
+    /// key, then overwritten with zeros, synced, and deleted. A retired
+    /// file left by an earlier failure goes the same way. Copy-on-write and
+    /// journaling file systems may still hold the old blocks: the platform
+    /// store is the protection, not this.
     ///
     /// # Errors
     ///
-    /// An I/O error; `NotFound` if there is no key file.
+    /// An I/O error.
     pub fn remove(&self) -> io::Result<()> {
-        let mut file = std::fs::OpenOptions::new().write(true).open(&self.path)?;
-        file.write_all(&[0; 32])?;
+        let retired = self.retired();
+        match std::fs::rename(&self.path, &retired) {
+            Ok(()) => sync_parent(&self.path)?,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+        let mut file = match std::fs::OpenOptions::new().write(true).open(&retired) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        let length = file.metadata()?.len();
+        let zeros = vec![0; usize::try_from(length.min(64)).unwrap_or(64)];
+        file.write_all(&zeros)?;
         file.sync_all()?;
         drop(file);
-        std::fs::remove_file(&self.path)
+        std::fs::remove_file(&retired)?;
+        sync_parent(&retired)
     }
 }
 
@@ -88,7 +111,8 @@ impl StorageKeySource for KeyFile {
                 check_private(&file)?;
                 let mut read = Zeroizing::new(Vec::with_capacity(33));
                 std::io::Read::take(&mut file, 33).read_to_end(&mut read)?;
-                if read.len() != 32 {
+                // An all-zero key is a wiped file, never a key.
+                if read.len() != 32 || read.iter().all(|&byte| byte == 0) {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
                         "storage key file",
@@ -102,6 +126,7 @@ impl StorageKeySource for KeyFile {
                 let mut file = open_private(&self.path, true)?;
                 file.write_all(key.as_slice())?;
                 file.sync_all()?;
+                sync_parent(&self.path)?;
                 Ok(key)
             }
             Err(error) => Err(error),
@@ -129,6 +154,104 @@ pub trait PlatformKeyStore: Send {
     ///
     /// `AlreadyExists` if a key is stored; the platform's error.
     fn store(&self, key: &[u8; 32]) -> io::Result<()>;
+}
+
+/// A platform store made of a file sealed under a secret the platform
+/// keeps for this app (the Flatpak Secret portal): ChaCha20-Poly1305 under
+/// the secret's first 32 bytes, with the profile's ID as associated data.
+/// The file alone opens nothing; the secret never leaves the platform's
+/// keyring except to this app.
+pub struct SealedFile {
+    path: PathBuf,
+    context: Vec<u8>,
+    protection: crate::api::KeyProtection,
+    secret: Box<dyn Fn() -> io::Result<Zeroizing<Vec<u8>>> + Send>,
+}
+
+impl fmt::Debug for SealedFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SealedFile")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SealedFile {
+    /// The key of profile `profile`, sealed in `path` under the secret
+    /// `secret` returns (at least 32 uniformly random bytes).
+    #[must_use]
+    pub fn new(
+        path: PathBuf,
+        profile: &str,
+        protection: crate::api::KeyProtection,
+        secret: Box<dyn Fn() -> io::Result<Zeroizing<Vec<u8>>> + Send>,
+    ) -> Self {
+        let mut context = b"todoke/v1/storage-key/sealed-file\0".to_vec();
+        context.extend_from_slice(profile.as_bytes());
+        Self {
+            path,
+            context,
+            protection,
+            secret,
+        }
+    }
+
+    fn sealer(&self) -> io::Result<todoke_crypto::identity::SoftwareSealer> {
+        let secret = (self.secret)()?;
+        let first: [u8; 32] = secret
+            .get(..32)
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "the secret is too short"))?;
+        Ok(todoke_crypto::identity::SoftwareSealer::new(
+            todoke_crypto::identity::StorageKey::from_bytes(Zeroizing::new(first)),
+        ))
+    }
+}
+
+impl PlatformKeyStore for SealedFile {
+    fn protection(&self) -> crate::api::KeyProtection {
+        self.protection
+    }
+
+    fn load(&self) -> io::Result<Option<Zeroizing<[u8; 32]>>> {
+        use todoke_crypto::identity::Sealer as _;
+        let sealed = match std::fs::read(&self.path) {
+            Ok(sealed) => sealed,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let plain = self.sealer()?.open(&self.context, &sealed).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidData, "the sealed key does not open")
+        })?;
+        let key: [u8; 32] = plain.as_slice().try_into().map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the sealed key has the wrong size",
+            )
+        })?;
+        Ok(Some(Zeroizing::new(key)))
+    }
+
+    fn store(&self, key: &[u8; 32]) -> io::Result<()> {
+        use todoke_crypto::identity::Sealer as _;
+        if std::fs::symlink_metadata(&self.path).is_ok() {
+            return Err(io::ErrorKind::AlreadyExists.into());
+        }
+        let sealed = self
+            .sealer()?
+            .seal(&self.context, key)
+            .map_err(|_| io::Error::other("sealing the key failed"))?;
+        // Written aside, then linked into place: never torn, never replaced.
+        let partial = self.path.with_extension("sealed.tmp");
+        let _ = std::fs::remove_file(&partial);
+        let mut file = open_private(&partial, true)?;
+        let written = file.write_all(&sealed).and_then(|()| file.sync_all());
+        drop(file);
+        let linked = written.and_then(|()| std::fs::hard_link(&partial, &self.path));
+        let _ = std::fs::remove_file(&partial);
+        linked?;
+        sync_parent(&self.path)
+    }
 }
 
 /// Where a profile's key is, recorded beside the state (`storage.backend`)
@@ -210,7 +333,8 @@ impl Selected {
         file.write_all(text)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&partial, &self.marker)
+        std::fs::rename(&partial, &self.marker)?;
+        sync_parent(&self.marker)
     }
 
     fn platform(&self) -> io::Result<&dyn PlatformKeyStore> {
@@ -223,6 +347,9 @@ impl Selected {
     }
 
     /// The key in the platform store; a profile recorded there needs it.
+    /// A key file a migration left behind (a crash or an error after the
+    /// record) goes now, if it holds this key; a different one stays for
+    /// the user to look at, and is never used.
     fn in_platform(&self) -> io::Result<Zeroizing<[u8; 32]>> {
         let platform = self.platform()?;
         let key = platform.load()?.ok_or_else(|| {
@@ -231,6 +358,13 @@ impl Selected {
                 "the storage key is missing from the platform key store",
             )
         })?;
+        if self.file.exists() {
+            if self.file.storage_key().is_ok_and(|stale| *stale == *key) {
+                let _ = self.file.remove();
+            }
+        } else if self.file.retired().exists() {
+            let _ = self.file.remove();
+        }
         self.used_now(platform.protection());
         Ok(key)
     }
@@ -261,12 +395,21 @@ impl Selected {
             None => Self::put(platform, &key)?,
         }
         self.record(Backend::Platform)?;
-        self.file.remove()?;
+        // The move is done: the key file is only a copy now. Failing to
+        // remove it must not undo the move (the next start retries).
+        let _ = self.file.remove();
         self.used_now(platform.protection());
         Ok(key)
     }
 
     fn in_file(&self) -> io::Result<Zeroizing<[u8; 32]>> {
+        // Never back from the platform store, whatever went wrong.
+        if self.recorded()? == Some(Backend::Platform) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "the storage key is in the platform key store; it is never moved back to a file",
+            ));
+        }
         let key = self.file.storage_key()?;
         self.record(Backend::File)?;
         self.used_now(crate::api::KeyProtection::File);
@@ -335,6 +478,79 @@ impl StorageKeySource for Selected {
             .ok()
             .and_then(|used| *used)
             .unwrap_or(crate::api::KeyProtection::File)
+    }
+}
+
+/// Makes a rename or removal in `path`'s directory durable (Unix: the
+/// directory is synced; Windows has no such call, and the file system
+/// journals metadata).
+fn sync_parent(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    if let Some(dir) = path.parent() {
+        std::fs::File::open(dir)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+/// The profile's ID in the platform key stores (`storage.id` beside the
+/// state, 32 random hexadecimal digits, created on first use and never
+/// changed): the stores name the key by it, so moving or renaming the
+/// state directory keeps its key.
+///
+/// # Errors
+///
+/// An I/O error; `InvalidData` for a damaged ID file.
+pub fn profile_id(state_dir: &Path) -> io::Result<String> {
+    crate::profile::private_dir(state_dir).map_err(|error| io::Error::other(error.to_string()))?;
+    let path = state_dir.join("storage.id");
+    let valid = |text: &str| {
+        text.len() == 32
+            && text
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    match open_private(&path, false) {
+        Ok(mut file) => {
+            let mut text = String::new();
+            std::io::Read::take(&mut file, 64).read_to_string(&mut text)?;
+            let text = text.trim_ascii().to_owned();
+            if valid(&text) {
+                Ok(text)
+            } else {
+                Err(io::Error::new(io::ErrorKind::InvalidData, "storage.id"))
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let mut random = [0_u8; 16];
+            getrandom::fill(&mut random).map_err(|_| io::Error::other("randomness"))?;
+            let id = random
+                .iter()
+                .fold(String::with_capacity(32), |mut id, byte| {
+                    let _ = write!(id, "{byte:02x}");
+                    id
+                });
+            let partial = state_dir.join("storage.id.tmp");
+            let _ = std::fs::remove_file(&partial);
+            let mut file = open_private(&partial, true)?;
+            file.write_all(id.as_bytes())?;
+            file.sync_all()?;
+            drop(file);
+            // Two first starts at once: the first ID wins; read it back.
+            match std::fs::hard_link(&partial, &path) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => {
+                    let _ = std::fs::remove_file(&partial);
+                    return Err(error);
+                }
+            }
+            let _ = std::fs::remove_file(&partial);
+            sync_parent(&path)?;
+            profile_id(state_dir)
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -574,6 +790,122 @@ mod tests {
         assert_eq!(memory.key(), Some([7; 32]));
         assert!(file.exists());
         Ok(())
+    }
+
+    /// A migration interrupted after its record (a crash, a key file the
+    /// system would not delete): the profile stays in the platform store,
+    /// the leftover file goes at the next start, and nothing ever reads a
+    /// wiped file as a key.
+    #[test]
+    fn an_interrupted_migration_finishes_and_never_goes_back() -> TestResult {
+        use crate::config::KeyStorage;
+        let scratch = Scratch::new("selected-interrupted")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let file = KeyFile::new(scratch.0.join("storage.key"));
+        let key = file.storage_key()?;
+        let memory = Memory::default();
+        memory.store(&key)?;
+        std::fs::write(scratch.0.join("storage.backend"), b"platform\n")?;
+        // The store is down: an error, never the file (even under Auto).
+        memory.down(true);
+        let down = selected(&scratch.0, &memory, KeyStorage::Auto).storage_key();
+        assert!(down.is_err());
+        assert_eq!(
+            std::fs::read(scratch.0.join("storage.backend"))?,
+            b"platform\n"
+        );
+        // Back: the key comes from the store, and the copy goes.
+        memory.down(false);
+        assert_eq!(
+            selected(&scratch.0, &memory, KeyStorage::Auto).storage_key()?,
+            key
+        );
+        assert!(!file.exists());
+        assert!(!scratch.0.join("storage.key.retired").exists());
+        Ok(())
+    }
+
+    /// A wiped (all-zero) key file is refused, never used as a key; a
+    /// retired file left behind is cleaned up.
+    #[test]
+    fn wiped_and_retired_key_files_are_never_keys() -> TestResult {
+        use crate::config::KeyStorage;
+        let scratch = Scratch::new("selected-wiped")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let path = scratch.0.join("storage.key");
+        write_private(&path, &[0; 32])?;
+        assert_eq!(
+            KeyFile::new(&path)
+                .storage_key()
+                .map(|_| ())
+                .map_err(|e| e.kind()),
+            Err(io::ErrorKind::InvalidData)
+        );
+        std::fs::remove_file(&path)?;
+        let memory = Memory::default();
+        let key = selected(&scratch.0, &memory, KeyStorage::Auto).storage_key()?;
+        write_private(&scratch.0.join("storage.key.retired"), &[9; 32])?;
+        assert_eq!(
+            selected(&scratch.0, &memory, KeyStorage::Auto).storage_key()?,
+            key
+        );
+        assert!(!scratch.0.join("storage.key.retired").exists());
+        Ok(())
+    }
+
+    /// A key sealed under a platform secret opens only with that secret and
+    /// that profile's ID, and is never replaced.
+    #[test]
+    fn a_sealed_file_needs_its_secret_and_profile() -> TestResult {
+        let scratch = Scratch::new("sealed-file")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let path = scratch.0.join("storage.key.sealed");
+        let secret = |byte: u8| -> Box<dyn Fn() -> io::Result<Zeroizing<Vec<u8>>> + Send> {
+            Box::new(move || Ok(Zeroizing::new(vec![byte; 64])))
+        };
+        let portal = crate::api::KeyProtection::Portal;
+        let store = SealedFile::new(path.clone(), "a", portal, secret(1));
+        assert!(store.load()?.is_none());
+        store.store(&[5; 32])?;
+        assert_eq!(store.load()?.map(|key| *key), Some([5; 32]));
+        assert_eq!(
+            store.store(&[6; 32]).map_err(|e| e.kind()),
+            Err(io::ErrorKind::AlreadyExists)
+        );
+        assert!(!std::fs::read(&path)?.windows(32).any(|w| w == [5; 32]));
+        assert!(
+            SealedFile::new(path.clone(), "a", portal, secret(2))
+                .load()
+                .is_err()
+        );
+        assert!(
+            SealedFile::new(path.clone(), "b", portal, secret(1))
+                .load()
+                .is_err()
+        );
+        let short: Box<dyn Fn() -> io::Result<Zeroizing<Vec<u8>>> + Send> =
+            Box::new(|| Ok(Zeroizing::new(vec![1; 16])));
+        assert!(SealedFile::new(path, "a", portal, short).load().is_err());
+        Ok(())
+    }
+
+    /// The profile ID is made once, kept, and checked.
+    #[test]
+    fn the_profile_id_is_stable() -> TestResult {
+        let scratch = Scratch::new("profile-id")?;
+        let id = profile_id(&scratch.0)?;
+        assert_eq!(id.len(), 32);
+        assert_eq!(profile_id(&scratch.0)?, id);
+        let other = Scratch::new("profile-id-other")?;
+        assert_ne!(profile_id(&other.0)?, id);
+        std::fs::write(scratch.0.join("storage.id"), b"not an id")?;
+        assert!(profile_id(&scratch.0).is_err());
+        Ok(())
+    }
+
+    fn write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        let mut file = open_private(path, true)?;
+        file.write_all(bytes)
     }
 
     /// File only: no platform store is touched; no store at all: a file.
