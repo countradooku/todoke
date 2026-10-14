@@ -256,6 +256,21 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Read the version
         run: echo "VERSION=$(scripts/packaging/version.sh)" >> "$GITHUB_ENV"
+      # What flatpak-builder composes at the end, checked first, with the
+      # full report (its own run prints only the issue's tag).
+      - name: Compose the AppStream metadata
+        run: |
+          sudo apt-get install -y -qq --no-install-recommends appstream-compose || \
+            sudo apt-get install -y -qq --no-install-recommends appstream
+          root="$RUNNER_TEMP/appstream/app"
+          install -Dm644 packaging/linux/org.todoke.todoke.desktop "$root/share/applications/org.todoke.todoke.desktop"
+          install -Dm644 packaging/linux/org.todoke.todoke.metainfo.xml "$root/share/metainfo/org.todoke.todoke.metainfo.xml"
+          for size in 16 24 32 48 64 128 256 512; do
+            install -Dm644 "packaging/icons/todoke-$size.png" "$root/share/icons/hicolor/${size}x${size}/apps/org.todoke.todoke.png"
+          done
+          install -Dm644 packaging/icons/todoke.svg "$root/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg"
+          appstreamcli compose --no-net --print-report=full --origin=org.todoke.todoke \
+            --result-root="$root" --prefix=/ --components=org.todoke.todoke "$root"
       - name: Generate the offline cargo sources
         run: |
           generator="$RUNNER_TEMP/flatpak-cargo-generator.py"
