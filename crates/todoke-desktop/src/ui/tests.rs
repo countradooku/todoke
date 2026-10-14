@@ -767,3 +767,185 @@ fn contacts_are_chosen_from_the_keyboard(cx: &mut TestAppContext) {
     cx.run_until_parked();
     view.read_with(cx, |app, _| assert!(app.model.selected.is_empty()));
 }
+
+/// An arming timer started for one offer never arms the next: hiding
+/// offer A just before its delay ends leaves B disarmed for B's own delay.
+#[gpui_kit::test]
+fn a_stale_timer_never_arms_the_next_offer(cx: &mut TestAppContext) {
+    let home = Home::new("stale");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    mock.emit(Event::OfferReceived(offer("ta", &[("a", "text/plain", 1)])));
+    mock.emit(Event::OfferReceived(offer("tb", &[("b", "text/plain", 1)])));
+    cx.run_until_parked();
+    let early = tokens::DECISION_DELAY.saturating_sub(core::time::Duration::from_millis(50));
+    cx.executor().advance_clock(early);
+    cx.run_until_parked();
+    cx.update(|window, cx| window.press("escape", cx));
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.sheet.transfer.as_deref(), Some("tb"));
+    });
+    // A's timer fires now; B must stay disarmed.
+    cx.executor()
+        .advance_clock(core::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(!app.sheet.armed));
+    click(cx, "accept");
+    assert_eq!(actions(&mock).len(), 0);
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.sheet.armed));
+}
+
+/// The command key with Return accepts only when pressed afresh: a key held
+/// since before the sheet appeared repeats into nothing.
+#[gpui_kit::test]
+fn a_held_key_never_accepts(cx: &mut TestAppContext) {
+    let home = Home::new("held");
+    let mock = Arc::new(Mock::new(script()));
+    let (_, cx) = open(cx, &mock, &home);
+    mock.emit(Event::OfferReceived(offer("th", &[("a", "text/plain", 1)])));
+    cx.run_until_parked();
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    let m = if cfg!(target_os = "macos") {
+        "cmd"
+    } else {
+        "ctrl"
+    };
+    let Ok(keystroke) = gpui_kit::Keystroke::parse(&format!("{m}-enter")) else {
+        unreachable!("a valid keystroke");
+    };
+    cx.simulate_event(gpui_kit::KeyDownEvent {
+        keystroke: keystroke.clone(),
+        is_held: true,
+        prefer_character_input: false,
+    });
+    cx.run_until_parked();
+    assert_eq!(actions(&mock).len(), 0);
+    cx.update(|window, cx| window.press(&format!("{m}-enter"), cx));
+    cx.run_until_parked();
+    assert_eq!(
+        actions(&mock),
+        [Request::Accept {
+            transfer: "th".into(),
+            files: None,
+        }]
+    );
+}
+
+/// A decision the core refuses leaves the offer decidable again.
+#[gpui_kit::test]
+fn a_refused_decision_rearms_the_sheet(cx: &mut TestAppContext) {
+    let home = Home::new("refused");
+    let base = script();
+    let mock = Arc::new(Mock::new(move |request| match request {
+        Request::Accept { .. } => todoke_core::api::Response::error(
+            todoke_core::api::ErrorCode::Unreachable,
+            "the sender is not connected",
+        ),
+        // The core still holds the offer it refused to accept.
+        Request::Offers => {
+            todoke_core::api::Response::Offers(vec![offer("tr", &[("a", "text/plain", 1)])])
+        }
+        other => base(other),
+    }));
+    let (view, cx) = open(cx, &mock, &home);
+    cx.run_until_parked();
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    click(cx, "accept");
+    view.read_with(cx, |app, _| {
+        assert!(!app.sheet.armed);
+        assert_eq!(app.sheet.transfer.as_deref(), Some("tr"));
+    });
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.sheet.armed));
+}
+
+/// Clipboard text that was offered to no one does not stay on disk, and a
+/// file sent to two contacts stays until both transfers are over.
+#[gpui_kit::test]
+fn clipboard_files_go_when_no_transfer_needs_them(cx: &mut TestAppContext) {
+    let home = Home::new("outbox");
+    let base = script();
+    let refuse = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let refusing = Arc::clone(&refuse);
+    let mock = Arc::new(Mock::new(move |request| match request {
+        Request::Send { .. } if refusing.load(Ordering::Relaxed) => {
+            todoke_core::api::Response::error(todoke_core::api::ErrorCode::Unreachable, "no")
+        }
+        other => base(other),
+    }));
+    let (view, cx) = open(cx, &mock, &home);
+    let outbox = home.0.join("state").join("outbox");
+    let files = || -> usize {
+        std::fs::read_dir(home.0.join("state").join("outbox")).map_or(0, Iterator::count)
+    };
+    view.update(cx, |app, cx| {
+        app.model.toggle(NEAR);
+        cx.notify();
+    });
+    cx.write_to_clipboard(ClipboardItem::new_string("secret".into()));
+    cx.dispatch_action(super::SendClipboard);
+    cx.run_until_parked();
+    assert!(outbox.exists());
+    assert_eq!(files(), 0, "a refused offer's file stayed");
+    // Two contacts this time; the offers succeed.
+    refuse.store(false, Ordering::Relaxed);
+    view.update(cx, |app, cx| {
+        app.model.toggle(LAN);
+        cx.notify();
+    });
+    cx.dispatch_action(super::SendClipboard);
+    cx.run_until_parked();
+    assert_eq!(files(), 1);
+    let ids: Vec<String> = view.read_with(cx, |app, _| app.outbox.keys().cloned().collect());
+    assert_eq!(ids.len(), 2);
+    let finish = |id: &str, cx: &mut VisualTestContext| {
+        let id = id.to_owned();
+        view.update(cx, |app, cx| {
+            app.model.transfers.insert(
+                id.clone(),
+                TransferInfo {
+                    transfer: id.clone(),
+                    peer: NEAR.into(),
+                    way: Way::Outgoing,
+                    state: TransferState::Offered,
+                    detail: None,
+                    bytes_done: 0,
+                    bytes_total: 6,
+                },
+            );
+            app.on_event(Event::Delivered { transfer: id }, cx);
+        });
+        cx.run_until_parked();
+    };
+    finish(&ids[0], cx);
+    assert_eq!(files(), 1, "removed while the other transfer needs it");
+    finish(&ids[1], cx);
+    assert_eq!(files(), 0);
+}
+
+/// A core stopped from outside is let go (so it stops for real), and
+/// starting again does not reuse it.
+#[gpui_kit::test]
+fn a_stopped_core_is_let_go(cx: &mut TestAppContext) {
+    let home = Home::new("stopped");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    mock.stop();
+    cx.executor().advance_clock(tokens::REFRESH);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.model.connection, Connection::Stopped);
+        assert!(app.backend.is_none());
+    });
+    // Only this test's handle is left: the app dropped its own.
+    assert_eq!(Arc::strong_count(&mock), 1);
+    let banner =
+        cx.update(|window, _| window.find("banner").label().unwrap_or_default().to_owned());
+    assert!(banner.contains("stopped"), "{banner}");
+}

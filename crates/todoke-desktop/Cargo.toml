@@ -34,6 +34,8 @@ serde.workspace = true
 serde_json.workspace = true
 # Pairing secrets the window shows are wiped when they go.
 zeroize.workspace = true
+# Unique names for files replaced atomically.
+getrandom.workspace = true
 
 # The window exists only on the desktop platforms; elsewhere (Android, iOS,
 # wasm32) the crate is empty and the binary says so.

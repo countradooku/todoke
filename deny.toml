@@ -91,7 +91,10 @@ skip-tree = []
 [bans.workspace-dependencies]
 duplicates = "deny"
 include-path-dependencies = true
-unused = "deny"
+# A warning here only: gpui-kit is a workspace dependency used by the
+# excluded desktop crate alone. deny-desktop.toml, which sees every member,
+# denies an unused workspace dependency.
+unused = "warn"
 
 [sources]
 unknown-registry = "deny"

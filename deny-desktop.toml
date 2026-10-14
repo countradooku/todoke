@@ -1,5 +1,11 @@
 # cargo-deny 0.20.2. Review policy changes alongside the dependency introducing them.
-# cargo-deny policy for the whole workspace, the desktop app included. CI
+# cargo-deny policy for the whole workspace, the desktop app included.
+# Unlike deny.toml's, the toolkit exceptions below are NOT checked by
+# scripts/ci/deny-exceptions-dev-only.sh (which reads deny.toml and leaves
+# the desktop out): most are runtime dependencies of the desktop app by
+# design, each with its reason here and in docs/adr/0010-desktop.md. The
+# comments inherited from deny.toml about "never compiled" hold outside the
+# desktop's graph only. CI
 # runs it beside deny.toml (which leaves todoke-desktop out). It is deny.toml
 # plus what the desktop's GUI toolkit (gpui-kit 0.7.3: GPUI, its platform
 # layers, fonts, SVG, and images) needs, each exception scoped to an exact

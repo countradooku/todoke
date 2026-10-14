@@ -71,6 +71,15 @@ fn gone() -> Response {
     Response::error(ErrorCode::Internal, "the todoke daemon is not running")
 }
 
+/// The answer when a request got no reply: it may or may not have been
+/// carried out.
+fn unanswered() -> Response {
+    Response::error(
+        ErrorCode::Internal,
+        "the todoke daemon did not answer; check Transfers before trying again",
+    )
+}
+
 impl Backend for AttachedBackend {
     fn request(&self, request: Request) -> Reply {
         let requests = self.requests.clone();
@@ -138,15 +147,14 @@ impl AttachedBackend {
                         watch.store(false, Ordering::Release);
                     });
                     let pool = Arc::new(Pool::new(client));
+                    // A failed request is reported to its caller, never as the
+                    // daemon being gone (it may be busy, or out of
+                    // descriptors): only the end of the event stream says so.
                     while let Some((request, reply)) = inbox.recv().await {
-                        let (pool, endpoint, flag) =
-                            (Arc::clone(&pool), endpoint.clone(), Arc::clone(&flag));
+                        let (pool, endpoint) = (Arc::clone(&pool), endpoint.clone());
                         tokio::spawn(async move {
                             let response = pool.request(&endpoint, request).await;
-                            if response.is_none() {
-                                flag.store(false, Ordering::Release);
-                            }
-                            let _ = reply.send(response.unwrap_or_else(gone));
+                            let _ = reply.send(response.unwrap_or_else(unanswered));
                         });
                     }
                     forward.abort();
@@ -279,6 +287,7 @@ pub mod mock {
         script: Script,
         requests: Mutex<Vec<Request>>,
         events: broadcast::Sender<Event>,
+        alive: std::sync::atomic::AtomicBool,
     }
 
     impl Mock {
@@ -289,7 +298,14 @@ pub mod mock {
                 script: Box::new(script),
                 requests: Mutex::new(Vec::new()),
                 events: broadcast::channel(64).0,
+                alive: std::sync::atomic::AtomicBool::new(true),
             }
+        }
+
+        /// Makes the core look stopped (`todoke daemon stop`).
+        pub fn stop(&self) {
+            self.alive
+                .store(false, std::sync::atomic::Ordering::Release);
         }
 
         /// Sends `event` to the app.
@@ -340,7 +356,7 @@ pub mod mock {
         }
 
         fn alive(&self) -> bool {
-            true
+            self.alive.load(std::sync::atomic::Ordering::Acquire)
         }
     }
 }

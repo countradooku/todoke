@@ -63,8 +63,8 @@ impl Proximity {
     }
 }
 
-/// A pairing offer this device shows.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+/// A pairing offer this device shows. `Debug` never prints the secret.
+#[derive(Clone, Default, PartialEq, Eq)]
 pub enum Pairing {
     /// None.
     #[default]
@@ -85,6 +85,32 @@ pub enum Pairing {
         /// Unix seconds.
         expires_at: u64,
     },
+}
+
+impl core::fmt::Debug for Pairing {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Idle => f.write_str("Idle"),
+            Self::Requested => f.write_str("Requested"),
+            Self::Qr { expires_at, .. } => {
+                write!(f, "Qr {{ text: <redacted>, expires_at: {expires_at} }}")
+            }
+            Self::Code { expires_at, .. } => {
+                write!(f, "Code {{ code: <redacted>, expires_at: {expires_at} }}")
+            }
+        }
+    }
+}
+
+impl Pairing {
+    /// When the offer shown expires, Unix seconds.
+    #[must_use]
+    pub const fn expires_at(&self) -> Option<u64> {
+        match self {
+            Self::Qr { expires_at, .. } | Self::Code { expires_at, .. } => Some(*expires_at),
+            Self::Idle | Self::Requested => None,
+        }
+    }
 }
 
 /// How a notice reads.
@@ -344,7 +370,8 @@ impl Model {
                     expires_at,
                 };
             }
-            Response::Error { message, .. } => self.notify(Level::Error, message),
+            // Errors may quote local file names: escaped like peer text.
+            Response::Error { message, .. } => self.notify(Level::Error, format::name(&message)),
             Response::Done | Response::Paired { .. } | Response::Offered { .. } => {}
         }
     }
@@ -608,6 +635,22 @@ mod tests {
         assert_eq!(model.pairing, Pairing::Idle);
         model.answer(Response::error(todoke_core::api::ErrorCode::State, "nope"));
         assert_eq!(model.notices.back().map(|n| n.level), Some(Level::Error));
+    }
+
+    #[test]
+    fn pairing_secrets_never_reach_debug_output() {
+        let mut model = Model::new();
+        model.answer(Response::Qr {
+            text: "TODOKE:SECRET".into(),
+            expires_at: 9,
+        });
+        assert!(!format!("{model:?}").contains("SECRET"));
+        model.answer(Response::Code {
+            code: "0123456789".into(),
+            expires_at: 9,
+        });
+        assert!(!format!("{model:?}").contains("0123456789"));
+        assert_eq!(model.pairing.expires_at(), Some(9));
     }
 
     #[test]

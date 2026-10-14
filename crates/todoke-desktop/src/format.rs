@@ -171,6 +171,122 @@ impl Kind {
     }
 }
 
+/// Extensions of what a system runs: executables, installers, libraries,
+/// scripts and script hosts, shortcuts, and documents that run macros.
+const PROGRAMS: &[&str] = &[
+    "exe",
+    "msi",
+    "msix",
+    "appx",
+    "bat",
+    "cmd",
+    "com",
+    "scr",
+    "pif",
+    "cpl",
+    "dll",
+    "sys",
+    "ps1",
+    "psm1",
+    "vbs",
+    "vbe",
+    "js",
+    "jse",
+    "wsf",
+    "wsh",
+    "hta",
+    "reg",
+    "lnk",
+    "url",
+    "inf",
+    "jar",
+    "app",
+    "pkg",
+    "command",
+    "tool",
+    "workflow",
+    "scpt",
+    "applescript",
+    "dylib",
+    "sh",
+    "bash",
+    "zsh",
+    "csh",
+    "fish",
+    "py",
+    "pyw",
+    "pl",
+    "rb",
+    "php",
+    "lua",
+    "apk",
+    "deb",
+    "rpm",
+    "appimage",
+    "flatpakref",
+    "snap",
+    "desktop",
+    "run",
+    "elf",
+    "html",
+    "htm",
+    "xhtml",
+    "svg",
+    "docm",
+    "dotm",
+    "xlsm",
+    "xltm",
+    "xlam",
+    "pptm",
+    "potm",
+    "ppam",
+    "sldm",
+];
+
+/// MIME types that claim to be programs or scripts.
+const PROGRAM_TYPES: &[&str] = &[
+    "application/x-sh",
+    "application/x-shellscript",
+    "text/x-shellscript",
+    "application/x-executable",
+    "application/x-elf",
+    "application/x-mach-binary",
+    "application/x-msdownload",
+    "application/x-msdos-program",
+    "application/x-msi",
+    "application/vnd.microsoft.portable-executable",
+    "application/java-archive",
+    "application/javascript",
+    "text/javascript",
+    "text/x-python",
+    "application/x-python-code",
+    "text/x-perl",
+    "application/x-perl",
+    "text/x-ruby",
+    "application/x-httpd-php",
+    "text/html",
+    "application/xhtml+xml",
+    "image/svg+xml",
+    "application/vnd.android.package-archive",
+    "application/x-apple-diskimage",
+];
+
+/// A name a peer chose, escaped, split before its last extension (at most
+/// 16 characters), so the extension stays visible however the rest is
+/// shortened: `("Report       ", ".exe")`.
+#[must_use]
+pub fn name_parts(raw: &str) -> (String, String) {
+    let shown = name(raw);
+    match shown.rsplit_once('.') {
+        Some((stem, extension))
+            if !stem.is_empty() && !extension.is_empty() && extension.chars().count() <= 16 =>
+        {
+            (stem.to_owned(), format!(".{extension}"))
+        }
+        _ => (shown, String::new()),
+    }
+}
+
 /// The kind of `entry`.
 #[must_use]
 pub fn kind(entry: &EntryInfo) -> Kind {
@@ -182,30 +298,9 @@ pub fn kind(entry: &EntryInfo) -> Kind {
         .rsplit_once('.')
         .map(|(_, extension)| extension.to_ascii_lowercase())
         .unwrap_or_default();
-    // A program is a program whatever MIME type it claims.
-    if matches!(
-        extension.as_str(),
-        "exe"
-            | "msi"
-            | "bat"
-            | "cmd"
-            | "com"
-            | "scr"
-            | "ps1"
-            | "vbs"
-            | "js"
-            | "jar"
-            | "app"
-            | "pkg"
-            | "command"
-            | "sh"
-            | "apk"
-            | "deb"
-            | "rpm"
-            | "appimage"
-            | "lnk"
-            | "desktop"
-    ) {
+    // A program is a program whatever MIME type it claims: anything a
+    // system runs, opens with a script host, or runs macros in.
+    if PROGRAMS.contains(&extension.as_str()) || PROGRAM_TYPES.contains(&entry.mime.as_str()) {
         return Kind::Program;
     }
     let mime = entry.mime.as_str();
@@ -220,7 +315,7 @@ pub fn kind(entry: &EntryInfo) -> Kind {
     }
     match extension.as_str() {
         "jpg" | "jpeg" | "png" | "gif" | "heic" | "heif" | "webp" | "tif" | "tiff" | "bmp"
-        | "svg" | "raw" | "dng" | "avif" => Kind::Image,
+        | "raw" | "dng" | "avif" => Kind::Image,
         "mp4" | "mov" | "mkv" | "avi" | "webm" | "m4v" => Kind::Video,
         "mp3" | "m4a" | "wav" | "flac" | "aac" | "ogg" | "opus" => Kind::Audio,
         "pdf" | "txt" | "md" | "rtf" | "doc" | "docx" | "odt" | "xls" | "xlsx" | "ods" | "ppt"
@@ -404,6 +499,46 @@ mod tests {
         assert_eq!(kind(&entry("photos", "", true, 0)), Kind::Folder);
         assert_eq!(kind(&entry("noext", "", false, 1)), Kind::Other);
         assert_eq!(kind(&entry("x.tar.gz", "", false, 1)), Kind::Archive);
+        // Scripts, script hosts, and macro documents, by name or by type.
+        for name in [
+            "install.py",
+            "budget.XLSM",
+            "invoice.html",
+            "logo.svg",
+            "fix.reg",
+        ] {
+            assert_eq!(
+                kind(&entry(name, "application/octet-stream", false, 1)),
+                Kind::Program,
+                "{name}"
+            );
+        }
+        assert_eq!(
+            kind(&entry("readme", "text/x-shellscript", false, 1)),
+            Kind::Program
+        );
+        assert_eq!(kind(&entry("firmware.bin", "", false, 1)), Kind::Other);
+    }
+
+    /// The extension stays apart, so shortening the name never hides it.
+    #[test]
+    fn names_keep_their_extension_visible() {
+        assert_eq!(
+            name_parts("Report.pdf          .exe"),
+            ("Report.pdf          ".to_owned(), ".exe".to_owned())
+        );
+        assert_eq!(
+            name_parts("a\u{202e}b.txt"),
+            ("a\\u{202e}b".to_owned(), ".txt".to_owned())
+        );
+        assert_eq!(
+            name_parts("noextension"),
+            ("noextension".to_owned(), String::new())
+        );
+        assert_eq!(
+            name_parts(".profile"),
+            (".profile".to_owned(), String::new())
+        );
     }
 
     #[test]

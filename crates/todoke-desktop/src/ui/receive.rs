@@ -66,6 +66,21 @@ impl Todoke {
             .track_focus(&self.sheet_focus)
             .key_context(SHEET)
             .on_action(cx.listener(|this, _: &AcceptAll, _, cx| this.accept(cx)))
+            // The command key with Return accepts, but only a fresh press: a
+            // key held since before the sheet appeared (auto-repeat) never
+            // does.
+            .on_key_down(cx.listener(|this, event: &gpui_kit::KeyDownEvent, _, cx| {
+                let stroke = &event.keystroke;
+                let command = if cfg!(target_os = "macos") {
+                    stroke.modifiers.platform
+                } else {
+                    stroke.modifiers.control
+                };
+                if stroke.key == "enter" && command && !event.is_held {
+                    this.accept(cx);
+                    cx.stop_propagation();
+                }
+            }))
             .on_action(cx.listener(|this, _: &CloseSheet, _, cx| {
                 if let Some(id) = this.sheet.transfer.clone() {
                     this.sheet.hidden.insert(id);
@@ -299,13 +314,15 @@ fn entry_row(entry: &EntryInfo, palette: &'static Palette) -> gpui_kit::Div {
             },
             palette.muted,
         ))
-        .child(
+        .child({
+            let (stem, extension) = format::name_parts(&entry.name);
             div()
                 .flex_1()
                 .min_w_0()
-                .truncate()
-                .child(format::name(&entry.name)),
-        )
+                .flex()
+                .child(div().min_w_0().truncate().child(stem))
+                .child(div().flex_none().child(extension))
+        })
         .when(format::kind(entry) == format::Kind::Program, |row| {
             row.child(widgets::badge("program", palette.warning, palette))
         })

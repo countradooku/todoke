@@ -178,16 +178,30 @@ fn replace(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let partial = path.with_extension("json.tmp");
-    let _ = std::fs::remove_file(&partial);
+    // A name of its own, so two writers never share the partial file.
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).map_err(|_| std::io::Error::other("no randomness"))?;
+    let suffix = random.iter().fold(String::new(), |mut out, byte| {
+        use core::fmt::Write as _;
+        let _ = write!(out, "{byte:02x}");
+        out
+    });
+    let partial = path.with_extension(format!("json.{suffix}.tmp"));
     let mut file = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .open(&partial)?;
-    file.write_all(bytes)?;
-    file.sync_all()?;
-    drop(file);
-    std::fs::rename(&partial, path)
+    let written = file
+        .write_all(bytes)
+        .and_then(|()| file.sync_all())
+        .and_then(|()| {
+            drop(file);
+            std::fs::rename(&partial, path)
+        });
+    if written.is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+    written
 }
 
 #[cfg(test)]

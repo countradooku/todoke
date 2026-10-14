@@ -52,12 +52,16 @@ retention is local policy (§7.7).
    notifiers reach it while the window is open. A second core can never
    open the profile (the endpoint and the quarantine lock both refuse).
    - `todoke daemon stop` stops a hosted core's endpoint; the window then
-     says todoke stopped and offers to start again.
+     lets the core go (stopping it, off the UI thread), says todoke
+     stopped, and offers to start again. Starting again first releases any
+     core the window still holds: it holds the profile.
    - In attached mode requests go over a small pool of connections, so a
      slow request (an offer of a large folder is hashed first) never holds
      up the rest. A pooled connection idle for 60 seconds is dropped
      unused: the daemon closes idle connections after two minutes, and a
-     request (an offer is not idempotent) must never be sent twice.
+     request (an offer is not idempotent) must never be sent twice. Only
+     the end of the daemon's event stream means it is gone; a request that
+     fails is reported as unanswered (it may have been carried out).
    - Release builds (sessions disabled, §16) start, say so in a banner, and
      can still attach to a development daemon.
 3. **The window is only a client of the core.** Every action is a
@@ -102,22 +106,30 @@ retention is local policy (§7.7).
    - The sender's seal reads "Verified contact": only paired contacts can
      offer, and the session authenticated this one. Nothing else is
      claimed.
-   - Names are escaped (`invoice\u{202e}fdp.exe` stays visibly odd);
-     programs and scripts are flagged by extension whatever MIME type they
-     claim; MIME types only label.
+   - Names are escaped (`invoice\u{202e}fdp.exe` stays visibly odd), and
+     the extension is drawn apart from the rest of the name, so shortening
+     a long name never hides it. Programs, scripts, script-host files,
+     HTML and SVG, and macro-enabled documents are flagged by extension or
+     by claimed MIME type; MIME types otherwise only label.
    - Decline, Choose, and Accept stay disabled for 700 ms after an offer
      appears, so a click or key press aimed at what was there before cannot
-     accept it. The sheet takes focus as a dialog; Escape hides it (the
-     offer waits until it expires, §13); the command key with Return
-     accepts. Choosing nothing is refused; a resumed transfer can only
-     repeat its earlier selection (§7.5).
+     accept it. The delay belongs to the offer shown: each change of offer
+     starts a new generation, and a timer from an earlier one arms nothing
+     (a sender cannot time a second offer into the first one's delay). The
+     sheet takes focus as a dialog; Escape hides it (the offer waits until
+     it expires, §13); the command key with Return accepts only on a fresh
+     press, never from a key held since before. A decision the core refuses
+     re-arms the same offer after the delay. Choosing nothing is refused; a
+     resumed transfer can only repeat its earlier selection (§7.5).
 7. **Pairing secrets** are held in `Zeroizing` strings and dropped when the
    offer goes. The QR code is drawn black on white whatever the theme; its
    screen-reader label says it is secret and never reads it out.
 8. **Clipboard text** is written to `outbox/` in the private state
    directory (0700, files 0600, created exclusively) and offered as a file;
-   the file is removed when its transfer ends, and any older than a week
-   (the longest resume, §13) at start. Files copied in a file manager are
+   the file is removed as soon as no offer is pending for it and no
+   offered transfer uses it (one file can go to several contacts; an offer
+   no one accepted removes it at once), and any older than a week (the
+   longest resume, §13) at start. Files copied in a file manager are
    offered as they are.
 9. **Design tokens in one module** (`tokens.rs`): two palettes, a 4-pixel
    spacing scale, radii, type sizes, sizes, and durations; `apply` carries
@@ -185,6 +197,31 @@ retention is local policy (§7.7).
   storage key file, which has no platform protection yet, §16 O9) for 30
   days by default. Fix: O9's platform key storage; reconsider the default
   retention.
+- **History writes on the core's thread:** every finished transfer seals
+  and syncs the whole history (up to 2000 entries) synchronously, briefly
+  stalling sessions on slow storage. Fix: append-only sealed records, or the
+  write on the blocking pool with the core awaiting it.
+- **History follows the wall clock:** entries older than the retention are
+  pruned against the current time, so a clock set far forward drops them
+  for good. Fix: prune only by entry count when the clock jumps past the
+  newest entry, or keep a monotonic record of the last write.
+- **Hiding is not instant at relays:** a presence registration already
+  started stays at the relay for the rest of its window (at most 30
+  seconds). Fix: cancel open presence registrations when hiding.
+- **The saved name may differ from the one shown:** the sheet shows the
+  manifest name (escaped); `todoke-fs` may rename it on disk (§7.1 safe
+  names, collisions). Fix: expose the planned local names in `OfferInfo`
+  and show them.
+- **The desktop's toolkit exceptions are not machine-checked:** the guard
+  script checks `deny.toml`'s claims (never compiled, build time only) on
+  the graph that file covers; `deny-desktop.toml`'s are runtime by design,
+  and their reasons (getrandom 0.2 at build time only, rustls-pemfile only
+  on wasm) are checked by review only. Fix: run the guard over the
+  desktop's graph with its own list of runtime-allowed exceptions.
+- **A hosted core can stop on the UI thread** if a request's reply holds
+  the last handle to it when the window has already let it go (a stop that
+  races a request): its threads are joined there, briefly. Fix: keep the
+  backend's last handle in a background task.
 - **"Through relay" is optimistic** for a contact without a session: any
   contact counts as remote when relays are configured, though it may never
   have been met there. Fix: the core reports when each contact was last

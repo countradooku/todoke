@@ -497,7 +497,6 @@ pub enum Event {
 /// rest of the default-ignorable code points) becomes `\u{…}`; a backslash
 /// becomes `\\`. Every interface shows peer-chosen names through it, so
 /// `invoice\u{202e}fdp.exe` cannot pass for a PDF.
-#[cfg(not(target_family = "wasm"))]
 #[must_use]
 pub fn escape(text: &str) -> String {
     use core::fmt::Write as _;
@@ -682,7 +681,6 @@ mod tests {
         assert!(!format!("{send:?}").contains("private"));
     }
 
-    #[cfg(not(target_family = "wasm"))]
     #[test]
     fn names_are_escaped_for_display() {
         assert_eq!(escape("invoice\u{202e}fdp.exe"), "invoice\\u{202e}fdp.exe");

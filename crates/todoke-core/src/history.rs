@@ -49,9 +49,14 @@ impl<S: Sealer> History<S> {
         let storage = FileStorage::new(&history.path);
         if let Ok(Some(sealed)) = storage.load(MAX_BLOB)
             && let Ok(plain) = history.sealer.open(CONTEXT, &sealed)
-            && let Ok(entries) = serde_json::from_slice::<Vec<HistoryEntry>>(&plain)
+            && let Ok(entries) = serde_json::from_slice::<Vec<serde_json::Value>>(&plain)
         {
-            history.entries = entries;
+            // An entry this version cannot read (written by a later one,
+            // say) is dropped alone, not the whole history.
+            history.entries = entries
+                .into_iter()
+                .filter_map(|entry| serde_json::from_value(entry).ok())
+                .collect();
         }
         if history.prune(now) {
             history.persist();
@@ -216,6 +221,25 @@ mod tests {
         let listed = history.list(now);
         assert_eq!(listed.len(), MAX_ENTRIES);
         assert_eq!(listed[0].transfer, "last");
+        Ok(())
+    }
+
+    /// An unreadable entry costs only itself.
+    #[test]
+    fn unreadable_entries_are_dropped_alone() -> TestResult {
+        let dir = Scratch::new("history-unreadable")?;
+        std::fs::create_dir_all(&dir.0)?;
+        let now = at(DAY)?;
+        let mut good = serde_json::to_value(entry("01", now.seconds()))?;
+        let mut bad = good.clone();
+        bad["state"] = "teleported".into();
+        good["transfer"] = "02".into();
+        let plain = serde_json::to_vec(&vec![bad, good])?;
+        let sealed = sealer(1).seal(CONTEXT, &plain)?;
+        FileStorage::new(dir.0.join("history.bin")).store(&sealed)?;
+        let history = History::open(dir.0.as_path(), sealer(1), 30, now);
+        let listed: Vec<_> = history.list(now).into_iter().map(|e| e.transfer).collect();
+        assert_eq!(listed, ["02"]);
         Ok(())
     }
 

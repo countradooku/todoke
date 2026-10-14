@@ -52,7 +52,9 @@ impl fmt::Display for DaemonError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Config(error) => write!(f, "configuration: {error}"),
-            Self::Disabled => write!(f, "{}", todoke_core::StartError::Disabled),
+            Self::Disabled => f.write_str(
+                "sessions are disabled in this build: suite 0x0001 is not production-enabled (PROTOCOL §16)",
+            ),
             Self::Core(error) => write!(f, "{error}"),
             Self::Endpoint(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
                 f.write_str("another daemon is already running for this user")

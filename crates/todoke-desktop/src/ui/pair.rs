@@ -145,7 +145,8 @@ impl Todoke {
         let card = section("show-qr", "Scan this with the other device", palette);
         match &self.model.pairing {
             Pairing::Qr { text, expires_at } => {
-                let text = text.to_string();
+                // Zeroized when the closures holding it go.
+                let text = text.clone();
                 let expires = countdown(*expires_at, self.now);
                 card.child(
                     div()
@@ -157,7 +158,7 @@ impl Todoke {
                                 .id("qr-code").test_support()
                                 .role(Role::Image)
                                 .aria_label("Pairing QR code. It is secret: show it only to the device you are pairing.")
-                                .children(super::qr::code(&text)),
+                                .children(super::qr::code(text.as_str())),
                         )
                         .child(
                             div()
@@ -184,7 +185,7 @@ impl Todoke {
                                         "Copy the QR code as text, for a device without a camera. The text is secret.",
                                     )
                                     .on_click(move |_, _, cx| {
-                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.clone()));
+                                        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_string()));
                                     }),
                                 )
                                 .child(

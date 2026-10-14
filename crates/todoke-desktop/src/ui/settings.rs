@@ -472,7 +472,10 @@ fn relay_row(
     palette: &'static Palette,
     cx: &mut Context<Todoke>,
 ) -> AnyElement {
-    let name = relay.name.clone();
+    // From a file the user chose, possibly from anywhere: escaped.
+    let raw = relay.name.clone();
+    let name = format::name(&relay.name);
+    let address = format::name(&relay.address);
     let pinned = if relay.pin.is_some() {
         "pinned key"
     } else {
@@ -482,7 +485,7 @@ fn relay_row(
         .id(gpui_kit::ElementId::Name(format!("relay-{index}").into()))
         .test_support()
         .role(Role::ListItem)
-        .aria_label(format!("{name}, {}, {pinned}", relay.address))
+        .aria_label(format!("{name}, {address}, {pinned}"))
         .flex()
         .items_center()
         .gap(px(space::M))
@@ -490,7 +493,7 @@ fn relay_row(
         .child(
             div()
                 .flex_1()
-                .child(muted(format!("{} · {pinned}", relay.address), palette)),
+                .child(muted(format!("{address} · {pinned}"), palette)),
         )
         .child(
             widgets::button(
@@ -500,7 +503,7 @@ fn relay_row(
             )
             .on_click(cx.listener(move |this, _, _, cx| {
                 if let Some(draft) = &mut this.draft {
-                    draft.relays.retain(|relay| relay.name != name);
+                    draft.relays.retain(|relay| relay.name != raw);
                 }
                 cx.notify();
             })),

@@ -97,7 +97,6 @@ pub fn bindings() -> Vec<KeyBinding> {
         KeyBinding::new(&format!("{m}-o"), ChooseFiles, Some(CONTEXT)),
         KeyBinding::new(&format!("{m}-shift-v"), SendClipboard, Some(CONTEXT)),
         KeyBinding::new(&format!("{m}-f"), FocusSearch, Some(CONTEXT)),
-        KeyBinding::new(&format!("{m}-enter"), AcceptAll, Some(SHEET)),
         KeyBinding::new("escape", CloseSheet, Some(SHEET)),
     ]
 }
@@ -181,6 +180,9 @@ pub struct Sheet {
     pub choosing: Option<BTreeSet<u32>>,
     /// Offers the user hid (they stay until they expire).
     pub hidden: BTreeSet<String>,
+    /// Bumped whenever the offer shown changes: an arming timer started
+    /// for an earlier offer arms nothing.
+    pub generation: u64,
 }
 
 /// The root view.
@@ -211,8 +213,13 @@ pub struct Todoke {
     confirm_clear: bool,
     /// The newest notice given a timer to go.
     noticed: u64,
-    /// Clipboard files to remove when their transfer is over.
+    /// Clipboard files of offered transfers, removed when no transfer
+    /// needs them any more.
     outbox: BTreeMap<String, PathBuf>,
+    /// Clipboard files whose offers still await the core's answer, with
+    /// how many: a file is removed only when none is pending and no
+    /// offered transfer uses it (one file can go to several contacts).
+    outbox_pending: BTreeMap<PathBuf, usize>,
     /// Unix seconds, ticking each second (countdowns).
     now: u64,
     /// The one-second tick (countdowns).
@@ -296,6 +303,7 @@ impl Todoke {
             confirm_clear: false,
             noticed: 0,
             outbox: BTreeMap::new(),
+            outbox_pending: BTreeMap::new(),
             now: unix_now(),
             ticker: None,
             loops: Vec::new(),
@@ -308,6 +316,17 @@ impl Todoke {
                     .await;
                 let ticked = this.update(cx, |app, cx| {
                     app.now = unix_now();
+                    // An expired offer is gone in the core (§3): its secret
+                    // goes from here too.
+                    if app
+                        .model
+                        .pairing
+                        .expires_at()
+                        .is_some_and(|at| at <= app.now)
+                    {
+                        app.model.pairing = Pairing::Idle;
+                        cx.notify();
+                    }
                     let counting =
                         !matches!(app.model.pairing, Pairing::Idle) || app.sheet.transfer.is_some();
                     if counting {
@@ -328,9 +347,12 @@ impl Todoke {
     pub fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model.connection = Connection::Starting;
         let paths = self.paths.clone();
+        // A core this app still holds must stop first: it holds the profile.
+        let old = self.backend.take();
         cx.spawn_in(window, async move |this, cx| {
             let started = cx
                 .background_spawn(async move {
+                    drop(old);
                     let prefs = prefs::load_prefs(&paths);
                     (prefs, backend::start(&paths))
                 })
@@ -427,10 +449,13 @@ impl Todoke {
             return;
         };
         if !backend.alive() {
-            if self.model.connection.is_up() {
-                self.model.connection = Connection::Stopped;
-                cx.notify();
+            // Stopped from outside (`todoke daemon stop`) or gone: a hosted
+            // core must stop too, off this thread (its threads are joined).
+            if let Some(old) = self.backend.take() {
+                cx.background_spawn(async move { drop(old) }).detach();
             }
+            self.model.connection = Connection::Stopped;
+            cx.notify();
             return;
         }
         if self.page == Page::Pairing && self.pair_tab == PairTab::EnterCode {
@@ -499,15 +524,9 @@ impl Todoke {
             self.sheet.transfer.clone_from(&front);
             self.sheet.armed = false;
             self.sheet.choosing = None;
+            self.sheet.generation += 1;
             if front.is_some() {
-                cx.spawn(async move |this, cx| {
-                    cx.background_executor().timer(tokens::DECISION_DELAY).await;
-                    let _ = this.update(cx, |app, cx| {
-                        app.sheet.armed = true;
-                        cx.notify();
-                    });
-                })
-                .detach();
+                self.arm_later(cx);
             }
         }
         let live: BTreeSet<&String> = self.model.offers.iter().map(|o| &o.transfer).collect();
@@ -525,9 +544,7 @@ impl Todoke {
             .collect();
         for id in finished {
             if let Some(file) = self.outbox.remove(&id) {
-                let state = self.paths.state_dir.clone();
-                cx.background_spawn(async move { outbox::remove(&state, &file) })
-                    .detach();
+                self.sweep_outbox(&file, cx);
             }
         }
         // Notices go after a while.
@@ -551,6 +568,33 @@ impl Todoke {
         }
     }
 
+    /// Arms the sheet's decisions after [`tokens::DECISION_DELAY`], if it
+    /// still shows the same offer then.
+    fn arm_later(&mut self, cx: &mut Context<Self>) {
+        let generation = self.sheet.generation;
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(tokens::DECISION_DELAY).await;
+            let _ = this.update(cx, |app, cx| {
+                if app.sheet.generation == generation {
+                    app.sheet.armed = true;
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// After a decision the core refused: the same offer may be decided
+    /// again (after the delay), unless another took its place.
+    fn rearm(&mut self, transfer: &str, response: &Response, cx: &mut Context<Self>) {
+        if matches!(response, Response::Error { .. })
+            && self.sheet.transfer.as_deref() == Some(transfer)
+        {
+            self.sheet.generation += 1;
+            self.arm_later(cx);
+        }
+    }
+
     /// Shows `page`.
     pub fn show(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         self.page = page;
@@ -559,6 +603,8 @@ impl Todoke {
             Page::History => {
                 self.fetch(&[Fetch::History], cx);
             }
+            // What is shown is what is stored, unless edits are pending.
+            Page::Settings if self.draft == self.saved => self.load_config(cx),
             Page::Pairing if self.pair_tab == PairTab::EnterCode => {
                 self.request(Request::Strangers, cx, |app, response, _| {
                     app.model.answer(response);
@@ -621,6 +667,9 @@ impl Todoke {
             self.ask_for_targets(cx);
             return;
         }
+        if let Some(file) = clipboard {
+            *self.outbox_pending.entry(file.to_path_buf()).or_default() += targets.len();
+        }
         for contact in targets {
             let contact = contact.clone();
             let clipboard = clipboard.map(std::path::Path::to_path_buf);
@@ -628,24 +677,54 @@ impl Todoke {
                 contact: contact.clone(),
                 paths: paths.to_vec(),
             };
-            self.request(request, cx, move |app, response, cx| match response {
-                Response::Offered { transfer, skipped } => {
-                    if let Some(file) = clipboard {
-                        app.outbox.insert(transfer, file);
+            self.request(request, cx, move |app, response, cx| {
+                if let Some(file) = &clipboard {
+                    if let Some(pending) = app.outbox_pending.get_mut(file) {
+                        *pending = pending.saturating_sub(1);
                     }
-                    let mut text = format!("Offered to {}", format::device(&contact));
-                    if skipped > 0 {
-                        let _ = write!(
-                            text,
-                            " ({} left out: links, special files, or names other systems cannot use)",
-                            format::plural(skipped, "item", "items")
-                        );
+                    if let Response::Offered { transfer, .. } = &response {
+                        app.outbox.insert(transfer.clone(), file.clone());
                     }
-                    app.model.notify(Level::Info, text);
-                    app.fetch(&[Fetch::Transfers], cx);
+                    app.sweep_outbox(file, cx);
                 }
-                other => app.model.answer(other),
+                app.offered(&contact, response, cx);
             });
+        }
+    }
+
+    /// Removes the clipboard file `file` once no offer is pending for it
+    /// and no offered transfer uses it.
+    fn sweep_outbox(&mut self, file: &std::path::Path, cx: &mut Context<Self>) {
+        if self
+            .outbox_pending
+            .get(file)
+            .is_some_and(|pending| *pending > 0)
+            || self.outbox.values().any(|used| used == file)
+        {
+            return;
+        }
+        self.outbox_pending.remove(file);
+        let (state, file) = (self.paths.state_dir.clone(), file.to_path_buf());
+        cx.background_spawn(async move { outbox::remove(&state, &file) })
+            .detach();
+    }
+
+    /// The core's answer to an offer to `contact`.
+    fn offered(&mut self, contact: &str, response: Response, cx: &mut Context<Self>) {
+        match response {
+            Response::Offered { skipped, .. } => {
+                let mut text = format!("Offered to {}", format::device(contact));
+                if skipped > 0 {
+                    let _ = write!(
+                        text,
+                        " ({} left out: links, special files, or names other systems cannot use)",
+                        format::plural(skipped, "item", "items")
+                    );
+                }
+                self.model.notify(Level::Info, text);
+                self.fetch(&[Fetch::Transfers], cx);
+            }
+            other => self.model.answer(other),
         }
     }
 
@@ -769,10 +848,12 @@ impl Todoke {
             (None, None) => None,
         };
         self.sheet.armed = false;
+        let shown = transfer.clone();
         self.request(
             Request::Accept { transfer, files },
             cx,
-            |app, response, cx| {
+            move |app, response, cx| {
+                app.rearm(&shown, &response, cx);
                 app.model.answer(response);
                 app.fetch(&[Fetch::Offers, Fetch::Transfers], cx);
             },
@@ -788,10 +869,16 @@ impl Todoke {
             return;
         }
         self.sheet.armed = false;
-        self.request(Request::Decline { transfer }, cx, |app, response, cx| {
-            app.model.answer(response);
-            app.fetch(&[Fetch::Offers, Fetch::Transfers], cx);
-        });
+        let shown = transfer.clone();
+        self.request(
+            Request::Decline { transfer },
+            cx,
+            move |app, response, cx| {
+                app.rearm(&shown, &response, cx);
+                app.model.answer(response);
+                app.fetch(&[Fetch::Offers, Fetch::Transfers], cx);
+            },
+        );
     }
 
     /// Cancels a transfer.
@@ -893,19 +980,49 @@ impl Todoke {
             move |app, response, cx| {
                 if matches!(response, Response::Done) {
                     app.fetch(&[Fetch::Status], cx);
-                    for config in [&mut app.saved, &mut app.draft].into_iter().flatten() {
-                        config.hidden = hidden;
-                    }
-                    if let Some(saved) = app.saved.clone() {
-                        let paths = app.paths.clone();
-                        cx.background_spawn(async move { prefs::save_config(&paths, &saved) })
-                            .detach();
-                    }
+                    app.keep_hidden(hidden, cx);
                 } else {
                     app.model.answer(response);
                 }
             },
         );
+    }
+
+    /// Stores the visibility for the next start: `config.json` is read
+    /// again first, so changes made meanwhile (by the CLI, say) are kept.
+    fn keep_hidden(&mut self, hidden: bool, cx: &mut Context<Self>) {
+        let paths = self.paths.clone();
+        cx.spawn(async move |this, cx| {
+            let stored = cx
+                .background_spawn(async move {
+                    let mut config = paths.config()?;
+                    config.hidden = hidden;
+                    prefs::save_config(&paths, &config)?;
+                    std::io::Result::Ok(config)
+                })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                match stored {
+                    Ok(config) => {
+                        let unchanged = app.draft == app.saved;
+                        app.saved = Some(config.clone());
+                        if unchanged {
+                            app.draft = Some(config);
+                        } else if let Some(draft) = &mut app.draft {
+                            draft.hidden = hidden;
+                        }
+                    }
+                    Err(error) => app.model.notify(
+                        Level::Error,
+                        format!(
+                            "Visibility changed for now, but could not be kept for the next start: {error}"
+                        ),
+                    ),
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Writes the edited configuration and restarts the core with it.
