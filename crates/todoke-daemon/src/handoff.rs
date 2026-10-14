@@ -454,7 +454,11 @@ mod tests {
                 silent.push(connection);
             }
         }
-        assert!(silent.len() >= MAX_CONNECTIONS, "{} connected", silent.len());
+        assert!(
+            silent.len() >= MAX_CONNECTIONS,
+            "{} connected",
+            silent.len()
+        );
         let started = std::time::Instant::now();
         let limit = HELLO_DEADLINE + Duration::from_secs(3);
         // While the silent clients hold every slot a request is closed
