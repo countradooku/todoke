@@ -325,6 +325,66 @@ impl Profile {
     }
 }
 
+/// The read-only part of a profile: everything a session borrows for its
+/// whole life (the keys sign Accepts and receipts, §7.3, §7.7).
+pub struct Identity {
+    keys: Keys,
+    device: KeyId,
+    binding: VerifiedDeviceBinding,
+    noise: NoiseStaticKey,
+}
+
+impl fmt::Debug for Identity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Identity").finish_non_exhaustive()
+    }
+}
+
+impl Identity {
+    /// The local identity for sessions, valid at `now`.
+    ///
+    /// # Errors
+    ///
+    /// [`ProfileError::Crypto`] if the binding is not valid at `now`.
+    pub fn local(&self, now: UnixTime) -> Result<LocalIdentity<'_, Keys>, ProfileError> {
+        LocalIdentity::new(&self.keys, self.device, &self.binding, &self.noise, now).map_err(crypto)
+    }
+
+    /// The key store.
+    #[must_use]
+    pub const fn keys(&self) -> &Keys {
+        &self.keys
+    }
+
+    /// The device signing key.
+    #[must_use]
+    pub const fn device_key(&self) -> KeyId {
+        self.device
+    }
+
+    /// The device binding.
+    #[must_use]
+    pub const fn binding(&self) -> &VerifiedDeviceBinding {
+        &self.binding
+    }
+}
+
+impl Profile {
+    /// Splits the profile into its read-only identity and its contacts.
+    #[must_use]
+    pub fn into_parts(self) -> (Identity, Contacts) {
+        (
+            Identity {
+                keys: self.keys,
+                device: self.device,
+                binding: self.binding,
+                noise: self.noise,
+            },
+            self.contacts,
+        )
+    }
+}
+
 /// A new identity: a person root and device key in the key store, a Noise
 /// static key, an unused ML-KEM credential, and the first binding.
 fn create(keys: &mut Keys, now: UnixTime) -> Result<DeviceRecord, ProfileError> {

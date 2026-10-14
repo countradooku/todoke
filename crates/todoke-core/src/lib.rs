@@ -12,7 +12,11 @@
 
 #![forbid(unsafe_code)]
 
+pub mod api;
+pub mod config;
 pub mod profile;
+#[cfg(not(target_family = "wasm"))]
+pub mod send;
 pub mod storage_key;
 
 pub use profile::{Profile, ProfileError};

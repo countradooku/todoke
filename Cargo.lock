@@ -1226,6 +1226,7 @@ dependencies = [
  "todoke-transfer",
  "todoke-transport",
  "tokio",
+ "unicode-normalization",
  "zeroize",
 ]
 

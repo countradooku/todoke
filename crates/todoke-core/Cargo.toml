@@ -31,6 +31,8 @@ libcrux-ml-kem.workspace = true
 # Command, event, and configuration types cross the daemon's local IPC.
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json.workspace = true
+# NFC names in offers (§7.1).
+unicode-normalization.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
