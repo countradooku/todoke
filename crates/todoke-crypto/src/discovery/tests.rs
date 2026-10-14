@@ -87,6 +87,8 @@ fn table_matches_the_committed_chain() -> TestResult {
                     .map(str::to_owned)
             );
             assert_eq!(table.locator(&key), Some(locator));
+            let rendezvous = hex_at::<32>(&chain, &at("rendezvous_token_hex"))?;
+            assert_eq!(table.rendezvous_token(&key).as_deref(), Some(&rendezvous));
         }
     }
     Ok(())

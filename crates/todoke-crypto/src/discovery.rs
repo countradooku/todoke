@@ -123,10 +123,14 @@ struct ContactEntry {
     tokens: Vec<(Epoch, [u8; DISCOVERY_TOKEN_LEN])>,
     /// `(epoch, locator)` for the same epochs.
     locators: Vec<(Epoch, [u8; LOCATOR_LEN])>,
+    /// The rendezvous token of the table's own epoch (§10).
+    rendezvous: Zeroizing<[u8; 32]>,
 }
 
 /// Discovery tokens and contact locators of every available contact, for
-/// one local epoch and its neighbours (§9). Holds no key material.
+/// one local epoch and its neighbours (§9), and each contact's rendezvous
+/// token for that epoch (§10). Holds no key material: the tokens are what
+/// relays and the network may see.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DiscoveryTable {
     epoch: Epoch,
@@ -155,6 +159,7 @@ impl DiscoveryTable {
                 generation,
                 tokens: Vec::with_capacity(3),
                 locators: Vec::with_capacity(3),
+                rendezvous: keys.rendezvous_token(epoch)?,
             };
             for at in epoch.adjacent() {
                 let token = keys.token(at)?;
@@ -170,6 +175,16 @@ impl DiscoveryTable {
             table.contacts.insert(device, entry);
         }
         Ok(table)
+    }
+
+    /// `device`'s rendezvous token for the table's epoch (§9, §10): what
+    /// both devices register with at a relay to meet. Linkable within the
+    /// epoch, and seen by the relay; it authenticates nothing.
+    #[must_use]
+    pub fn rendezvous_token(&self, device: &Ed25519PublicKey) -> Option<Zeroizing<[u8; 32]>> {
+        self.contacts
+            .get(device)
+            .map(|entry| entry.rendezvous.clone())
     }
 
     /// The local epoch the table was built for.
