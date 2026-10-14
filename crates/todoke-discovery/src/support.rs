@@ -101,7 +101,8 @@ pub(crate) async fn paired() -> AnyResult<(Device, Device)> {
 async fn pair() -> AnyResult<(Device, Device)> {
     let mut alice = Device::new(0x41)?;
     let mut bob = Device::new(0x42)?;
-    pair_into(&mut alice, &mut bob).await?;
+    // Boxed: a handshake's state is large, and every test awaits this.
+    Box::pin(pair_into(&mut alice, &mut bob)).await?;
     Ok((alice, bob))
 }
 
@@ -114,7 +115,7 @@ pub(crate) async fn with_contacts(count: u8) -> AnyResult<(Device, Vec<Device>)>
         let mut contacts = Vec::new();
         for n in 0..count {
             let mut contact = Device::new(0x50_u8.wrapping_add(n))?;
-            pair_into(&mut alice, &mut contact).await?;
+            Box::pin(pair_into(&mut alice, &mut contact)).await?;
             contacts.push(contact);
         }
         Ok((alice, contacts))
