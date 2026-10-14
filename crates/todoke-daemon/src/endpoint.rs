@@ -24,6 +24,9 @@ pub(crate) enum Proof {
 pub(crate) struct Listener {
     #[cfg(unix)]
     unix: tokio::net::UnixListener,
+    /// The user ID every connection's peer must have (this process's).
+    #[cfg(unix)]
+    owner: u32,
     #[cfg(not(unix))]
     tcp: tokio::net::TcpListener,
     #[cfg(not(unix))]
@@ -61,6 +64,7 @@ impl Listener {
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
             Ok(Self {
                 unix,
+                owner: rustix::process::getuid().as_raw(),
                 path: path.to_owned(),
             })
         }
@@ -94,8 +98,7 @@ impl Listener {
             #[cfg(unix)]
             {
                 let (stream, _) = self.unix.accept().await?;
-                let ours = rustix::process::getuid().as_raw();
-                if stream.peer_cred().is_ok_and(|cred| cred.uid() == ours) {
+                if peer_is(&stream, self.owner) {
                     return Ok((Box::new(stream), Proof::PeerChecked));
                 }
             }
@@ -144,14 +147,7 @@ impl Drop for Listener {
 pub(crate) async fn connect(path: &Path) -> std::io::Result<(Box<dyn Stream>, Option<String>)> {
     #[cfg(unix)]
     {
-        let stream = tokio::net::UnixStream::connect(path).await?;
-        // Only this user's daemon: anything else listening there would be
-        // handed pairing codes and paths.
-        let ours = rustix::process::getuid().as_raw();
-        if !stream.peer_cred().is_ok_and(|cred| cred.uid() == ours) {
-            return Err(std::io::ErrorKind::PermissionDenied.into());
-        }
-        Ok((Box::new(stream), None))
+        connect_to(path, rustix::process::getuid().as_raw()).await
     }
     #[cfg(not(unix))]
     {
@@ -167,6 +163,24 @@ pub(crate) async fn connect(path: &Path) -> std::io::Result<(Box<dyn Stream>, Op
     }
 }
 
+/// Connects to the Unix socket at `path`, refusing it unless the process
+/// listening runs as `owner`: anything else listening there would be
+/// handed pairing codes and paths.
+#[cfg(unix)]
+async fn connect_to(path: &Path, owner: u32) -> std::io::Result<(Box<dyn Stream>, Option<String>)> {
+    let stream = tokio::net::UnixStream::connect(path).await?;
+    if !peer_is(&stream, owner) {
+        return Err(std::io::ErrorKind::PermissionDenied.into());
+    }
+    Ok((Box::new(stream), None))
+}
+
+/// Whether the process at the other end of `stream` runs as `uid`.
+#[cfg(unix)]
+fn peer_is(stream: &tokio::net::UnixStream, uid: u32) -> bool {
+    stream.peer_cred().is_ok_and(|cred| cred.uid() == uid)
+}
+
 /// Whether a client's hello `token` satisfies `proof` (constant time).
 pub(crate) fn check(proof: &Proof, token: Option<&str>) -> bool {
     match (proof, token) {
@@ -178,3 +192,6 @@ pub(crate) fn check(proof: &Proof, token: Option<&str>) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests;

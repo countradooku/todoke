@@ -93,3 +93,53 @@ fn hello_tokens_never_reach_debug_output() {
     };
     assert!(!format!("{hello:?}").contains("secret-token-value"));
 }
+
+/// Secrets inside composed messages stay out of debug output too.
+#[test]
+fn nested_secrets_never_reach_debug_output() {
+    use todoke_core::api::{Request, Response};
+    let code = "0123456789";
+    let qr = "TODOKE:1:SECRET-PAYLOAD";
+    let shown = [
+        format!(
+            "{:?}",
+            ClientMessage::Request {
+                id: 1,
+                request: Request::PairEnterCode {
+                    code: code.into(),
+                    stranger: "aa".into(),
+                },
+            }
+        ),
+        format!(
+            "{:?}",
+            ClientMessage::Request {
+                id: 2,
+                request: Request::PairScanQr { text: qr.into() },
+            }
+        ),
+        format!(
+            "{:?}",
+            ServerMessage::Response {
+                id: 3,
+                response: Response::Qr {
+                    text: qr.into(),
+                    expires_at: 1,
+                },
+            }
+        ),
+        format!(
+            "{:?}",
+            ServerMessage::Response {
+                id: 4,
+                response: Response::Code {
+                    code: code.into(),
+                    expires_at: 1,
+                },
+            }
+        ),
+    ];
+    for text in shown {
+        assert!(!text.contains(code) && !text.contains("SECRET"), "{text}");
+    }
+}

@@ -241,6 +241,29 @@ mod tests {
         assert_eq!(spelled.endpoint(), long_a.endpoint());
     }
 
+    /// A runtime directory others can enter (a shared `/tmp`), or a file,
+    /// is never used for the socket.
+    #[cfg(unix)]
+    #[test]
+    fn only_private_directories_hold_a_socket() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut random = [0; 8];
+        getrandom::fill(&mut random)?;
+        let dir = std::env::temp_dir().join(format!("todoke-priv-{}", u64::from_le_bytes(random)));
+        std::fs::create_dir(&dir)?;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        assert!(private_to_us(&dir));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))?;
+        assert!(!private_to_us(&dir));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+        let file = dir.join("file");
+        std::fs::write(&file, b"")?;
+        assert!(!private_to_us(&file));
+        assert!(!private_to_us(Path::new("/tmp")));
+        std::fs::remove_dir_all(&dir)?;
+        Ok(())
+    }
+
     #[test]
     fn platform_directories_are_under_home() -> std::io::Result<()> {
         let home = Path::new("/home/me");

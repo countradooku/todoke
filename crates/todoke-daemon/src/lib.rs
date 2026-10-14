@@ -166,3 +166,20 @@ fn raise_open_file_limit() {
         }
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    /// The soft open-file limit rises toward the hard limit (launchd starts
+    /// agents at 256, too few for one large folder).
+    #[test]
+    fn the_open_file_limit_is_raised() {
+        use rustix::process::{Resource, getrlimit};
+        let before = getrlimit(Resource::Nofile);
+        super::raise_open_file_limit();
+        let after = getrlimit(Resource::Nofile);
+        let current = |limit: &rustix::process::Rlimit| limit.current.unwrap_or(u64::MAX);
+        assert!(current(&after) >= current(&before));
+        let hard = before.maximum.unwrap_or(u64::MAX);
+        assert!(current(&after) >= hard.min(4096), "{after:?}");
+    }
+}

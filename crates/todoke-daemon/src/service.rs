@@ -45,11 +45,15 @@ impl Kind {
     }
 }
 
-/// The definition of `kind` that runs `exe daemon run`.
+/// The definition of `kind` that runs `exe daemon run`; `None` for a path
+/// no format can hold faithfully (not Unicode, or with control
+/// characters, which could start a new unit line or are invalid XML).
 #[must_use]
-pub fn definition(kind: Kind, exe: &Path) -> String {
-    let exe = exe.to_string_lossy();
-    match kind {
+pub fn definition(kind: Kind, exe: &Path) -> Option<String> {
+    let exe = exe
+        .to_str()
+        .filter(|exe| !exe.chars().any(char::is_control))?;
+    Some(match kind {
         Kind::Systemd => format!(
             "[Unit]\n\
              Description=todoke file transfer daemon\n\
@@ -62,7 +66,7 @@ pub fn definition(kind: Kind, exe: &Path) -> String {
              \n\
              [Install]\n\
              WantedBy=default.target\n",
-            systemd_quote(&exe)
+            systemd_quote(exe)
         ),
         Kind::Launchd => format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -77,7 +81,7 @@ pub fn definition(kind: Kind, exe: &Path) -> String {
              \t<key>ProcessType</key>\n\t<string>Background</string>\n\
              </dict>\n\
              </plist>\n",
-            xml_escape(&exe)
+            xml_escape(exe)
         ),
         Kind::WindowsTask => format!(
             "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
@@ -87,9 +91,9 @@ pub fn definition(kind: Kind, exe: &Path) -> String {
              \x20 <Settings>\n    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>\n    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>\n    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>\n    <RestartOnFailure>\n      <Interval>PT1M</Interval>\n      <Count>3</Count>\n    </RestartOnFailure>\n  </Settings>\n\
              \x20 <Actions Context=\"Author\">\n    <Exec>\n      <Command>{}</Command>\n      <Arguments>daemon run</Arguments>\n    </Exec>\n  </Actions>\n\
              </Task>\n",
-            xml_escape(&exe)
+            xml_escape(exe)
         ),
-    }
+    })
 }
 
 /// Escapes text for an XML element.
@@ -135,16 +139,17 @@ mod tests {
     #[test]
     fn definitions_run_the_daemon_as_the_user() {
         let exe = Path::new("/opt/todoke/bin/todoke");
-        let systemd = definition(Kind::Systemd, exe);
+        let systemd = definition(Kind::Systemd, exe).unwrap_or_default();
         assert!(systemd.contains("ExecStart=\"/opt/todoke/bin/todoke\" daemon run"));
         assert!(!systemd.contains("User=root"));
-        let launchd = definition(Kind::Launchd, exe);
+        let launchd = definition(Kind::Launchd, exe).unwrap_or_default();
         assert!(launchd.contains("<string>/opt/todoke/bin/todoke</string>"));
         assert!(launchd.contains("org.todoke.daemon"));
         let windows = definition(
             Kind::WindowsTask,
             Path::new(r"C:\Program Files\todoke\todoke.exe"),
-        );
+        )
+        .unwrap_or_default();
         assert!(windows.contains(r"<Command>C:\Program Files\todoke\todoke.exe</Command>"));
         assert!(windows.contains("<RunLevel>LeastPrivilege</RunLevel>"));
     }
@@ -153,16 +158,33 @@ mod tests {
     #[test]
     fn hostile_paths_are_escaped() {
         let exe = Path::new("/tmp/a\"b<c>&$HOME%n\\x");
-        let systemd = definition(Kind::Systemd, exe);
+        let systemd = definition(Kind::Systemd, exe).unwrap_or_default();
         assert!(
             systemd.contains(r#"ExecStart="/tmp/a\"b<c>&$$HOME%%n\\x" daemon run"#),
             "{systemd}"
         );
-        let launchd = definition(Kind::Launchd, exe);
+        let windows = definition(Kind::WindowsTask, exe).unwrap_or_default();
+        assert!(
+            windows.contains("<Command>/tmp/a&quot;b&lt;c&gt;&amp;$HOME%n\\x</Command>"),
+            "{windows}"
+        );
+        let launchd = definition(Kind::Launchd, exe).unwrap_or_default();
         assert!(
             launchd.contains("/tmp/a&quot;b&lt;c&gt;&amp;$HOME%n\\x"),
             "{launchd}"
         );
         assert!(!launchd.contains("<c>"));
+        // A line break cannot start a unit line of its own.
+        for kind in [Kind::Systemd, Kind::Launchd, Kind::WindowsTask] {
+            assert_eq!(definition(kind, Path::new("/a\nExecStartPre=/bin/x")), None);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paths_that_are_not_unicode_are_refused() {
+        use std::os::unix::ffi::OsStrExt as _;
+        let exe = Path::new(std::ffi::OsStr::from_bytes(b"/opt/\xff/todoke"));
+        assert_eq!(definition(Kind::Systemd, exe), None);
     }
 }
