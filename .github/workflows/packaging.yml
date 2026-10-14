@@ -268,7 +268,6 @@ jobs:
           for size in 16 24 32 48 64 128 256 512; do
             install -Dm644 "packaging/icons/todoke-$size.png" "$root/share/icons/hicolor/${size}x${size}/apps/org.todoke.todoke.png"
           done
-          install -Dm644 packaging/icons/todoke.svg "$root/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg"
           appstreamcli compose --no-net --print-report=full --origin=org.todoke.todoke \
             --result-root="$root" --prefix=/ --components=org.todoke.todoke "$root"
       - name: Generate the offline cargo sources

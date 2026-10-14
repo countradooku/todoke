@@ -45,12 +45,13 @@ modules:
       - install -Dm755 target/release/todoke /app/bin/todoke
       - install -Dm644 packaging/linux/org.todoke.todoke.desktop /app/share/applications/org.todoke.todoke.desktop
       - install -Dm644 packaging/linux/org.todoke.todoke.metainfo.xml /app/share/metainfo/org.todoke.todoke.metainfo.xml
+      # PNGs only: the freedesktop runtime cannot read SVG, and its
+      # AppStream compose refuses an icon it cannot read.
       - |
         for size in 16 24 32 48 64 128 256 512; do
           install -Dm644 "packaging/icons/todoke-$size.png" \
             "/app/share/icons/hicolor/${size}x${size}/apps/org.todoke.todoke.png"
         done
-      - install -Dm644 packaging/icons/todoke.svg /app/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg
       - install -Dm644 -t /app/share/licenses/org.todoke.todoke LICENSE-APACHE LICENSE-MIT
     sources:
       - type: dir
