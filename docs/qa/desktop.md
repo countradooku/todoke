@@ -140,3 +140,44 @@ Check with VoiceOver (macOS), Narrator and NVDA (Windows), and Orca (Linux):
       smooth (no dropped frames visible in the OS frame-rate overlay).
 - [ ] The window keeps its layout at the minimum size (720 × 520) and at
       200% scaling.
+
+## This computer (ADR 0011)
+
+Use an installed package (not `cargo run`) for these, on each OS.
+
+- [ ] Settings → Security names what keeps the storage key (Keychain or
+      Secure Enclave, DPAPI or TPM, Secret Service); `todoke status` says
+      the same. A profile from before this release migrates: the key file
+      is gone afterwards and the history still opens.
+- [ ] Launching the app again, or `todoke-desktop --send FILE`, brings the
+      running window forward instead of opening a second one; `--send`
+      opens "Send to…" with FILE listed.
+- [ ] "Send to…": Send is disabled for a moment after it opens; Escape
+      and Cancel send nothing; the receive sheet goes over it when an offer
+      arrives, and Escape hides the sheet first.
+- [ ] Tray / menu bar: Open, Send clipboard…, Quit work; closing the
+      window keeps the tray item, and an offer then shows a system
+      notification with no file name; clicking it shows the window with
+      the sheet. On GNOME without the AppIndicator extension there is no
+      tray item, and closing quits.
+- [ ] Settings → This computer → Start todoke when you log in: after
+      logging out and in, todoke runs with only the tray item (macOS: it
+      is listed in System Settings → General → Login Items; Windows: in
+      Task Manager → Startup apps; Flatpak: the desktop asked first).
+- [ ] The global shortcut (⌃⌥⌘T, Ctrl+Alt+Shift+T) with text copied
+      opens "Send to…" with its start shown; on Linux X11, with text
+      selected (not copied), the selection is offered. On Wayland,
+      switching it on asks the desktop.
+- [ ] macOS: Finder → right-click files → Quick Actions → Send with todoke;
+      selected text in TextEdit → Services → Send text with todoke; Share →
+      todoke (signed builds only).
+- [ ] Windows 11: right-click files → Send with todoke at the top of the
+      menu (MSIX), and in Share; the zip install: Settings → This computer
+      adds it under Show more options, and selecting several files gathers
+      them in one "Send to…".
+- [ ] Linux: Dolphin, Nemo, and Nautilus (Scripts with the AppImage, the
+      menu itself with a package) send the selection; Flatpak: Open With →
+      todoke.
+- [ ] Nothing above asked for an administrator password (installing a
+      system package aside).
+

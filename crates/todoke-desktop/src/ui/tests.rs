@@ -1408,3 +1408,38 @@ fn the_background_notifies_offers_and_endings(cx: &mut TestAppContext) {
         ["transfer-tn"]
     );
 }
+
+/// Explorer starts one process per selected file: their paths gather in
+/// the open picker, each arrival re-arming Send.
+#[gpui_kit::test]
+fn handed_over_paths_gather_in_one_picker(cx: &mut TestAppContext) {
+    let home = Home::new("gather");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    let send = |path: &str| todoke_daemon::handoff::Handoff::Send {
+        paths: vec![PathBuf::from(path)],
+    };
+    view.update_in(cx, |app, window, cx| app.handoff(send("/tmp/a"), window, cx));
+    cx.run_until_parked();
+    pick(cx, NEAR);
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.update_in(cx, |app, window, cx| {
+        app.handoff(send("/tmp/b"), window, cx);
+        app.handoff(send("/tmp/a"), window, cx);
+    });
+    cx.run_until_parked();
+    // The new arrival disarmed Send; the choice of contact stayed.
+    click(cx, "picker-send");
+    assert_eq!(sends(&mock), []);
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    click(cx, "picker-send");
+    assert_eq!(
+        sends(&mock),
+        [(
+            NEAR.to_owned(),
+            vec![PathBuf::from("/tmp/a"), PathBuf::from("/tmp/b")]
+        )]
+    );
+}
