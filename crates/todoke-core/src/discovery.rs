@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use todoke_crypto::discovery::DiscoveryTable;
 use todoke_discovery::{Directory, Mdns, Plan};
+use todoke_proto::discovery::InstanceLabel;
 use todoke_transport::LanPolicy;
 
 /// The discovery backend.
@@ -55,6 +56,9 @@ pub(crate) struct Folder {
     port: u16,
     policy: LanPolicy,
     written: Vec<PathBuf>,
+    /// The labels found by the last drain: a record that disappears is a
+    /// goodbye, as in mDNS.
+    present: Vec<InstanceLabel>,
 }
 
 impl Folder {
@@ -66,6 +70,7 @@ impl Folder {
             port,
             policy,
             written: Vec::new(),
+            present: Vec::new(),
         })
     }
 
@@ -97,10 +102,11 @@ impl Folder {
         self.written = wanted.into_iter().map(|(path, _)| path).collect();
     }
 
-    fn drain(&self, directory: &mut Directory, table: &DiscoveryTable, now: Duration) {
+    fn drain(&mut self, directory: &mut Directory, table: &DiscoveryTable, now: Duration) {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
             return;
         };
+        let mut present = Vec::new();
         for entry in entries.filter_map(Result::ok).take(256) {
             let path = entry.path();
             let Some(label) = path
@@ -128,9 +134,14 @@ impl Folder {
                 [("v1", Some(value.as_bytes()))],
                 self.policy,
             ) {
+                present.push(*sighting.label());
                 directory.observe(sighting, table, now);
             }
         }
+        for gone in self.present.iter().filter(|label| !present.contains(label)) {
+            directory.remove(gone);
+        }
+        self.present = present;
     }
 }
 

@@ -28,7 +28,10 @@ pub enum StartError {
     Disabled,
     /// The identity could not be opened.
     Profile(ProfileError),
-    /// The quarantine, downloads directory, or listener could not be used.
+    /// The quarantine (the receive state) could not be opened: in use by
+    /// another instance, damaged, or unavailable.
+    Quarantine(String),
+    /// The downloads directory or listener could not be used.
     Io(std::io::ErrorKind),
     /// The core thread could not start or stopped at once.
     Thread,
@@ -41,6 +44,7 @@ impl fmt::Display for StartError {
                 "sessions are disabled in this build: suite 0x0001 is not production-enabled (PROTOCOL §16)",
             ),
             Self::Profile(error) => write!(f, "{error}"),
+            Self::Quarantine(error) => write!(f, "{error}"),
             Self::Io(kind) => write!(f, "{kind}"),
             Self::Thread => f.write_str("the core thread failed"),
         }

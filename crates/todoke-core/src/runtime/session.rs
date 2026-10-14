@@ -5,6 +5,7 @@
 use core::time::Duration;
 use std::rc::Rc;
 
+use todoke_crypto::identity::Ed25519PublicKey;
 use todoke_proto::transfer::{CancelReason, RejectReason, TransferId};
 use todoke_transfer::{
     Clock, Direction, EngineConfig, OutgoingOffer, TransferEngine, TransferEvent, pump,
@@ -103,11 +104,16 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
         if pumped.is_err() {
             break;
         }
-        let busy = state
-            .transfers
-            .borrow()
-            .values()
-            .any(|record| record.peer == peer && !record.state.is_finished());
+        let busy = state.transfers.borrow().values().any(|record| {
+            record.peer == peer
+                && matches!(
+                    record.state,
+                    TransferState::Offered
+                        | TransferState::AwaitingDecision
+                        | TransferState::Accepted
+                        | TransferState::Transferring
+                )
+        });
         if !busy
             && waiting.is_empty()
             && prepared.is_empty()
@@ -117,9 +123,37 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
             break;
         }
     }
-    // Whatever was not finished waits for the next session.
+    finish(&state, peer, engine, &mut inbox, prepared, waiting);
+    drop(established);
+}
+
+/// Puts whatever was not finished back in `peer`'s queue for the next
+/// session, offers sent to this session after it stopped reading
+/// included. Nothing here awaits, so the queue is back in place before
+/// anyone looks for it.
+fn finish(
+    state: &State,
+    peer: Ed25519PublicKey,
+    mut engine: Engine<'_>,
+    inbox: &mut mpsc::Receiver<SessionCommand>,
+    mut prepared: Vec<crate::send::Prepared>,
+    waiting: Vec<OutgoingOffer>,
+) {
+    inbox.close();
+    while let Ok(command) = inbox.try_recv() {
+        match command {
+            SessionCommand::Offer(mut new) => {
+                new.install(engine.source_mut());
+                prepared.push(*new);
+            }
+            SessionCommand::Reply(_, reply) => {
+                let _ = reply.send(Response::error(ErrorCode::Unreachable, "the session ended"));
+            }
+            _ => {}
+        }
+    }
     while let Some(event) = engine.pop_event() {
-        report(&state, peer, event);
+        report(state, peer, event);
     }
     state.interrupt(&peer);
     let mut offers = engine.take_resumable();
@@ -134,7 +168,6 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
             offers,
         },
     );
-    drop(established);
 }
 
 fn offer_or_report(state: &State, engine: &mut Engine<'_>, offer: OutgoingOffer, now: Duration) {
@@ -180,7 +213,7 @@ fn offer_new(
             state,
             &id,
             TransferState::Failed,
-            "the receiver cannot take a transfer this large",
+            "the receiver's limits do not allow this transfer",
         ),
     }
 }
@@ -198,7 +231,9 @@ fn apply(
         other => (other, None),
     };
     let outcome = match command {
-        SessionCommand::Offer(prepared) => {
+        SessionCommand::Offer(mut prepared) => {
+            // This engine's source serves its files from now on.
+            prepared.install(engine.source_mut());
             if ready {
                 offer_new(state, engine, &prepared, now);
             } else {
@@ -222,23 +257,28 @@ fn apply(
     }
 }
 
-/// Every file of an offered transfer (for "accept all").
+/// What "accept" without a selection accepts: the earlier selection of a
+/// resumed transfer (which must be repeated exactly, §7.5), otherwise
+/// every file.
 fn selectable(state: &State, id: &TransferId) -> Vec<u32> {
     state
         .received
         .borrow()
         .get(id)
         .map_or_else(Vec::new, |offer| {
-            offer
-                .entries
-                .iter()
-                .filter(|entry| !entry.directory)
-                .map(|entry| entry.id)
-                .collect()
+            offer.resume.clone().unwrap_or_else(|| {
+                offer
+                    .entries
+                    .iter()
+                    .filter(|entry| !entry.directory)
+                    .map(|entry| entry.id)
+                    .collect()
+            })
         })
 }
 
-fn end(state: &State, id: &TransferId, reason: TransferState, message: &str) {
+/// Ends `id` for good with `reason`, telling the user.
+pub(super) fn end(state: &State, id: &TransferId, reason: TransferState, message: &str) {
     state.set_state(id, reason);
     if let Some(record) = state.transfers.borrow_mut().get_mut(id) {
         record.detail = Some(message.to_owned());
@@ -257,11 +297,7 @@ fn way(direction: Direction) -> Way {
     }
 }
 
-fn offer_received(
-    state: &State,
-    peer: todoke_crypto::identity::Ed25519PublicKey,
-    view: &todoke_transfer::OfferView,
-) {
+fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer::OfferView) {
     state.remember(
         view.transfer_id,
         TransferRecord {
@@ -298,7 +334,7 @@ fn offer_received(
 }
 
 /// Mirrors an engine event into the core's records and events.
-fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event: TransferEvent) {
+fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
     match event {
         TransferEvent::OfferReceived(view) => offer_received(state, peer, &view),
         TransferEvent::Accepted {
@@ -343,13 +379,29 @@ fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event:
                 "no signed receipt arrived",
             );
         }
-        TransferEvent::Rejected { transfer_id, .. } => {
-            end(
-                state,
-                &transfer_id,
-                TransferState::Rejected,
-                "the receiver declined",
-            );
+        TransferEvent::Rejected {
+            transfer_id,
+            reason,
+            ..
+        } => {
+            let why = match reason {
+                RejectReason::Declined => "declined",
+                RejectReason::Quota => "the receiver's storage quota would be exceeded",
+                RejectReason::UnsupportedDestination => {
+                    "the receiver's destination cannot hold these files"
+                }
+                RejectReason::Expired => "no decision was made in time",
+            };
+            end(state, &transfer_id, TransferState::Rejected, why);
+        }
+        TransferEvent::Expired { transfer_id, .. } => {
+            state.set_state(&transfer_id, TransferState::Interrupted);
+            state.emit(Event::Ended {
+                transfer: hex(transfer_id),
+                reason: TransferState::Interrupted,
+                message: "the permission expired; the transfer can resume with a new accept"
+                    .to_owned(),
+            });
         }
         TransferEvent::Cancelled { transfer_id, .. } => {
             end(

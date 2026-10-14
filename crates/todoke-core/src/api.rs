@@ -35,7 +35,8 @@ pub enum Request {
     /// Transfers in progress or awaiting a decision.
     Transfers,
     /// Received offers awaiting a decision, with their entries: what an
-    /// interface that starts late has not seen as events.
+    /// interface that starts late has not seen as events. At most 40000
+    /// entries in all; the rest are listed once those are decided.
     Offers,
     /// Show a QR pairing offer (this device responds) and advertise in
     /// stranger mode for its lifetime.
@@ -320,6 +321,10 @@ pub enum Response {
     Offered {
         /// The transfer, hex.
         transfer: String,
+        /// Entries left out: links, special files, unreadable entries,
+        /// names other systems cannot use, duplicate names, and paths too
+        /// long (§7.1).
+        skipped: usize,
     },
     /// The request failed.
     Error {
@@ -399,6 +404,12 @@ pub enum Event {
         reason: TransferState,
         /// For people.
         message: String,
+    },
+    /// This subscriber fell behind and `events` events were dropped: re-read
+    /// `Offers` and `Transfers` (sent by the daemon, never by the core).
+    Missed {
+        /// How many.
+        events: u64,
     },
 }
 

@@ -12,7 +12,7 @@ use todoke_crypto::pairing::{HumanCode, PairingOffers, QrPayload, UnauditedCodeP
 use todoke_crypto::session::{Session, SessionMode, Timer as _, UnauditedSuite0001};
 use todoke_discovery::{Advertiser, Directory, Mdns, OsRandom};
 use todoke_fs::dest::DirDestination;
-use todoke_fs::{FsSink, FsSource, SharedSink, SinkConfig};
+use todoke_fs::{FsSink, FsSource, Preparer, SharedSink, SinkConfig};
 use todoke_proto::discovery::DISCOVERY_TOKEN_LEN;
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::TransferId;
@@ -50,8 +50,14 @@ const STRANGER_BROWSING: Duration = Duration::from_secs(300);
 /// Reconnection back-off: first and longest wait.
 const RETRY_FIRST: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(60);
+/// A session at least this long resets the back-off.
+const SESSION_LASTED: Duration = Duration::from_secs(30);
+/// How long the core waits after a failed accept before the next.
+const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
 /// How many stranger devices a QR scan tries.
 const MAX_QR_TARGETS: usize = 4;
+/// Entries listed by one `Offers` answer: four offers of §13's 10000.
+const MAX_LISTED_ENTRIES: usize = 40_000;
 /// Finished transfers remembered for `Transfers`.
 const MAX_FINISHED: usize = 256;
 
@@ -110,6 +116,8 @@ pub(super) struct State {
     connector: TcpConnector,
     listener: Option<LanListener>,
     pub(super) sink: Sink,
+    /// Hashes files for new offers on the blocking pool.
+    preparer: Preparer,
     pub(super) events: broadcast::Sender<Event>,
     pub(super) table: RefCell<DiscoveryTable>,
     directory: RefCell<Directory>,
@@ -118,7 +126,6 @@ pub(super) struct State {
     pub(super) sessions: RefCell<BTreeMap<Ed25519PublicKey, mpsc::Sender<SessionCommand>>>,
     pub(super) queues: RefCell<BTreeMap<Ed25519PublicKey, PeerQueue>>,
     pub(super) transfers: RefCell<BTreeMap<TransferId, TransferRecord>>,
-    /// The file IDs of each offer received, for "accept all".
     /// Received offers, until they are decided or end.
     pub(super) received: RefCell<BTreeMap<TransferId, OfferInfo>>,
     /// Finished transfers, oldest first.
@@ -156,7 +163,9 @@ impl State {
             SinkConfig::default(),
             now,
         )
-        .map_err(|_| StartError::Io(std::io::ErrorKind::Other))?;
+        .map_err(|error| StartError::Quarantine(error.to_string()))?;
+        let preparer = Preparer::new(&config.state_dir.join("prepared"))
+            .map_err(|error| StartError::Io(error.kind()))?;
         let mut policy = LanPolicy::new();
         if config.lan.allow_loopback {
             policy = policy.with_loopback();
@@ -193,6 +202,7 @@ impl State {
             connector: TcpConnector::new(policy),
             listener,
             sink: SharedSink::new(sink),
+            preparer,
             events,
             table: RefCell::new(table),
             directory: RefCell::new(Directory::new()),
@@ -228,12 +238,18 @@ impl State {
     }
 
     /// One discovery and reconnection step.
-    async fn tick(self: &Rc<Self>) {
+    fn tick(self: &Rc<Self>) {
         let now = wall();
         let mono = self.mono();
-        if self.table.borrow().is_stale(now) {
-            self.refresh_table().await;
+        // Never waits on a handshake holding the contacts: the next tick
+        // tries again.
+        if self.table.borrow().is_stale(now)
+            && let Ok(contacts) = self.contacts.try_lock()
+            && let Ok(table) = contacts.discovery_table(now)
+        {
+            *self.table.borrow_mut() = table;
         }
+        self.expire_queued(now);
         {
             let table = self.table.borrow();
             let mut directory = self.directory.borrow_mut();
@@ -340,12 +356,17 @@ impl State {
                 .await?
         };
         self.refresh_table().await;
-        self.retry.borrow_mut().remove(&peer);
         // Its listener's address, for reconnecting without discovery.
         if let Some(remote) = established.link().remote() {
             self.last_known.borrow_mut().insert(peer, vec![remote]);
         }
+        let started = self.mono();
         session::run(Rc::clone(self), established).await;
+        // The back-off restarts only after a session that lasted: one that
+        // ends at once is retried no faster than before.
+        if self.mono().saturating_sub(started) >= SESSION_LASTED {
+            self.retry.borrow_mut().remove(&peer);
+        }
         Ok(())
     }
 
@@ -406,6 +427,14 @@ impl State {
     ) {
         let now = wall();
         let mode = incoming.client_hello().mode();
+        let shown = match mode {
+            SessionMode::Qr => Pairing::Qr,
+            SessionMode::Code => Pairing::Code,
+            SessionMode::Contact => return,
+        };
+        if self.pairing.get() != Some(shown) {
+            return;
+        }
         let Ok(reservation) = incoming.reserve_offer(&self.offers, now) else {
             return;
         };
@@ -434,12 +463,19 @@ impl State {
 
     /// A pairing committed: stop showing the offer and tell the user.
     async fn paired(&self, peer: Ed25519PublicKey) {
-        self.pairing.set(None);
-        self.advertiser.borrow_mut().disable_stranger();
+        self.stop_pairing();
         self.refresh_table().await;
         self.emit(Event::Paired {
             contact: hex(peer.as_bytes()),
         });
+    }
+
+    /// Withdraws every pairing offer shown and stops advertising it: a QR
+    /// code or code seen before can no longer pair.
+    fn stop_pairing(&self) {
+        self.offers.cancel_all();
+        self.pairing.set(None);
+        self.advertiser.borrow_mut().disable_stranger();
     }
 
     /// Handles a request.
@@ -452,8 +488,7 @@ impl State {
             Request::PairShowQr => self.show_qr(),
             Request::PairShowCode => self.show_code(),
             Request::StopPairing => {
-                self.pairing.set(None);
-                self.advertiser.borrow_mut().disable_stranger();
+                self.stop_pairing();
                 Response::Done
             }
             Request::Strangers => {
@@ -482,9 +517,7 @@ impl State {
             Request::Decline { transfer } => {
                 self.to_session(&transfer, SessionCommand::Decline).await
             }
-            Request::Cancel { transfer } => {
-                self.to_session(&transfer, SessionCommand::Cancel).await
-            }
+            Request::Cancel { transfer } => self.cancel(&transfer).await,
         }
     }
 
@@ -545,20 +578,24 @@ impl State {
     }
 
     /// Moves a transfer to `next`; a received offer leaves the list of
-    /// those awaiting a decision. Beyond [`MAX_FINISHED`] finished
-    /// transfers, the oldest are forgotten.
+    /// those awaiting a decision. Beyond [`MAX_FINISHED`] transfers that
+    /// are finished or interrupted, the oldest are forgotten.
     pub(super) fn set_state(&self, id: &TransferId, next: TransferState) {
         if next != TransferState::AwaitingDecision {
             self.received.borrow_mut().remove(id);
         }
+        let idle =
+            |state: TransferState| state.is_finished() || state == TransferState::Interrupted;
         let mut transfers = self.transfers.borrow_mut();
         let Some(record) = transfers.get_mut(id) else {
             return;
         };
-        let newly_finished = !record.state.is_finished() && next.is_finished();
+        let was_idle = idle(record.state);
         record.state = next;
-        if newly_finished {
-            let mut finished = self.finished.borrow_mut();
+        let mut finished = self.finished.borrow_mut();
+        if !idle(next) {
+            finished.retain(|old| old != id);
+        } else if !was_idle {
             finished.push_back(*id);
             while finished.len() > MAX_FINISHED {
                 if let Some(old) = finished.pop_front() {
@@ -591,22 +628,32 @@ impl State {
         }
     }
 
-    /// Received offers still awaiting a decision.
+    /// Received offers still awaiting a decision, at most
+    /// [`MAX_LISTED_ENTRIES`] entries in all (the rest are listed once these
+    /// are decided), so the answer fits one IPC message.
     fn offers_waiting(&self) -> Vec<OfferInfo> {
         let transfers = self.transfers.borrow();
-        self.received
-            .borrow()
-            .iter()
-            .filter(|(id, _)| {
-                transfers
-                    .get(*id)
-                    .is_some_and(|record| record.state == TransferState::AwaitingDecision)
-            })
-            .map(|(_, offer)| offer.clone())
-            .collect()
+        let mut entries = 0;
+        let mut listed = Vec::new();
+        for (id, offer) in self.received.borrow().iter() {
+            let waiting = transfers
+                .get(id)
+                .is_some_and(|record| record.state == TransferState::AwaitingDecision);
+            if !waiting {
+                continue;
+            }
+            entries += offer.entries.len();
+            if entries > MAX_LISTED_ENTRIES && !listed.is_empty() {
+                break;
+            }
+            listed.push(offer.clone());
+        }
+        listed
     }
 
     fn show_qr(&self) -> Response {
+        // One offer at a time: a new one replaces any shown before.
+        self.stop_pairing();
         let now = wall();
         let Ok(local) = self.identity.local(now) else {
             return Response::error(ErrorCode::Internal, "the device binding is not valid");
@@ -629,6 +676,7 @@ impl State {
     }
 
     fn show_code(&self) -> Response {
+        self.stop_pairing();
         let now = wall();
         let Ok(code) = self.offers.create_code(CODE_GATE, now, self.mono()) else {
             return Response::error(ErrorCode::Pairing, "no pairing offer could be created");
@@ -770,62 +818,154 @@ impl State {
             if !found.is_empty() {
                 return found;
             }
-            self.tick().await;
+            self.tick();
             tokio::time::sleep(TICK).await;
         }
         Vec::new()
     }
 
-    /// Queues an offer of `paths` to `contact`.
+    /// Offers `paths` to `contact`: walked and hashed on the blocking pool
+    /// (the core keeps serving meanwhile), then handed to the session with
+    /// that contact or queued for the next one.
     async fn send(self: &Rc<Self>, contact: &str, paths: &[std::path::PathBuf]) -> Response {
         let peer = match self.resolve_contact(contact).await {
             Ok(peer) => peer,
             Err(response) => return response,
         };
-        let walked = match send::walk(paths) {
-            Ok(walked) => walked,
-            Err(error) => return Response::error(ErrorCode::Source, error.to_string()),
+        let (paths, hasher, now) = (paths.to_vec(), self.preparer.clone(), wall());
+        let outcome = tokio::task::spawn_blocking(move || {
+            let walked = send::walk(&paths)?;
+            send::check_open_files(walked.files())?;
+            send::prepare(&walked, now, &hasher).map(|prepared| (prepared, walked.skipped))
+        })
+        .await;
+        let (prepared, skipped) = match outcome {
+            Ok(Ok(done)) => done,
+            Ok(Err(error)) => return Response::error(ErrorCode::Source, error.to_string()),
+            Err(_) => return Response::error(ErrorCode::Internal, "preparing the files failed"),
         };
-        let Ok(mut queue) = self.take_queue(&peer) else {
-            return Response::error(ErrorCode::Internal, "the state directory is unusable");
-        };
-        let response = match send::prepare(&walked, wall(), &mut queue.source) {
-            Ok(prepared) => {
-                let transfer_id = *prepared.transfer_id();
-                self.remember(
-                    transfer_id,
-                    TransferRecord {
-                        peer,
-                        way: Way::Outgoing,
-                        state: TransferState::Offered,
-                        detail: None,
-                        done: 0,
-                        total: prepared.total_bytes(),
-                    },
-                );
-                let session = self.sessions.borrow().get(&peer).cloned();
-                match session {
-                    Some(session) => {
-                        if let Err(mpsc::error::SendError(SessionCommand::Offer(prepared))) =
-                            session
-                                .send(SessionCommand::Offer(Box::new(prepared)))
-                                .await
-                        {
-                            queue.prepared.push(*prepared);
-                        }
-                    }
-                    None => queue.prepared.push(prepared),
-                }
-                self.retry.borrow_mut().remove(&peer);
-                Response::Offered {
-                    transfer: hex(transfer_id),
-                }
-            }
-            Err(error) => Response::error(ErrorCode::Source, error.to_string()),
-        };
-        self.queues.borrow_mut().insert(peer, queue);
+        let transfer_id = *prepared.transfer_id();
+        self.remember(
+            transfer_id,
+            TransferRecord {
+                peer,
+                way: Way::Outgoing,
+                state: TransferState::Offered,
+                detail: None,
+                done: 0,
+                total: prepared.total_bytes(),
+            },
+        );
+        if let Err(response) = self.queue(peer, prepared).await {
+            self.set_state(&transfer_id, TransferState::Failed);
+            return response;
+        }
+        self.retry.borrow_mut().remove(&peer);
         self.reconnect(self.mono());
-        response
+        Response::Offered {
+            transfer: hex(transfer_id),
+            skipped,
+        }
+    }
+
+    /// Hands `prepared` to the session with `peer`, whose engine's source
+    /// then serves its files, or, with no session, to `peer`'s queue.
+    async fn queue(
+        &self,
+        peer: Ed25519PublicKey,
+        prepared: send::Prepared,
+    ) -> Result<(), Response> {
+        let session = self.sessions.borrow().get(&peer).cloned();
+        let mut prepared = match session {
+            Some(session) => match session
+                .send(SessionCommand::Offer(Box::new(prepared)))
+                .await
+            {
+                Ok(()) => return Ok(()),
+                // The session ended meanwhile; its queue is back in place.
+                Err(mpsc::error::SendError(SessionCommand::Offer(prepared))) => *prepared,
+                Err(_) => return Err(Response::error(ErrorCode::Internal, "the offer was lost")),
+            },
+            None => prepared,
+        };
+        // No await from here on: no session can start for `peer` and take
+        // the queue in between.
+        let Ok(mut queue) = self.take_queue(&peer) else {
+            return Err(Response::error(
+                ErrorCode::Internal,
+                "the state directory is unusable",
+            ));
+        };
+        prepared.install(&mut queue.source);
+        queue.prepared.push(prepared);
+        self.queues.borrow_mut().insert(peer, queue);
+        Ok(())
+    }
+
+    /// Cancels `transfer`: through its session, or, for an outgoing offer
+    /// still waiting for one, here.
+    async fn cancel(&self, transfer: &str) -> Response {
+        let (id, peer) = match self.find_transfer(transfer) {
+            Ok(found) => found,
+            Err(response) => return response,
+        };
+        if self.sessions.borrow().contains_key(&peer) {
+            return self.to_session(transfer, SessionCommand::Cancel).await;
+        }
+        let mut queues = self.queues.borrow_mut();
+        let Some(queue) = queues.get_mut(&peer) else {
+            return Response::error(ErrorCode::Unreachable, "the peer is not connected");
+        };
+        let before = queue.prepared.len() + queue.offers.len();
+        queue
+            .prepared
+            .retain(|prepared| *prepared.transfer_id() != id);
+        queue.offers.retain(|offer| *offer.transfer_id() != id);
+        if queue.prepared.len() + queue.offers.len() == before {
+            return Response::error(ErrorCode::Unreachable, "the peer is not connected");
+        }
+        queue.source.remove_transfer(&id);
+        drop(queues);
+        session::end(
+            self,
+            &id,
+            TransferState::Cancelled,
+            "the transfer was cancelled",
+        );
+        Response::Done
+    }
+
+    /// Drops queued offers past their lifetime (§7.5: they cannot resume).
+    fn expire_queued(&self, now: UnixTime) {
+        let mut expired = Vec::new();
+        for queue in self.queues.borrow_mut().values_mut() {
+            let mut gone = Vec::new();
+            queue.prepared.retain(|prepared| {
+                let live = prepared
+                    .created_at()
+                    .seconds()
+                    .saturating_add(send::OFFER_LIFETIME)
+                    > now.seconds();
+                if !live {
+                    gone.push(*prepared.transfer_id());
+                }
+                live
+            });
+            queue.offers.retain(|offer| {
+                let live = offer.manifest().manifest().header().expires_at > now;
+                if !live {
+                    gone.push(*offer.transfer_id());
+                }
+                live
+            });
+            for id in &gone {
+                queue.source.remove_transfer(id);
+            }
+            expired.extend(gone);
+        }
+        for id in expired {
+            session::end(self, &id, TransferState::Failed, "expired");
+        }
     }
 
     /// The queue for `peer`, created if missing (with its own outboard
@@ -850,6 +990,8 @@ impl State {
         })
     }
 
+    /// The contact `prefix` names, if this device may still exchange files
+    /// with it (not blocked or revoked).
     async fn resolve_contact(&self, prefix: &str) -> Result<Ed25519PublicKey, Response> {
         let prefix = prefix.to_ascii_lowercase();
         if prefix.len() < MIN_PREFIX {
@@ -864,6 +1006,9 @@ impl State {
             .map(|contact| *contact.pinned().device_public())
             .filter(|device| hex(device.as_bytes()).starts_with(&prefix));
         match (matches.next(), matches.next()) {
+            (Some(device), None) if !matches!(contacts.availability(&device), Ok(Ok(_))) => Err(
+                Response::error(ErrorCode::State, "that contact is blocked or revoked"),
+            ),
             (Some(device), None) => Ok(device),
             (Some(_), Some(_)) => Err(Response::error(
                 ErrorCode::Ambiguous,
@@ -873,18 +1018,14 @@ impl State {
         }
     }
 
-    /// Routes a decision to the session carrying `transfer`.
-    async fn to_session(
-        &self,
-        transfer: &str,
-        command: impl FnOnce(TransferId) -> SessionCommand,
-    ) -> Response {
-        let prefix = transfer.to_ascii_lowercase();
+    /// The transfer `prefix` names, and its peer.
+    fn find_transfer(&self, prefix: &str) -> Result<(TransferId, Ed25519PublicKey), Response> {
+        let prefix = prefix.to_ascii_lowercase();
         if prefix.len() < MIN_PREFIX {
-            return Response::error(
+            return Err(Response::error(
                 ErrorCode::Invalid,
                 "name a transfer by at least 8 hex digits",
-            );
+            ));
         }
         let found: Vec<(TransferId, Ed25519PublicKey)> = self
             .transfers
@@ -893,20 +1034,33 @@ impl State {
             .filter(|(id, _)| hex(id).starts_with(&prefix))
             .map(|(id, record)| (*id, record.peer))
             .collect();
-        let [(id, peer)] = found.as_slice() else {
-            return if found.is_empty() {
-                Response::error(ErrorCode::Invalid, "no such transfer")
-            } else {
-                Response::error(ErrorCode::Ambiguous, "more than one transfer matches")
-            };
+        match found.as_slice() {
+            [one] => Ok(*one),
+            [] => Err(Response::error(ErrorCode::Invalid, "no such transfer")),
+            _ => Err(Response::error(
+                ErrorCode::Ambiguous,
+                "more than one transfer matches",
+            )),
+        }
+    }
+
+    /// Routes a decision to the session carrying `transfer`.
+    async fn to_session(
+        &self,
+        transfer: &str,
+        command: impl FnOnce(TransferId) -> SessionCommand,
+    ) -> Response {
+        let (id, peer) = match self.find_transfer(transfer) {
+            Ok(found) => found,
+            Err(response) => return response,
         };
-        let session = self.sessions.borrow().get(peer).cloned();
+        let session = self.sessions.borrow().get(&peer).cloned();
         let Some(session) = session else {
             return Response::error(ErrorCode::Unreachable, "the peer is not connected");
         };
         let (reply, answer) = oneshot::channel();
         if session
-            .send(SessionCommand::with_reply(command(*id), reply))
+            .send(SessionCommand::with_reply(command(id), reply))
             .await
             .is_err()
         {
@@ -963,9 +1117,12 @@ pub(super) async fn run(
                 if let Ok(link) = accepted {
                     let state = Rc::clone(&state);
                     tokio::task::spawn_local(async move { state.incoming(link).await });
+                } else {
+                    // Out of descriptors, say: never spin on it.
+                    tokio::time::sleep(ACCEPT_PAUSE).await;
                 }
             }
-            _ = tick.tick() => state.tick().await,
+            _ = tick.tick() => state.tick(),
         }
     }
 }

@@ -64,12 +64,15 @@ async fn pair(displayer: &Core, entrant: &Core) -> AnyResult<()> {
     let Response::Code { code, .. } = displayer.request(Request::PairShowCode).await else {
         return Err("no code".into());
     };
+    // An advertisement shown before this one disappears within a tick or
+    // two; wait until only this one is left.
+    tokio::time::sleep(Duration::from_millis(1200)).await;
     let stranger = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if let Response::Strangers(strangers) = entrant.request(Request::Strangers).await
-                && let Some(first) = strangers.into_iter().next()
+                && let [only] = strangers.as_slice()
             {
-                return first.stranger;
+                return only.stranger.clone();
             }
             tokio::time::sleep(Duration::from_millis(200)).await;
         }
@@ -101,6 +104,87 @@ fn write_tree(root: &Path) -> AnyResult<Vec<(PathBuf, Vec<u8>)>> {
     Ok(files)
 }
 
+/// A QR offer replaced by a code offer can no longer pair, even while
+/// `displayer` advertises for pairing.
+async fn a_replaced_qr_offer_cannot_pair(displayer: &Core, scanner: &Core) -> AnyResult<()> {
+    let Response::Qr { text, .. } = displayer.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    let Response::Code { .. } = displayer.request(Request::PairShowCode).await else {
+        return Err("no code offer".into());
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while !matches!(
+            scanner.request(Request::Strangers).await,
+            Response::Strangers(list) if !list.is_empty()
+        ) {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await?;
+    assert!(matches!(
+        scanner.request(Request::PairScanQr { text }).await,
+        Response::Error { .. }
+    ));
+    Ok(())
+}
+
+/// A second offer while the session is still open is served from the
+/// same source as the first.
+async fn send_again_in_the_session(
+    root: &Path,
+    source: &Path,
+    alice: &Core,
+    bob: &Core,
+    alice_hex: &str,
+) -> AnyResult<()> {
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    std::fs::write(source.join("later.txt"), b"sent later")?;
+    let Response::Offered {
+        transfer: second, ..
+    } = bob
+        .request(Request::Send {
+            contact: alice_hex[..12].to_owned(),
+            paths: vec![source.join("later.txt")],
+        })
+        .await
+    else {
+        return Err("the second send was not offered".into());
+    };
+    wait_for(&mut alice_events, |event| match event {
+        Event::OfferReceived(offer) if offer.transfer == second => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        alice
+            .request(Request::Accept {
+                transfer: second.clone(),
+                files: None,
+            })
+            .await,
+        Response::Done
+    );
+    wait_for(&mut bob_events, |event| match event {
+        Event::Delivered { transfer: done } if *done == second => Some(Ok(())),
+        Event::Ended {
+            transfer: ended,
+            reason,
+            message,
+        } if *ended == second && reason.is_finished() => Some(Err(format!(
+            "the second transfer ended: {reason:?} {message}"
+        ))),
+        _ => None,
+    })
+    .await??;
+    assert_eq!(
+        std::fs::read(root.join("alice").join("downloads").join("later.txt"))?,
+        b"sent later"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     let scratch = Scratch::new("two-devices")?;
@@ -110,6 +194,7 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     let (alice_hex, bob_hex) = (device_hex(&alice).await?, device_hex(&bob).await?);
     let mut alice_events = alice.subscribe();
     let mut bob_events = bob.subscribe();
+    a_replaced_qr_offer_cannot_pair(&alice, &bob).await?;
     pair(&alice, &bob).await?;
     let paired = wait_for(&mut alice_events, |event| match event {
         Event::Paired { contact } => Some(contact.clone()),
@@ -129,7 +214,7 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     // Bob sends a folder; Alice accepts it.
     let source = scratch.0.join("to-send");
     let files = write_tree(&source)?;
-    let Response::Offered { transfer } = bob
+    let Response::Offered { transfer, skipped } = bob
         .request(Request::Send {
             contact: alice_hex[..12].to_owned(),
             paths: vec![source.join("album")],
@@ -147,6 +232,7 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         _ => None,
     })
     .await?;
+    assert_eq!(skipped, 0);
     assert_eq!(offered.0, transfer);
     assert_eq!(offered.2, bob_hex);
     assert_eq!(offered.1, 5);
@@ -179,6 +265,7 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         let received = std::fs::read(scratch.0.join("alice").join("downloads").join(path))?;
         assert_eq!(&received, bytes, "{}", path.display());
     }
+    send_again_in_the_session(&scratch.0, &source, &alice, &bob, &alice_hex).await?;
     // A second request for the same transfer is refused: it is finished.
     assert!(matches!(
         alice
