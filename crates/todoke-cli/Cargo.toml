@@ -31,8 +31,8 @@ zeroize.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 clap.workspace = true
 clap_complete = "=4.6.11"
-# The pairing QR code drawn in the terminal; no image output.
-qrcode = { version = "=0.14.1", default-features = false }
+# The pairing QR code drawn in the terminal.
+qrcode.workspace = true
 tokio = { workspace = true, features = ["rt", "time", "io-util", "io-std", "macros", "signal"] }
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]

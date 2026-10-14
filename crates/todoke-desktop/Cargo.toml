@@ -1,6 +1,6 @@
 [package]
 name = "todoke-desktop"
-description = "The thin GPUI desktop interface to the public todoke core."
+description = "The todoke desktop app (GPUI, through gpui-kit) for macOS, Windows, and Linux."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,39 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Sessions and code pairing (PROTOCOL §16 gates): development builds only.
+# Without it the app starts, shows that sessions are disabled in this build,
+# and can still attach to a development daemon.
+unaudited-dev = ["todoke-daemon/unaudited-dev"]
+
+[[bin]]
+name = "todoke-desktop"
+path = "src/main.rs"
+
+[dependencies]
+todoke-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# Pairing secrets the window shows are wiped when they go.
+zeroize.workspace = true
+
+# The window exists only on the desktop platforms; elsewhere (Android, iOS,
+# wasm32) the crate is empty and the binary says so.
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+# Where the profile lives, and hosting or attaching to the daemon so the
+# CLI reaches the same core while the app runs.
+todoke-daemon.workspace = true
+# The UI toolkit: GPUI and its styled components. No tree-sitter, no
+# speech, no JavaScript runtime.
+gpui-kit = "=0.7.3"
+# The pairing QR code, drawn as quads.
+qrcode.workspace = true
+# Channels between the UI and the core (executor-agnostic), and the
+# runtime of the daemon client's thread.
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
+# Headless windows, simulated input, and the accessibility tree in tests.
+gpui-kit = { version = "=0.7.3", features = ["test-support"] }

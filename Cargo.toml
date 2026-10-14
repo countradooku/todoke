@@ -71,6 +71,9 @@ tokio = { version = "=1.53.3", default-features = false }
 # no 0-RTT, no logging.
 quinn = { version = "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
+# Pairing QR codes: drawn in the terminal (todoke-cli) and the desktop app;
+# no image output.
+qrcode = { version = "=0.14.1", default-features = false }
 # Command lines: the todoke CLI and the relay server.
 clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # Certificate parsing for relay key pins (rustls's own verifier crate).

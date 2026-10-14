@@ -223,3 +223,58 @@ async fn a_subscriber_that_falls_behind_is_told_how_much_it_missed() -> AnyResul
     tokio::time::timeout(Duration::from_secs(2), forwarding).await???;
     Ok(())
 }
+
+/// A hosted daemon serves its core to clients like the daemon, keeps a
+/// second host (or daemon) out, notices a client's stop, and frees the
+/// endpoint when dropped.
+#[tokio::test]
+async fn a_hosted_daemon_serves_until_dropped() -> AnyResult<()> {
+    let mut random = [0; 8];
+    getrandom::fill(&mut random)?;
+    let home = std::env::temp_dir().join(format!("todoke-host-{}", u64::from_le_bytes(random)));
+    let _scratch = Scratch(home.clone());
+    let paths = crate::Paths::under(&home);
+    std::fs::create_dir_all(&home)?;
+    let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+    config.lan.enabled = false;
+    std::fs::write(&paths.config_file, serde_json::to_vec(&config)?)?;
+    let hosted = tokio::task::spawn_blocking({
+        let paths = paths.clone();
+        move || crate::host(&paths)
+    })
+    .await??;
+    assert!(hosted.serving());
+    let mut client = Client::connect(&paths.endpoint()).await?;
+    let Response::Status(status) = client.request(Request::Status).await? else {
+        return Err("no status".into());
+    };
+    let Response::Status(direct) = hosted.core().request(Request::Status).await else {
+        return Err("no status".into());
+    };
+    assert_eq!(status.device, direct.device);
+    let second = tokio::task::spawn_blocking({
+        let paths = paths.clone();
+        move || crate::host(&paths)
+    })
+    .await?;
+    assert!(matches!(
+        second,
+        Err(crate::DaemonError::Endpoint(ref error)) if error.kind() == std::io::ErrorKind::AddrInUse
+    ));
+    // A client's stop ends the serving; the core keeps answering its host.
+    Client::connect(&paths.endpoint()).await?.shutdown().await?;
+    for _ in 0..100 {
+        if !hosted.serving() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(!hosted.serving());
+    assert!(matches!(
+        hosted.core().request(Request::Status).await,
+        Response::Status(_)
+    ));
+    tokio::task::spawn_blocking(move || drop(hosted)).await?;
+    assert!(Client::connect(&paths.endpoint()).await.is_err());
+    Ok(())
+}
