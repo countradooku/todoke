@@ -277,3 +277,22 @@ async fn a_refused_connection_is_not_a_tls_failure() -> AnyResult<()> {
     stop.notify_waiters();
     Ok(())
 }
+
+/// A connection whose stream became a tunnel holds a room as long as the
+/// tunnel lives: the idle close for connections without a room never
+/// cuts a tunnel.
+#[tokio::test(flavor = "multi_thread")]
+async fn tunnels_outlive_the_roomless_close() -> AnyResult<()> {
+    let (relay, stop) = relay(|config| config.roomless = Duration::from_millis(300))?;
+    let (mut a, mut b) = pair_up(&relay, 9).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    write_all(&mut a, b"later").await?;
+    let mut got = [0; 5];
+    read_exact(&mut b, &mut got).await?;
+    assert_eq!(&got, b"later");
+    write_all(&mut b, b"back!").await?;
+    read_exact(&mut a, &mut got).await?;
+    assert_eq!(&got, b"back!");
+    stop.notify_waiters();
+    Ok(())
+}

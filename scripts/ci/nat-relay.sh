@@ -17,7 +17,9 @@
 # which the script also checks.
 #
 # Usage: sudo scripts/ci/nat-relay.sh <nat-type> <todoke binary> <todoke-relay binary>
-set -euo pipefail
+# -E: the error trap also fires inside functions; -x: every command is
+# traced, for a failure on a CI runner.
+set -Eeuxo pipefail
 
 nat_type="${1:?NAT type}"
 todoke="$(realpath "${2:?todoke binary}")"

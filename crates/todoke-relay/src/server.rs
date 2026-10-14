@@ -211,6 +211,26 @@ struct Streams {
     send: SendStream,
     recv: RecvStream,
     early: Vec<u8>,
+    /// The member's connection holds a room as long as these streams live,
+    /// in the room table or in a tunnel.
+    _room: OpenRoom,
+}
+
+/// One room counted on its connection, until dropped: a connection with
+/// none is closed after [`ROOMLESS`].
+struct OpenRoom(Arc<AtomicUsize>);
+
+impl OpenRoom {
+    fn new(open: &Arc<AtomicUsize>) -> Self {
+        open.fetch_add(1, Ordering::Relaxed);
+        Self(Arc::clone(open))
+    }
+}
+
+impl Drop for OpenRoom {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 /// A rate limit (the generic cell rate algorithm): one event every
@@ -463,11 +483,9 @@ async fn serve_connection(shared: &Arc<Shared>, connection: quinn::Connection, s
         let Ok((send, recv)) = accepted else {
             return;
         };
-        let (shared, open) = (Arc::clone(shared), Arc::clone(&open));
-        open.fetch_add(1, Ordering::Relaxed);
+        let (shared, room) = (Arc::clone(shared), OpenRoom::new(&open));
         tokio::spawn(async move {
-            serve_room(&shared, endpoint, source, send, recv).await;
-            open.fetch_sub(1, Ordering::Relaxed);
+            serve_room(&shared, endpoint, source, room, send, recv).await;
         });
     }
 }
@@ -518,6 +536,7 @@ async fn serve_room(
     shared: &Arc<Shared>,
     endpoint: u64,
     source: IpAddr,
+    open: OpenRoom,
     mut tx: SendStream,
     mut rx: RecvStream,
 ) {
@@ -633,6 +652,7 @@ async fn serve_room(
         send: tx,
         recv: rx,
         early: reader.buffer,
+        _room: open,
     };
     let forwarded = lock(&shared.rooms).forward(ticket, forward_room, mine);
     match forwarded {
