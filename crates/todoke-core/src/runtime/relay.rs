@@ -11,14 +11,22 @@
 //!
 //! - A contact with offers waiting and not reachable on the LAN is tried
 //!   back to back.
-//! - Every available contact is also met at a presence window: 30 seconds
-//!   every five minutes, at an offset both devices derive from the pair's
-//!   token, so two idle devices show up at the same moment and a sender
-//!   reaches a receiver within five minutes.
-//! - A shown QR offer waits at the relay until it is used, stopped, or
-//!   expires; a scanner tries the relay after the nearby devices.
+//! - Every available contact is also met at a presence window: half of
+//!   the presence period (300 seconds by default), at most 30 seconds, at
+//!   an offset both devices derive from the pair's token, so two idle
+//!   devices show up at the same moment and a sender reaches a receiver
+//!   within one period.
+//! - A shown QR offer waits at the relay until it is used, stopped (which
+//!   ends the wait at once), or expires; a scanner tries the relay after
+//!   the nearby devices. While either is going on, contacts leave one room
+//!   free for it.
+//! - A tunnel that did not lead to a session (a relay answering for a
+//!   peer that is not there) pauses that contact, doubling up to 16
+//!   minutes; a relay error pauses it 30 seconds.
 //!
-//! Human-code pairing never uses a relay (§10, §16 O8).
+//! A tunnel is accepted only for what it was opened for: a contact's
+//! session, or QR pairing. Human-code pairing never uses a relay (§10,
+//! §16 O8).
 
 use core::cell::{Cell, RefCell};
 use core::time::Duration;
@@ -34,7 +42,7 @@ use todoke_transport::relay::{
 };
 
 use super::StartError;
-use super::running::{Pairing, State, wall};
+use super::running::{Origin, Pairing, State, wall};
 use crate::config::RelayConfig;
 
 /// The shortest presence period allowed.
@@ -46,6 +54,10 @@ const WAIT: Duration = Duration::from_secs(MAX_WAIT_SECONDS as u64);
 const ERROR_PAUSE: Duration = Duration::from_secs(30);
 /// After a failed QR registration, how long before the next.
 const QR_PAUSE: Duration = Duration::from_secs(5);
+/// The longest pause after tunnels that led to no session.
+const MAX_FAILURE_PAUSE: Duration = Duration::from_mins(16);
+/// How often a scanner looks for a free room.
+const ROOM_POLL: Duration = Duration::from_millis(200);
 
 /// Which side of QR pairing this device is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,10 +76,16 @@ pub(super) struct Relays {
     busy: RefCell<BTreeSet<Ed25519PublicKey>>,
     /// Contacts not to try before this monotonic time.
     paused: RefCell<BTreeMap<Ed25519PublicKey, Duration>>,
+    /// Tunnels in a row that led to no session, by contact.
+    failures: RefCell<BTreeMap<Ed25519PublicKey, u32>>,
     /// The presence window last used for each contact.
     presence: RefCell<BTreeMap<Ed25519PublicKey, u64>>,
     /// Bumped whenever the QR offer shown changes or stops.
     qr_generation: Cell<u64>,
+    /// Wakes a QR wait when its offer stops.
+    qr_cancel: tokio::sync::Notify,
+    /// A scanner is waiting for a room.
+    scanning: Cell<bool>,
     /// How often an idle pair meets, in seconds.
     period: u64,
 }
@@ -110,19 +128,13 @@ impl Relays {
             rooms: Cell::new(0),
             busy: RefCell::new(BTreeSet::new()),
             paused: RefCell::new(BTreeMap::new()),
+            failures: RefCell::new(BTreeMap::new()),
             presence: RefCell::new(BTreeMap::new()),
             qr_generation: Cell::new(0),
+            qr_cancel: tokio::sync::Notify::new(),
+            scanning: Cell::new(false),
             period: u64::from(period).max(MIN_PRESENCE),
         }))
-    }
-
-    /// A room, if fewer than two are open.
-    fn take_room(&self) -> Option<RoomSlot<'_>> {
-        let open = self.rooms.get();
-        (open < MAX_ROOMS_PER_ENDPOINT).then(|| {
-            self.rooms.set(open + 1);
-            RoomSlot(&self.rooms)
-        })
     }
 
     /// Meets the other holder of `token`.
@@ -134,12 +146,21 @@ impl Relays {
     }
 }
 
-/// An open room, given back when dropped.
-struct RoomSlot<'a>(&'a Cell<usize>);
+/// An open room, and for a contact its busy mark: both given back when
+/// dropped, however the registration ends.
+struct Claim {
+    state: Rc<State>,
+    peer: Option<Ed25519PublicKey>,
+}
 
-impl Drop for RoomSlot<'_> {
+impl Drop for Claim {
     fn drop(&mut self) {
-        self.0.set(self.0.get().saturating_sub(1));
+        if let Some(relays) = &self.state.relay {
+            relays.rooms.set(relays.rooms.get().saturating_sub(1));
+            if let Some(peer) = &self.peer {
+                relays.busy.borrow_mut().remove(peer);
+            }
+        }
     }
 }
 
@@ -157,9 +178,44 @@ fn presence_window(token: &RendezvousToken, now: UnixTime, period: u64) -> Optio
     (phase < window).then(|| (shifted / period, window - phase))
 }
 
+/// The pause after `failures` tunnels in a row that led to no session.
+fn failure_pause(failures: u32) -> Duration {
+    ERROR_PAUSE
+        .saturating_mul(1 << failures.min(6))
+        .min(MAX_FAILURE_PAUSE)
+}
+
 impl State {
+    /// A room for a registration, if fewer than `limit` are open; for a
+    /// contact, also its busy mark.
+    fn claim_room(self: &Rc<Self>, peer: Option<Ed25519PublicKey>, limit: usize) -> Option<Claim> {
+        let relays = self.relay.as_ref()?;
+        if relays.rooms.get() >= limit.min(MAX_ROOMS_PER_ENDPOINT) {
+            return None;
+        }
+        relays.rooms.set(relays.rooms.get() + 1);
+        if let Some(peer) = peer {
+            relays.busy.borrow_mut().insert(peer);
+        }
+        Some(Claim {
+            state: Rc::clone(self),
+            peer,
+        })
+    }
+
+    /// Rooms contacts may use now: one is kept free while a QR offer is
+    /// shown or a scanner waits.
+    fn contact_rooms(&self) -> usize {
+        let qr = self.pairing.get() == Some(Pairing::Qr)
+            || self
+                .relay
+                .as_ref()
+                .is_some_and(|relays| relays.scanning.get());
+        MAX_ROOMS_PER_ENDPOINT - usize::from(qr)
+    }
+
     /// Starts relay registrations for contacts that need one (see the
-    /// module docs), at most two rooms at once.
+    /// module docs), each holding one of at most two rooms from the start.
     pub(super) fn relay_tick(self: &Rc<Self>, now: UnixTime) {
         let Some(relays) = &self.relay else {
             return;
@@ -170,6 +226,10 @@ impl State {
         let mut present = Vec::new();
         {
             let table = self.table.borrow();
+            // A table from another epoch has another epoch's tokens.
+            if table.is_stale(now) {
+                return;
+            }
             let sessions = self.sessions.borrow();
             let queues = self.queues.borrow();
             let directory = self.directory.borrow();
@@ -202,24 +262,28 @@ impl State {
                 }
             }
         }
+        let limit = self.contact_rooms();
         for (peer, token, wait, window) in urgent.into_iter().chain(present) {
-            if relays.rooms.get() >= MAX_ROOMS_PER_ENDPOINT {
+            // The room is taken now, so one tick never starts more
+            // registrations than there are rooms.
+            let Some(claim) = self.claim_room(Some(peer), limit) else {
                 break;
-            }
+            };
             if let Some(window) = window {
                 relays.presence.borrow_mut().insert(peer, window);
             }
-            relays.busy.borrow_mut().insert(peer);
             let state = Rc::clone(self);
             tokio::task::spawn_local(async move {
-                state.meet_contact(peer, token, wait).await;
+                state.meet_contact(claim, peer, token, wait).await;
             });
         }
     }
 
-    /// One registration for `peer`, and the session if it comes.
+    /// One registration for `peer` (its room held by `claim`), and the
+    /// session if it comes.
     async fn meet_contact(
         self: Rc<Self>,
+        claim: Claim,
         peer: Ed25519PublicKey,
         token: RendezvousToken,
         wait: Duration,
@@ -227,13 +291,23 @@ impl State {
         let Some(relays) = &self.relay else {
             return;
         };
-        let met = match relays.take_room() {
-            Some(_room) => relays.meet(token, wait).await,
-            None => Err(RelayError::Closed(todoke_proto::relay::CloseCode::Full)),
-        };
-        relays.busy.borrow_mut().remove(&peer);
+        let met = relays.meet(token, wait).await;
+        drop(claim);
         match met {
-            Ok(link) => self.contact_tunnel(peer, link).await,
+            Ok(link) => {
+                let pause = if self.contact_tunnel(peer, link).await {
+                    relays.failures.borrow_mut().remove(&peer);
+                    None
+                } else {
+                    let mut failures = relays.failures.borrow_mut();
+                    let count = failures.entry(peer).or_insert(0);
+                    *count = count.saturating_add(1);
+                    Some(failure_pause(*count))
+                };
+                if let Some(pause) = pause {
+                    relays.paused.borrow_mut().insert(peer, self.mono() + pause);
+                }
+            }
             Err(RelayError::NoPeer) => {}
             Err(_) => {
                 relays
@@ -245,15 +319,17 @@ impl State {
     }
 
     /// A session with `peer` on a relay tunnel, in §4's roles: the smaller
-    /// full device key initiates, the larger responds.
-    async fn contact_tunnel(self: &Rc<Self>, peer: Ed25519PublicKey, link: RelayLink) {
+    /// full device key initiates, the larger responds. Whether a session
+    /// ran.
+    async fn contact_tunnel(self: &Rc<Self>, peer: Ed25519PublicKey, link: RelayLink) -> bool {
         let ours = *self.identity.binding().device_public();
         if ours.as_bytes() < peer.as_bytes() {
-            if let Ok(claim) = self.manager.claim_outgoing(peer) {
-                let _ = self.initiate_on(peer, claim.with_link(link)).await;
+            match self.manager.claim_outgoing(peer) {
+                Ok(claim) => self.initiate_on(peer, claim.with_link(link)).await.is_ok(),
+                Err(_) => false,
             }
         } else {
-            self.incoming(link).await;
+            self.incoming(link, Origin::RelayContact).await
         }
     }
 
@@ -284,12 +360,21 @@ impl State {
                     && wall() < expires
             };
             while shown() {
-                let met = match relays.take_room() {
-                    Some(_room) => relays.meet(token, WAIT).await,
-                    None => Err(RelayError::Closed(todoke_proto::relay::CloseCode::Full)),
+                let Some(claim) = state.claim_room(None, MAX_ROOMS_PER_ENDPOINT) else {
+                    tokio::time::sleep(ROOM_POLL).await;
+                    continue;
                 };
+                let met = tokio::select! {
+                    met = relays.meet(token, WAIT) => met,
+                    () = relays.qr_cancel.notified() => break,
+                };
+                drop(claim);
                 match met {
-                    Ok(link) if shown() => state.incoming(link).await,
+                    Ok(link) if shown() => {
+                        if !state.incoming(link, Origin::RelayQr).await {
+                            tokio::time::sleep(QR_PAUSE).await;
+                        }
+                    }
                     Ok(_) | Err(RelayError::NoPeer) => {}
                     Err(_) => tokio::time::sleep(QR_PAUSE).await,
                 }
@@ -297,24 +382,51 @@ impl State {
         });
     }
 
-    /// The QR offer is no longer shown: its relay wait stops.
+    /// The QR offer is no longer shown: its relay wait ends now.
     pub(super) fn stop_qr_relay(&self) {
         if let Some(relays) = &self.relay {
             relays
                 .qr_generation
                 .set(relays.qr_generation.get().wrapping_add(1));
+            relays.qr_cancel.notify_waiters();
         }
     }
 
     /// A tunnel to the displayer of `payload`, if relays are configured and
-    /// it is waiting there.
-    pub(super) async fn relay_for_qr(&self, payload: &QrPayload, role: Role) -> Option<RelayLink> {
+    /// it is waiting there. Waits for a room (contacts leave one free
+    /// meanwhile) at most one registration's wait.
+    pub(super) async fn relay_for_qr(
+        self: &Rc<Self>,
+        payload: &QrPayload,
+        role: Role,
+    ) -> Option<RelayLink> {
         let Role::Scanner = role;
         let relays = self.relay.as_ref()?;
         let token = payload.rendezvous_token().ok()?;
         let token = RendezvousToken::new(*token.as_bytes()).ok()?;
-        let _room = relays.take_room()?;
-        relays.meet(token, WAIT).await.ok()
+        relays.scanning.set(true);
+        let deadline = tokio::time::Instant::now() + WAIT;
+        let claim = loop {
+            if let Some(claim) = self.claim_room(None, MAX_ROOMS_PER_ENDPOINT) {
+                break Some(claim);
+            }
+            if tokio::time::Instant::now() >= deadline {
+                break None;
+            }
+            tokio::time::sleep(ROOM_POLL).await;
+        };
+        relays.scanning.set(false);
+        let _claim = claim?;
+        // A connection that did not come up (a lost handshake) is tried
+        // again while the displayer still waits.
+        for _ in 0..3 {
+            match relays.meet(token, WAIT).await {
+                Ok(link) => return Some(link),
+                Err(RelayError::Unreachable(_)) => {}
+                Err(_) => return None,
+            }
+        }
+        None
     }
 }
 
@@ -355,5 +467,14 @@ mod tests {
         // A short period has a window of half of it.
         let short = presence_window(&pair, at(1_800_000_000), 10);
         assert!(short.is_none_or(|(_, left)| left <= 5));
+    }
+
+    /// Tunnels that lead to no session back off, doubling, to 16 minutes.
+    #[test]
+    fn failed_tunnels_back_off() {
+        assert_eq!(failure_pause(1), Duration::from_mins(1));
+        assert_eq!(failure_pause(2), Duration::from_mins(2));
+        assert_eq!(failure_pause(5), Duration::from_mins(16));
+        assert_eq!(failure_pause(40), MAX_FAILURE_PAUSE);
     }
 }

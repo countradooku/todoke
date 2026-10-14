@@ -175,6 +175,17 @@ pub(super) struct TransferRecord {
     pub(super) total: u64,
 }
 
+/// Where an accepted link came from, and so what it may carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Origin {
+    /// The LAN listener: contacts and every kind of pairing.
+    Lan,
+    /// A relay tunnel opened for a contact: that contact's session only.
+    RelayContact,
+    /// A relay tunnel opened for a shown QR offer: QR pairing only.
+    RelayQr,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Pairing {
     Qr,
@@ -464,42 +475,55 @@ impl State {
         Ok(())
     }
 
-    /// Handles one accepted link.
-    pub(super) async fn incoming<L: Link>(self: &Rc<Self>, link: L) {
+    /// Handles one accepted link: only what `origin` allows (a relay
+    /// tunnel is accepted only for what it was opened for, and human-code
+    /// pairing only on the LAN, §10 and §16 O8). Returns whether a session
+    /// ran or a pairing committed.
+    pub(super) async fn incoming<L: Link>(self: &Rc<Self>, link: L, origin: Origin) -> bool {
         let Ok(incoming) = self.manager.accept(link).await else {
-            return;
+            return false;
         };
         let now = wall();
         match incoming {
-            Incoming::Contact(contact) => {
+            Incoming::Contact(contact) if origin != Origin::RelayQr => {
                 let table = self.table.borrow().clone();
                 let Ok(claimed) = contact.claim(&table, now).await else {
-                    return;
+                    return false;
                 };
                 let Ok(local) = self.identity.local(now) else {
-                    return;
+                    return false;
                 };
                 let established = {
                     let mut contacts = self.contacts.lock().await;
                     claimed.respond(&table, &mut contacts, &local, now).await
                 };
-                if let Ok(established) = established {
-                    self.refresh_table().await;
-                    session::run(Rc::clone(self), established).await;
-                }
+                let Ok(established) = established else {
+                    return false;
+                };
+                self.refresh_table().await;
+                session::run(Rc::clone(self), established).await;
+                true
             }
-            Incoming::Pairing(incoming) => self.pairing_responder(incoming).await,
-            Incoming::CodeOfferRequest(request) => {
+            Incoming::Pairing(incoming) if origin != Origin::RelayContact => {
+                let mode = incoming.client_hello().mode();
+                if origin == Origin::RelayQr && mode != SessionMode::Qr {
+                    return false;
+                }
+                self.pairing_responder(incoming).await
+            }
+            Incoming::CodeOfferRequest(request) if origin == Origin::Lan => {
                 let Some(token) = self.stranger_token() else {
-                    return;
+                    return false;
                 };
                 if self.pairing.get() != Some(Pairing::Code) {
-                    return;
+                    return false;
                 }
-                if let Ok(incoming) = request.answer(CODE_GATE, &self.offers, &token, now).await {
-                    self.pairing_responder(incoming).await;
+                match request.answer(CODE_GATE, &self.offers, &token, now).await {
+                    Ok(incoming) => self.pairing_responder(incoming).await,
+                    Err(_) => false,
                 }
             }
+            _ => false,
         }
     }
 
@@ -518,32 +542,32 @@ impl State {
     async fn pairing_responder<L: Link>(
         self: &Rc<Self>,
         mut incoming: todoke_crypto::session::IncomingSession<L, TokioTimer>,
-    ) {
+    ) -> bool {
         let now = wall();
         let mode = incoming.client_hello().mode();
         let shown = match mode {
             SessionMode::Qr => Pairing::Qr,
             SessionMode::Code => Pairing::Code,
-            SessionMode::Contact => return,
+            SessionMode::Contact => return false,
         };
         if self.pairing.get() != Some(shown) {
-            return;
+            return false;
         }
         let Ok(reservation) = incoming.reserve_offer(&self.offers, now) else {
-            return;
+            return false;
         };
         let Ok(local) = self.identity.local(now) else {
-            return;
+            return false;
         };
         let paired = {
             let mut contacts = self.contacts.lock().await;
             let planned = match mode {
                 SessionMode::Qr => reservation.into_qr_responder(&mut contacts),
                 SessionMode::Code => reservation.into_code_responder(CODE_GATE, &mut contacts),
-                SessionMode::Contact => return,
+                SessionMode::Contact => return false,
             };
             let Ok((plan, mut authority)) = planned else {
-                return;
+                return false;
             };
             incoming
                 .respond(&local, now, plan, &mut authority)
@@ -552,7 +576,9 @@ impl State {
         };
         if let Ok(peer) = paired {
             self.paired(peer).await;
+            return true;
         }
+        false
     }
 
     /// A pairing committed: stop showing the offer and tell the user.
@@ -1204,7 +1230,9 @@ pub(super) async fn run(
             accepted = accept => {
                 if let Ok(link) = accepted {
                     let state = Rc::clone(&state);
-                    tokio::task::spawn_local(async move { state.incoming(link).await });
+                    tokio::task::spawn_local(async move {
+                        state.incoming(link, Origin::Lan).await;
+                    });
                 } else {
                     // Out of descriptors, say: never spin on it.
                     tokio::time::sleep(ACCEPT_PAUSE).await;
