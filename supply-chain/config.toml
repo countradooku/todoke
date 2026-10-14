@@ -517,6 +517,11 @@ version = "0.11.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Version 0.11.0 was exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; upgraded to the latest release 0.11.1 on 2026-10-13 (riscv-zknh and AArch64 constant-loading changes, MSRV 1.88); replace with an audit or imported audit."
 
+[[exemptions.signal-hook-registry]]
+version = "1.4.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for tokio's signal feature (the daemon stops cleanly on SIGINT and SIGTERM); imported audits cover only 1.4.1; replace with an audit or imported audit."
+
 [[exemptions.signature]]
 version = "3.0.0"
 criteria = "safe-to-deploy"

@@ -93,19 +93,23 @@ fn open_private(path: &Path, create: bool) -> io::Result<std::fs::File> {
 }
 
 /// Refuses a key file that others can read or write.
+#[cfg(unix)]
 fn check_private(file: &std::fs::File) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        if file.metadata()?.permissions().mode() & 0o077 != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the storage key file is readable by others",
-            ));
-        }
+    use std::os::unix::fs::PermissionsExt as _;
+    if file.metadata()?.permissions().mode() & 0o077 != 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the storage key file is readable by others",
+        ));
     }
-    #[cfg(not(unix))]
-    let _ = file;
+    Ok(())
+}
+
+/// On Windows the file inherits the user profile's ACL (only the user and
+/// administrators); nothing more is checked here.
+#[cfg(not(unix))]
+#[expect(clippy::unnecessary_wraps, reason = "the same signature as on Unix")]
+fn check_private(_: &std::fs::File) -> io::Result<()> {
     Ok(())
 }
 
