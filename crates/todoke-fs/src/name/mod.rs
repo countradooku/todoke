@@ -189,6 +189,16 @@ const NTFS_METAFILES: &[&str] = &[
     "$Secure", "$UpCase", "$Extend", "$Quota", "$ObjId", "$Reparse",
 ];
 
+/// Whether `c` changes or hides what is displayed without showing itself:
+/// bidi and C1 controls, line and paragraph separators, invisible fillers,
+/// tags, noncharacters, joiners, variation selectors, and every other
+/// default-ignorable code point (Unicode 16). Interfaces escape these in
+/// text a peer chose, so two different names never look the same.
+#[must_use]
+pub const fn is_invisible(c: char) -> bool {
+    !matches!(chars::classify(c), chars::Class::Plain)
+}
+
 /// Rewrites one manifest name component for local use. `name` should
 /// already have passed `todoke_proto::transfer::manifest::validate_name`;
 /// anything else still yields a valid name. The result is a single

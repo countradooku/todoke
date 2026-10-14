@@ -507,6 +507,55 @@ fn every_segment_seals_from_files_on_disk() -> TestResult {
     Ok(())
 }
 
+/// The preparer hashes on another thread into a file a source serves; it
+/// opens no link, never waits on a FIFO, and refuses a path whose file
+/// is not the one the caller saw.
+#[test]
+fn the_preparer_refuses_swapped_paths() -> TestResult {
+    use todoke_transfer::SourceError;
+    let dir = TempDir::new()?;
+    let (one, two) = (dir.path().join("one"), dir.path().join("two"));
+    std::fs::write(&one, b"first file")?;
+    std::fs::write(&two, b"second file")?;
+    let hasher = crate::Preparer::new(&scratch()?)?;
+    let seen = std::fs::symlink_metadata(&one)?;
+    let worker = hasher.clone();
+    let path = one.clone();
+    let prepared = std::thread::spawn(move || worker.prepare(&path, Some(&seen)))
+        .join()
+        .map_err(|_| "the preparing thread panicked")??;
+    assert_eq!(prepared.root(), blake3::hash(b"first file").as_bytes());
+    let mut source = FsSource::new(&scratch()?)?;
+    source.insert([0x32; 16], 1, prepared);
+    assert!(source.open(&[0x32; 16], 1).is_ok());
+    // Another file at the path the caller chose.
+    let seen = std::fs::symlink_metadata(&one)?;
+    std::fs::rename(&two, &one)?;
+    assert_eq!(
+        hasher.prepare(&one, Some(&seen)).map(|_| ()),
+        Err(SourceError::Io(std::io::ErrorKind::Other))
+    );
+    #[cfg(unix)]
+    {
+        // A link to another file.
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&one, &link)?;
+        assert_eq!(
+            hasher.prepare(&link, None).map(|_| ()),
+            Err(SourceError::Io(std::io::ErrorKind::InvalidInput))
+        );
+        // A FIFO: refused at once, not waited on.
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status()?;
+        assert!(made.success(), "mkfifo failed");
+        assert_eq!(
+            hasher.prepare(&fifo, None).map(|_| ()),
+            Err(SourceError::Io(std::io::ErrorKind::InvalidInput))
+        );
+    }
+    Ok(())
+}
+
 /// Two sessions' engines share one sink through `SharedSink`.
 #[test]
 fn engines_share_one_sink() -> TestResult {
