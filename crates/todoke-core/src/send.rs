@@ -19,7 +19,7 @@ use todoke_crypto::content::ContentSuite;
 use todoke_crypto::identity::Ed25519PublicKey;
 use todoke_fs::{FsSource, PreparedFile};
 use todoke_proto::time::UnixTime;
-use todoke_proto::transfer::ManifestLimits;
+use todoke_proto::transfer::{ManifestLimits, TransferId};
 use todoke_transfer::{ManifestBuilder, OutgoingOffer};
 use unicode_normalization::UnicodeNormalization as _;
 
@@ -152,35 +152,66 @@ fn visit(
     Ok(())
 }
 
-/// Hashes every walked file into `source` and builds the offer from
-/// `sender` to `recipient`, created at `now`, every file in `suite`.
+/// Files prepared for an offer whose manifest is built once a session has
+/// negotiated its content suite and the receiver's limits (§6): every new
+/// file must use the negotiated suite.
+#[derive(Debug)]
+pub struct Prepared {
+    transfer_id: TransferId,
+    created_at: UnixTime,
+    entries: Vec<PreparedEntry>,
+}
+
+#[derive(Debug)]
+struct PreparedEntry {
+    parent: Option<usize>,
+    name: String,
+    /// `None` for a directory.
+    file: Option<(u64, [u8; 32])>,
+}
+
+impl Prepared {
+    /// The transfer ID the offer will carry.
+    #[must_use]
+    pub const fn transfer_id(&self) -> &TransferId {
+        &self.transfer_id
+    }
+
+    /// Bytes in all files.
+    #[must_use]
+    pub fn total_bytes(&self) -> u64 {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.file.map(|(size, _)| size))
+            .sum()
+    }
+}
+
+/// Hashes every walked file into `source` under a fresh random transfer ID
+/// (from the OS CSPRNG, §1, §7), created at `now`. The files stay open.
 ///
 /// # Errors
 ///
 /// [`SendError`].
-pub fn build(
+pub fn prepare(
     walked: &Walked,
-    sender: &Ed25519PublicKey,
-    recipient: &Ed25519PublicKey,
     now: UnixTime,
-    suite: ContentSuite,
     source: &mut FsSource,
-) -> Result<OutgoingOffer, SendError> {
-    let expires =
-        UnixTime::new(now.seconds().saturating_add(OFFER_LIFETIME)).ok_or(SendError::Manifest)?;
-    let mut builder =
-        ManifestBuilder::new(sender, recipient, now, expires).map_err(|_| SendError::Manifest)?;
-    // Manifest IDs by walk index.
-    let mut ids: Vec<u32> = Vec::with_capacity(walked.entries.len());
-    let mut prepared: Vec<(u32, PreparedFile)> = Vec::new();
-    let id_of = |ids: &[u32], parent: Option<usize>| {
-        parent
-            .and_then(|index| ids.get(index).copied())
-            .unwrap_or(0)
-    };
+) -> Result<Prepared, SendError> {
+    let mut transfer_id = [0; 16];
+    getrandom::fill(&mut transfer_id).map_err(|_| SendError::Manifest)?;
+    if transfer_id == [0; 16] {
+        return Err(SendError::Manifest);
+    }
+    let mut entries = Vec::with_capacity(walked.entries.len());
+    let mut files: Vec<(usize, PreparedFile)> = Vec::new();
     for entry in &walked.entries {
-        let id = match entry {
-            Walk::Directory { parent, name } => builder.add_directory(id_of(&ids, *parent), name),
+        match entry {
+            Walk::Directory { parent, name } => entries.push(PreparedEntry {
+                parent: *parent,
+                name: name.clone(),
+                file: None,
+            }),
             Walk::File { parent, name, path } => {
                 let file = source.prepare(path).map_err(|error| match error {
                     todoke_transfer::SourceError::Io(kind) => SendError::Unreadable(kind),
@@ -188,26 +219,71 @@ pub fn build(
                         SendError::Unreadable(std::io::ErrorKind::NotFound)
                     }
                 })?;
-                let id = builder.add_file(
-                    id_of(&ids, *parent),
-                    name,
-                    "application/octet-stream",
-                    file.size(),
-                    *file.root(),
-                );
-                prepared.push((id, file));
-                id
+                entries.push(PreparedEntry {
+                    parent: *parent,
+                    name: name.clone(),
+                    file: Some((file.size(), *file.root())),
+                });
+                files.push((entries.len() - 1, file));
+            }
+        }
+    }
+    // Manifest IDs are 1-based walk positions (the builder numbers entries
+    // in the order they are added).
+    for (index, file) in files {
+        let id = u32::try_from(index + 1).map_err(|_| SendError::TooLarge)?;
+        source.insert(transfer_id, id, file);
+    }
+    Ok(Prepared {
+        transfer_id,
+        created_at: now,
+        entries,
+    })
+}
+
+/// The offer from `sender` to `recipient` for `prepared`, every file in
+/// `suite`, within `limits` (the receiver's).
+///
+/// # Errors
+///
+/// [`SendError::Manifest`] if it exceeds `limits` or cannot be built.
+pub fn build(
+    prepared: &Prepared,
+    sender: &Ed25519PublicKey,
+    recipient: &Ed25519PublicKey,
+    suite: ContentSuite,
+    limits: &ManifestLimits,
+) -> Result<OutgoingOffer, SendError> {
+    let expires = UnixTime::new(prepared.created_at.seconds().saturating_add(OFFER_LIFETIME))
+        .ok_or(SendError::Manifest)?;
+    let mut builder = ManifestBuilder::with_transfer_id(
+        prepared.transfer_id,
+        sender,
+        recipient,
+        prepared.created_at,
+        expires,
+    );
+    let mut ids: Vec<u32> = Vec::with_capacity(prepared.entries.len());
+    for entry in &prepared.entries {
+        let parent = entry
+            .parent
+            .and_then(|index| ids.get(index).copied())
+            .unwrap_or(0);
+        let id = match entry.file {
+            None => builder.add_directory(parent, &entry.name),
+            Some((size, root)) => {
+                builder.add_file(parent, &entry.name, "application/octet-stream", size, root)
             }
         };
+        // The source holds each file under its 1-based position (prepare).
+        if usize::try_from(id).ok() != Some(ids.len() + 1) {
+            return Err(SendError::Manifest);
+        }
         ids.push(id);
     }
     let manifest = builder
-        .build(suite, &ManifestLimits::SPEC)
+        .build(suite, limits)
         .map_err(|_| SendError::Manifest)?;
-    let transfer_id = *manifest.transfer_id();
-    for (id, file) in prepared {
-        source.insert(transfer_id, id, file);
-    }
     OutgoingOffer::new(manifest).map_err(|_| SendError::Manifest)
 }
 

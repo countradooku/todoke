@@ -332,8 +332,9 @@ pub enum Event {
 
 /// Lowercase hex.
 #[must_use]
-pub fn hex(bytes: &[u8]) -> String {
+pub fn hex(bytes: impl AsRef<[u8]>) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
     let mut out = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
         out.push(char::from(DIGITS[usize::from(byte >> 4)]));
@@ -413,6 +414,6 @@ mod tests {
 
     #[test]
     fn hex_is_lowercase() {
-        assert_eq!(hex(&[0x00, 0xab, 0xff]), "00abff");
+        assert_eq!(hex([0x00, 0xab, 0xff]), "00abff");
     }
 }

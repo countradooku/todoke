@@ -85,8 +85,10 @@ impl ManifestBuilder {
         ))
     }
 
-    /// As [`Self::new`] with a given transfer ID, for tests. A live
-    /// transfer ID must be fresh and random (§7).
+    /// As [`Self::new`] with a given transfer ID: for tests, or for a caller
+    /// that drew a fresh random ID from the OS CSPRNG itself (to name the
+    /// transfer before its manifest can be built). A live transfer ID must
+    /// be fresh and random (§7).
     #[must_use]
     pub fn with_transfer_id(
         transfer_id: TransferId,

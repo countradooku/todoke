@@ -464,4 +464,5 @@ fn private_dir(dir: &Path) -> Result<(), ProfileError> {
 }
 
 #[cfg(test)]
+#[cfg(test)]
 pub(crate) mod tests;
