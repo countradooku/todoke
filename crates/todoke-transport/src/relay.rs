@@ -137,10 +137,35 @@ impl fmt::Display for RelayError {
 
 impl std::error::Error for RelayError {}
 
+/// How long each step of a rendezvous may take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Timeouts {
+    /// Connecting to the relay.
+    pub(crate) connect: Duration,
+    /// The relay's answer to `Register`.
+    pub(crate) answer: Duration,
+    /// The longest wait for the peer (§10: 30 seconds).
+    pub(crate) longest_wait: Duration,
+    /// The whole wait for `ForwardReady`: the room's lifetime (§10: 120
+    /// seconds).
+    pub(crate) room: Duration,
+}
+
+impl Timeouts {
+    /// The timeouts every client uses.
+    pub(crate) const STANDARD: Self = Self {
+        connect: CONNECT_TIMEOUT,
+        answer: ANSWER_TIMEOUT,
+        longest_wait: Duration::from_secs(MAX_WAIT_SECONDS as u64),
+        room: Duration::from_secs(MAX_ROOM_SECONDS as u64),
+    };
+}
+
 /// Rendezvous through relays.
 pub struct RelayClient {
     endpoint: quinn::Endpoint,
     provider: Arc<CryptoProvider>,
+    timeouts: Timeouts,
 }
 
 impl fmt::Debug for RelayClient {
@@ -162,6 +187,16 @@ impl RelayClient {
         Ok(Self {
             endpoint,
             provider: Arc::new(rustls::crypto::aws_lc_rs::default_provider()),
+            timeouts: Timeouts::STANDARD,
+        })
+    }
+
+    /// A client with other timeouts (tests: real time, short waits).
+    #[cfg(test)]
+    pub(crate) fn with_timeouts(timeouts: Timeouts) -> io::Result<Self> {
+        Ok(Self {
+            timeouts,
+            ..Self::new()?
         })
     }
 
@@ -177,7 +212,7 @@ impl RelayClient {
         token: RendezvousToken,
         wait: Duration,
     ) -> Result<RelayLink, RelayError> {
-        let connection = tokio::time::timeout(CONNECT_TIMEOUT, self.connect(relay))
+        let connection = tokio::time::timeout(self.timeouts.connect, self.connect(relay))
             .await
             .map_err(|_| RelayError::Unreachable(io::ErrorKind::TimedOut))??;
         let (mut send, mut recv) = connection
@@ -185,7 +220,7 @@ impl RelayClient {
             .await
             .map_err(|_| RelayError::Unreachable(io::ErrorKind::ConnectionAborted))?;
         let nonce = random16().ok_or(RelayError::Unreachable(io::ErrorKind::Other))?;
-        let wait = wait.min(Duration::from_secs(u64::from(MAX_WAIT_SECONDS)));
+        let wait = wait.min(self.timeouts.longest_wait);
         let ttl = MAX_ROOM_SECONDS;
         write(
             &mut send,
@@ -197,7 +232,7 @@ impl RelayClient {
         )
         .await?;
         let mut reader = Reader::default();
-        let answer = tokio::time::timeout(ANSWER_TIMEOUT, reader.next(&mut recv))
+        let answer = tokio::time::timeout(self.timeouts.answer, reader.next(&mut recv))
             .await
             .map_err(|_| RelayError::Protocol)??;
         let room = match answer {
@@ -225,7 +260,7 @@ impl RelayClient {
         // One deadline for the whole wait (the room's lifetime), and each
         // optional record at most once (§10): a relay can neither stall
         // the rendezvous nor flood it.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(ttl));
+        let deadline = tokio::time::Instant::now() + self.timeouts.room;
         let (mut candidates, mut punch) = (false, false);
         loop {
             let next = tokio::time::timeout_at(deadline, reader.next(&mut recv))
