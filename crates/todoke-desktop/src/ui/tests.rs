@@ -1371,3 +1371,40 @@ fn the_clipboard_without_a_selection_asks_who(cx: &mut TestAppContext) {
         "see you"
     );
 }
+
+/// With the window closed (todoke in the tray), an offer and a finished
+/// transfer notify; the offer's notification goes once it is decided.
+#[gpui_kit::test]
+fn the_background_notifies_offers_and_endings(cx: &mut TestAppContext) {
+    let home = Home::new("notify");
+    let mock = Arc::new(Mock::new(script()));
+    cx.update(|cx| cx.set_app_identity("org.todoke.todoke", "todoke"));
+    let (view, vcx) = open(cx, &mock, &home);
+    // In front: the window shows it, the system does not.
+    mock.emit(Event::OfferReceived(offer("tf", &[("a", "text/plain", 1)])));
+    vcx.run_until_parked();
+    view.update(vcx, |app, _| app.closed());
+    mock.emit(Event::OfferReceived(offer(
+        "tn",
+        &[("plan.pdf", "application/pdf", 9)],
+    )));
+    vcx.run_until_parked();
+    let shown = vcx.cx.shown_system_notifications();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0].tag.as_ref(), "offer-tn");
+    assert!(!shown[0].body.contains("plan"));
+    mock.emit(Event::Ended {
+        transfer: "tn".into(),
+        reason: TransferState::Rejected,
+        message: "declined".into(),
+    });
+    vcx.run_until_parked();
+    assert_eq!(
+        vcx.cx
+            .delivered_system_notifications()
+            .iter()
+            .map(|n| n.tag.to_string())
+            .collect::<Vec<_>>(),
+        ["transfer-tn"]
+    );
+}

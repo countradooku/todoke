@@ -12,6 +12,7 @@ mod assets;
 pub mod fixtures;
 mod history;
 mod home;
+mod notify;
 mod pair;
 mod picker;
 mod qr;
@@ -193,6 +194,14 @@ pub struct Sheet {
     pub generation: u64,
 }
 
+/// The parts of the view that belong to its window.
+struct WindowParts {
+    search: Entity<InputState>,
+    code: Entity<InputState>,
+    qr_text: Entity<InputState>,
+    subscriptions: Vec<Subscription>,
+}
+
 /// The root view.
 pub struct Todoke {
     paths: Paths,
@@ -231,6 +240,11 @@ pub struct Todoke {
     /// how many: a file is removed only when none is pending and no
     /// offered transfer uses it (one file can go to several contacts).
     outbox_pending: BTreeMap<PathBuf, usize>,
+    /// Whether the window is in front: offers and finished transfers
+    /// notify the system only while it is not.
+    active: bool,
+    /// The offers notified, whose notifications go when they do.
+    notified: BTreeSet<String>,
     /// Unix seconds, ticking each second (countdowns).
     now: u64,
     /// The one-second tick (countdowns).
@@ -250,6 +264,80 @@ impl Todoke {
     /// The window's view, before the core is reached; [`Self::start`]
     /// reaches it.
     pub fn new(paths: Paths, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let WindowParts {
+            search,
+            code,
+            qr_text,
+            subscriptions,
+        } = Self::window_parts(window, cx);
+        let prefs = Prefs::default();
+        let mut this = Self {
+            paths,
+            backend: None,
+            model: Model::new(),
+            page: Page::Home,
+            focus: cx.focus_handle(),
+            sheet_focus: cx.focus_handle(),
+            focused_sheet: None,
+            tile_focus: BTreeMap::new(),
+            zone_focus: cx.focus_handle().tab_index(0).tab_stop(true),
+            search,
+            code,
+            qr_text,
+            pair_tab: PairTab::ShowQr,
+            stranger: None,
+            sheet: Sheet::default(),
+            picker: picker::State::new(cx),
+            saved: None,
+            draft: None,
+            prefs,
+            confirm_clear: false,
+            noticed: 0,
+            outbox: BTreeMap::new(),
+            outbox_pending: BTreeMap::new(),
+            active: true,
+            notified: BTreeSet::new(),
+            now: unix_now(),
+            ticker: None,
+            loops: Vec::new(),
+            _subscriptions: subscriptions,
+        };
+        this.ticker = Some(cx.spawn(async move |this, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(core::time::Duration::from_secs(1))
+                    .await;
+                let ticked = this.update(cx, |app, cx| {
+                    app.now = unix_now();
+                    // An expired offer is gone in the core (§3): its secret
+                    // goes from here too.
+                    if app
+                        .model
+                        .pairing
+                        .expires_at()
+                        .is_some_and(|at| at <= app.now)
+                    {
+                        app.model.pairing = Pairing::Idle;
+                        cx.notify();
+                    }
+                    let counting =
+                        !matches!(app.model.pairing, Pairing::Idle) || app.sheet.transfer.is_some();
+                    if counting {
+                        cx.notify();
+                    }
+                });
+                if ticked.is_err() {
+                    break;
+                }
+            }
+        }));
+        window.focus(&this.focus, cx);
+        this
+    }
+
+    /// What belongs to a window: the text fields and what follows the
+    /// window's appearance, focus, and activation.
+    fn window_parts(window: &mut Window, cx: &mut Context<Self>) -> WindowParts {
         let search = cx.new(|cx| {
             InputState::new(window, cx).placeholder("Search names, devices, hashes, or states")
         });
@@ -291,67 +379,43 @@ impl Todoke {
         subscriptions.push(cx.observe_window_appearance(window, |this, window, cx| {
             this.apply_theme(window, cx);
         }));
-        let prefs = Prefs::default();
-        let mut this = Self {
-            paths,
-            backend: None,
-            model: Model::new(),
-            page: Page::Home,
-            focus: cx.focus_handle(),
-            sheet_focus: cx.focus_handle(),
-            focused_sheet: None,
-            tile_focus: BTreeMap::new(),
-            zone_focus: cx.focus_handle().tab_index(0).tab_stop(true),
+        subscriptions.push(cx.observe_window_activation(window, |this, window, _| {
+            this.active = window.is_window_active();
+        }));
+        WindowParts {
             search,
             code,
             qr_text,
-            pair_tab: PairTab::ShowQr,
-            stranger: None,
-            sheet: Sheet::default(),
-            picker: picker::State::new(cx),
-            saved: None,
-            draft: None,
-            prefs,
-            confirm_clear: false,
-            noticed: 0,
-            outbox: BTreeMap::new(),
-            outbox_pending: BTreeMap::new(),
-            now: unix_now(),
-            ticker: None,
-            loops: Vec::new(),
-            _subscriptions: subscriptions,
-        };
-        this.ticker = Some(cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor()
-                    .timer(core::time::Duration::from_secs(1))
-                    .await;
-                let ticked = this.update(cx, |app, cx| {
-                    app.now = unix_now();
-                    // An expired offer is gone in the core (§3): its secret
-                    // goes from here too.
-                    if app
-                        .model
-                        .pairing
-                        .expires_at()
-                        .is_some_and(|at| at <= app.now)
-                    {
-                        app.model.pairing = Pairing::Idle;
-                        cx.notify();
-                    }
-                    let counting =
-                        !matches!(app.model.pairing, Pairing::Idle) || app.sheet.transfer.is_some();
-                    if counting {
-                        cx.notify();
-                    }
-                });
-                if ticked.is_err() {
-                    break;
-                }
-            }
-        }));
-        window.focus(&this.focus, cx);
-        this
+            subscriptions,
+        }
+    }
+
+    /// The window was closed while todoke keeps running (the tray or menu
+    /// bar item brings it back): offers and transfers now notify.
+    pub fn closed(&mut self) {
+        self.active = false;
+    }
+
+    /// Shows this view in a new `window` after the last one closed.
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the subscriptions are held, never read"
+    )]
+    pub fn reopened(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let WindowParts {
+            search,
+            code,
+            qr_text,
+            subscriptions,
+        } = Self::window_parts(window, cx);
+        (self.search, self.code, self.qr_text) = (search, code, qr_text);
+        self._subscriptions = subscriptions;
+        self.focused_sheet = None;
+        self.picker.focused = false;
+        self.active = true;
+        self.apply_theme(window, cx);
+        window.focus(&self.focus, cx);
+        cx.notify();
     }
 
     /// Loads the preferences, then attaches to a daemon or hosts one, on
@@ -449,7 +513,25 @@ impl Todoke {
     }
 
     fn on_event(&mut self, event: Event, cx: &mut Context<Self>) {
+        let notification = match &event {
+            Event::OfferReceived(offer) => Some(notify::offer(offer)),
+            _ => None,
+        };
+        let ended = match &event {
+            Event::Completed { transfer }
+            | Event::Delivered { transfer }
+            | Event::Ended { transfer, .. } => Some(transfer.clone()),
+            _ => None,
+        };
         let fetch = self.model.apply(event);
+        if !self.active {
+            if let Some(notification) = notification {
+                self.notified.insert(notification.tag.to_string());
+                cx.show_system_notification(notification);
+            } else if let (Some(transfer), Some(notice)) = (ended, self.model.notices.back()) {
+                cx.show_system_notification(notify::finished(&transfer, &notice.text));
+            }
+        }
         self.fetch(&fetch, cx);
         self.after_change(cx);
         cx.notify();
@@ -543,6 +625,12 @@ impl Todoke {
         }
         let live: BTreeSet<&String> = self.model.offers.iter().map(|o| &o.transfer).collect();
         self.sheet.hidden.retain(|id| live.contains(id));
+        // An offer decided, expired, or withdrawn: its notification goes.
+        let tags: BTreeSet<String> = live.iter().map(|id| notify::offer_tag(id)).collect();
+        for gone in self.notified.difference(&tags) {
+            cx.dismiss_system_notification(gone);
+        }
+        self.notified.retain(|tag| tags.contains(tag));
         let finished: Vec<String> = self
             .outbox
             .keys()
@@ -1337,6 +1425,18 @@ impl Render for Todoke {
 
 use gpui_kit::prelude::FluentBuilder as _;
 
+/// What the app is asked to do from outside the window.
+#[derive(Debug)]
+enum Command {
+    /// From another launch, Finder, the Dock, the tray, or a notification.
+    Handoff(Handoff),
+    /// From the tray.
+    Quit,
+}
+
+type Commands = tokio::sync::mpsc::UnboundedReceiver<Command>;
+type Commander = tokio::sync::mpsc::UnboundedSender<Command>;
+
 /// Opens the window and runs the app until it quits; or, when this
 /// profile's window already runs, hands it what this launch asks for.
 pub fn run() {
@@ -1361,52 +1461,62 @@ pub fn run() {
             std::process::exit(1);
         }
     };
-    let Some((listening, deliver, delivered)) = listen_or_hand_over(&paths, &launch.handoff) else {
+    let Some((listening, commander, commands)) = listen_or_hand_over(&paths, &launch.handoff)
+    else {
         return;
     };
     let application = gpui_kit::application().with_assets(assets::Assets);
     {
         // Finder's Open With and drops on the Dock icon (macOS), and a
         // click on the Dock icon.
-        let opened = deliver.clone();
+        let opened = commander.clone();
         application.on_open_urls(move |urls| {
             let paths: Vec<PathBuf> = urls
                 .iter()
                 .filter_map(|url| crate::launch::file_url(url))
                 .collect();
             if !paths.is_empty() {
-                let _ = opened.send(Handoff::Send { paths });
+                let _ = opened.send(Command::Handoff(Handoff::Send { paths }));
             }
         });
+        let reopened = commander.clone();
         application.on_reopen(move |_| {
-            let _ = deliver.send(Handoff::Show);
+            let _ = reopened.send(Command::Handoff(Handoff::Show));
         });
     }
     application.run(move |cx: &mut App| {
         gpui_kit::init(cx);
         cx.set_app_identity("org.todoke.todoke", "todoke");
         cx.bind_keys(bindings());
-        open_window(paths, launch, listening, delivered, cx);
+        let notified = commander.clone();
+        cx.on_system_notification_response(move |_, _| {
+            let _ = notified.send(Command::Handoff(Handoff::Show));
+        });
+        let tray = crate::tray::install(move |action| {
+            let _ = commander.send(match action {
+                crate::tray::Action::Open => Command::Handoff(Handoff::Show),
+                crate::tray::Action::SendClipboard => Command::Handoff(Handoff::SendClipboard),
+                crate::tray::Action::Quit => Command::Quit,
+            });
+        });
+        open_window(paths, launch, (listening, tray), commands, cx);
     });
 }
-
-type Delivered = tokio::sync::mpsc::UnboundedReceiver<Handoff>;
-type Deliver = tokio::sync::mpsc::UnboundedSender<Handoff>;
 
 /// Hands `request` to this profile's running window (`None`: done), or
 /// listens for other launches' requests (one window per profile).
 fn listen_or_hand_over(
     paths: &Paths,
     request: &Handoff,
-) -> Option<(Option<handoff::Listening>, Deliver, Delivered)> {
+) -> Option<(Option<handoff::Listening>, Commander, Commands)> {
     if handoff::send(paths, request).is_ok() {
         return None;
     }
-    let (deliver, delivered) = tokio::sync::mpsc::unbounded_channel();
+    let (commander, commands) = tokio::sync::mpsc::unbounded_channel();
     let listening = {
-        let deliver = deliver.clone();
+        let commander = commander.clone();
         handoff::listen(paths, move |handoff| {
-            let _ = deliver.send(handoff);
+            let _ = commander.send(Command::Handoff(handoff));
         })
     };
     let listening = match listening {
@@ -1424,29 +1534,16 @@ fn listen_or_hand_over(
             None
         }
     };
-    Some((listening, deliver, delivered))
+    Some((listening, commander, commands))
 }
 
-/// Opens the window, which takes the launch's request and then those of
-/// later launches.
-fn open_window(
-    paths: Paths,
-    launch: crate::launch::Launch,
-    listening: Option<handoff::Listening>,
-    mut delivered: Delivered,
-    cx: &mut App,
-) {
-    let crate::launch::Launch {
-        handoff: request,
-        background,
-        ..
-    } = launch;
+fn window_options(background: bool, cx: &App) -> gpui_kit::WindowOptions {
     let bounds = gpui_kit::Bounds::centered(
         None,
         gpui_kit::size(px(size::WINDOW.0), px(size::WINDOW.1)),
         cx,
     );
-    let options = gpui_kit::WindowOptions {
+    gpui_kit::WindowOptions {
         window_bounds: Some(gpui_kit::WindowBounds::Windowed(bounds)),
         window_min_size: Some(gpui_kit::size(
             px(size::MIN_WINDOW.0),
@@ -1460,8 +1557,25 @@ fn open_window(
         show: !background,
         focus: !background,
         ..Default::default()
-    };
-    let opened = gpui_kit::open_window(options, cx, |window, cx| {
+    }
+}
+
+/// Opens the window, which takes the launch's request and then the
+/// commands that follow. With a tray item, closing the window keeps the
+/// view (and the core it hosts) running, and a command opens it again.
+fn open_window(
+    paths: Paths,
+    launch: crate::launch::Launch,
+    held: (Option<handoff::Listening>, Option<crate::tray::Tray>),
+    mut commands: Commands,
+    cx: &mut App,
+) {
+    let crate::launch::Launch {
+        handoff: request,
+        background,
+        ..
+    } = launch;
+    let opened = gpui_kit::open_window(window_options(background, cx), cx, |window, cx| {
         cx.new(|cx| {
             let mut app = Todoke::new(paths, window, cx);
             app.start(window, cx);
@@ -1479,21 +1593,52 @@ fn open_window(
             return;
         }
     };
-    cx.spawn(async move |cx| {
-        let _listening = listening;
-        while let Some(handoff) = delivered.recv().await {
-            let handed = window.update(cx, |_, window, cx| {
-                view.update(cx, |app, cx| app.handoff(handoff, window, cx));
-            });
-            if handed.is_err() {
-                break;
+    let stays = held.1.is_some();
+    {
+        let view = view.clone();
+        cx.on_window_closed(move |cx, _| {
+            if !cx.windows().is_empty() {
+                return;
             }
-        }
-    })
-    .detach();
-    cx.on_window_closed(|cx, _| {
-        if cx.windows().is_empty() {
-            cx.quit();
+            if stays {
+                view.update(cx, |app, _| app.closed());
+            } else {
+                cx.quit();
+            }
+        })
+        .detach();
+    }
+    cx.spawn(async move |cx| {
+        let _held = held;
+        let mut window = Some(window);
+        while let Some(command) = commands.recv().await {
+            let handoff = match command {
+                Command::Handoff(handoff) => handoff,
+                Command::Quit => {
+                    cx.update(|cx| cx.quit());
+                    break;
+                }
+            };
+            let handed = window.and_then(|open| {
+                open.update(cx, |_, window, cx| {
+                    view.update(cx, |app, cx| app.handoff(handoff.clone(), window, cx));
+                })
+                .ok()
+            });
+            if handed.is_none() {
+                let view = view.clone();
+                window = cx.update(|cx| {
+                    gpui_kit::open_window(window_options(false, cx), cx, |window, cx| {
+                        view.update(cx, |app, cx| {
+                            app.reopened(window, cx);
+                            app.handoff(handoff, window, cx);
+                        });
+                        view
+                    })
+                    .ok()
+                    .map(|(window, _)| window)
+                });
+            }
         }
     })
     .detach();

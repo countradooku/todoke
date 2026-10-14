@@ -11,6 +11,7 @@
 //! | Module | What it binds |
 //! | --- | --- |
 //! | [`secret_service`] | The storage key in the freedesktop Secret Service |
+//! | [`tray`] | Whether a StatusNotifierItem host shows tray items |
 //!
 //! Read `docs/adr/0011-os-integration.md` before adding behavior.
 
@@ -18,3 +19,5 @@
 
 #[cfg(target_os = "linux")]
 pub mod secret_service;
+#[cfg(target_os = "linux")]
+pub mod tray;
