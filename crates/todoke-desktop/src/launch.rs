@@ -177,7 +177,10 @@ fn path_of(bytes: Vec<u8>) -> PathBuf {
 // names no file, and sending it fails.
 #[cfg(not(unix))]
 fn path_of(bytes: Vec<u8>) -> PathBuf {
-    PathBuf::from(String::from_utf8_lossy(&bytes).into_owned())
+    PathBuf::from(
+        String::from_utf8(bytes)
+            .unwrap_or_else(|error| String::from_utf8_lossy(error.as_bytes()).into_owned()),
+    )
 }
 
 #[cfg(test)]
