@@ -20,13 +20,13 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 pub mod autostart;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 pub mod context_menu;
 #[cfg(windows)]
 pub mod dpapi;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 pub mod package;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "desktop"))]
 pub mod share_target;

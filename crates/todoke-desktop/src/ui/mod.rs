@@ -1014,6 +1014,7 @@ impl Todoke {
                 window.activate_window();
                 self.pick_clipboard(true, cx);
             }
+            #[cfg(target_os = "macos")]
             Command::SendText(text) => {
                 window.activate_window();
                 self.pick(picker::Offered::Text(text), cx);
@@ -1509,6 +1510,7 @@ pub(crate) enum Command {
     /// The global shortcut: the selection (Linux) or the clipboard.
     SendSelection,
     /// Text from the Services menu (macOS).
+    #[cfg(target_os = "macos")]
     SendText(zeroize::Zeroizing<String>),
     /// From the tray.
     Quit,
@@ -1631,6 +1633,25 @@ pub fn run() {
     });
 }
 
+/// Appends what `command` asks for to `log` (owner-only), for tests.
+fn log_command(log: &std::path::Path, command: &Command) {
+    use std::io::Write as _;
+    let line = match command {
+        Command::Handoff(handoff) => serde_json::to_string(handoff).unwrap_or_default(),
+        Command::SendSelection => r#"{"type":"send_selection"}"#.to_owned(),
+        #[cfg(target_os = "macos")]
+        Command::SendText(_) => r#"{"type":"send_text"}"#.to_owned(),
+        Command::Quit => r#"{"type":"quit"}"#.to_owned(),
+    };
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    if let Ok(mut file) = options.open(log) {
+        let _ = writeln!(file, "{line}");
+    }
+}
+
 /// Hands `request` to this profile's running window (`None`: done), or
 /// listens for other launches' requests (one window per profile).
 fn listen_or_hand_over(
@@ -1737,10 +1758,16 @@ fn open_window(
         })
         .detach();
     }
+    // For end-to-end tests of the shell integrations: what each request
+    // was (paths, never text), one JSON line each.
+    let log = std::env::var_os("TODOKE_HANDOFF_LOG").map(PathBuf::from);
     cx.spawn(async move |cx| {
         let _held = held;
         let mut window = Some(window);
         while let Some(command) = commands.recv().await {
+            if let Some(log) = &log {
+                log_command(log, &command);
+            }
             if matches!(command, Command::Quit) {
                 cx.update(|cx| cx.quit());
                 break;

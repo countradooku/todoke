@@ -562,6 +562,11 @@ version = "1.5.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.crossbeam-channel]]
+version = "0.5.17"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.crossbeam-deque]]
 version = "0.8.8"
 criteria = "safe-to-deploy"
@@ -696,6 +701,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "1.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dpi]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.dyn-clone]]
 version = "1.0.19"
@@ -981,6 +991,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "0.3.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.global-hotkey]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.globset]]
 version = "0.4.20"
@@ -1482,6 +1497,16 @@ version = "0.3.106"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.keyboard-types]]
+version = "0.7.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.keyboard-types]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.khronos-egl]]
 version = "4.1.0"
 criteria = "safe-to-deploy"
@@ -1501,6 +1526,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "1.1.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ksni]]
+version = "0.3.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.kurbo]]
 version = "0.11.3"
@@ -1797,6 +1827,11 @@ version = "0.8.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.muda]]
+version = "0.21.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.naga]]
 version = "29.0.4"
 criteria = "safe-to-deploy"
@@ -1976,6 +2011,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "0.3.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-service-management]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.objc2-user-notifications]]
 version = "0.3.2"
@@ -2872,6 +2912,11 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.task-local]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.tauri-winrt-notification]]
 version = "0.8.1"
 criteria = "safe-to-deploy"
@@ -3036,6 +3081,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10)
 version = "0.1.31"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tray-icon]]
+version = "0.26.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.triomphe]]
 version = "0.1.17"
@@ -3491,6 +3541,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "0.52.0"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through ring (see its exemption), never built for Windows. Replace with an audit or imported audit when upstream changes."
+
+[[exemptions.windows-sys]]
+version = "0.59.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's OS integration (tray, global shortcut, login item; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows-sys]]
 version = "0.60.2"

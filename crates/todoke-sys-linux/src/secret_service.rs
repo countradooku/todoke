@@ -114,6 +114,36 @@ impl SecretService {
         Ok(())
     }
 
+    /// The collection new items go to: the default one, else GNOME's login
+    /// keyring, else a new default collection (as libsecret does; the
+    /// keyring asks the user for its password).
+    fn collection(session: &Session) -> io::Result<OwnedObjectPath> {
+        let service =
+            Proxy::new(&session.connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
+        for alias in ["default", "login"] {
+            let collection: OwnedObjectPath = service.call("ReadAlias", &(alias,)).map_err(bus)?;
+            if collection.as_str() != "/" {
+                return Ok(collection);
+            }
+        }
+        let properties = HashMap::from([(
+            "org.freedesktop.Secret.Collection.Label",
+            Value::from("Login"),
+        )]);
+        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) = service
+            .call("CreateCollection", &(properties, "default"))
+            .map_err(bus)?;
+        Self::prompt(session, &prompt)?;
+        let collection: OwnedObjectPath = service.call("ReadAlias", &("default",)).map_err(bus)?;
+        if collection.as_str() == "/" {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the keyring has no collection to keep the key in",
+            ));
+        }
+        Ok(collection)
+    }
+
     /// This profile's item, unlocked; `None` if there is none.
     fn item(&self, session: &Session) -> io::Result<Option<OwnedObjectPath>> {
         let service =
@@ -163,15 +193,7 @@ impl SecretService {
         if self.item(&session)?.is_some() {
             return Err(io::ErrorKind::AlreadyExists.into());
         }
-        let service =
-            Proxy::new(&session.connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
-        let collection: OwnedObjectPath = service.call("ReadAlias", &("default",)).map_err(bus)?;
-        if collection.as_str() == "/" {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "the keyring has no default collection",
-            ));
-        }
+        let collection = Self::collection(&session)?;
         Self::unlock(&session, std::slice::from_ref(&collection))?;
         let proxy = Proxy::new(
             &session.connection,

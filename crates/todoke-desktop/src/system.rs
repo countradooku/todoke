@@ -124,14 +124,13 @@ pub fn file_manager() -> Integration {
         if todoke_sys_windows::package::packaged() {
             return Integration::Packaged;
         }
-        match program() {
-            Ok(program)
-                if todoke_sys_windows::context_menu::ContextMenu::new(program).installed() =>
-            {
-                Integration::On
-            }
-            Ok(_) => Integration::Off,
-            Err(_) => Integration::Unavailable("The app's location is unknown."),
+        let Ok(program) = program() else {
+            return Integration::Unavailable("The app's location is unknown.");
+        };
+        if todoke_sys_windows::context_menu::ContextMenu::new(program).installed() {
+            Integration::On
+        } else {
+            Integration::Off
         }
     }
     #[cfg(target_os = "linux")]
@@ -141,15 +140,15 @@ pub fn file_manager() -> Integration {
                 "Flatpak apps cannot add file-manager actions; use Open With → todoke.",
             );
         }
-        match program() {
-            Ok(program) if packaged(&program) => Integration::Packaged,
-            Ok(program)
-                if todoke_sys_linux::file_managers::FileManagers::new(program).installed() =>
-            {
-                Integration::On
-            }
-            Ok(_) => Integration::Off,
-            Err(_) => Integration::Unavailable("The app's location is unknown."),
+        let Ok(program) = program() else {
+            return Integration::Unavailable("The app's location is unknown.");
+        };
+        if packaged(&program) {
+            Integration::Packaged
+        } else if todoke_sys_linux::file_managers::FileManagers::new(program).installed() {
+            Integration::On
+        } else {
+            Integration::Off
         }
     }
 }

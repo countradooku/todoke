@@ -64,16 +64,16 @@ global-hotkey.workspace = true
 [target.'cfg(target_os = "linux")'.dependencies]
 # Whether a tray host runs; autostart, file-manager actions, the portal
 # global shortcut.
-todoke-sys-linux.workspace = true
+todoke-sys-linux = { workspace = true, features = ["desktop"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # The login item and the Finder Quick Action (Services).
-todoke-sys-macos.workspace = true
-objc2 = "=0.6.5"
+todoke-sys-macos = { workspace = true, features = ["desktop"] }
+objc2.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 # The login item, Explorer verbs, and the Share target.
-todoke-sys-windows.workspace = true
+todoke-sys-windows = { workspace = true, features = ["desktop"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
 # Headless windows, simulated input, and the accessibility tree in tests.

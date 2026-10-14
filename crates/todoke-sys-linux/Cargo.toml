@@ -11,6 +11,11 @@ publish.workspace = true
 # Cargo does not support overriding individual inherited workspace lints.
 # Keep these tables aligned with workspace.lints except unsafe_code:
 # narrowly scoped, reviewed allows are possible only in this boundary crate.
+[features]
+# The desktop app's pieces (autostart, file managers, portals, tray host);
+# the daemon and the CLI need only the key store.
+desktop = []
+
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"

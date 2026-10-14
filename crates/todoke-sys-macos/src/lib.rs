@@ -20,7 +20,7 @@
 
 #[cfg(target_os = "macos")]
 pub mod keychain;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "desktop"))]
 pub mod login_item;
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "desktop"))]
 pub mod services;
