@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use gpui_kit::AppContext as _;
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
@@ -52,11 +53,20 @@ fn open<'a>(
     });
     let paths = Paths::under(&home.0);
     let backend: Arc<dyn crate::backend::Backend> = mock.clone();
-    let (view, cx) = cx.add_window_view(move |window, cx| {
-        let mut app = Todoke::new(paths, window, cx);
-        app.attach(backend, Connection::Hosted, cx);
-        app
+    // Under a Root, as in the app: it owns Tab navigation.
+    let mut built = None;
+    let (_, cx) = cx.add_window_view(|window, cx| {
+        let view = cx.new(|cx| {
+            let mut app = Todoke::new(paths, window, cx);
+            app.attach(backend, Connection::Hosted, cx);
+            app
+        });
+        built = Some(view.clone());
+        gpui_kit::base::Root::new(view, window, cx)
     });
+    let Some(view) = built else {
+        unreachable!("the window was built");
+    };
     // Tall enough that every settings section is on screen.
     cx.simulate_resize(gpui_kit::size(gpui_kit::px(1040.0), gpui_kit::px(3200.0)));
     cx.run_until_parked();
@@ -728,4 +738,32 @@ fn unlabelled(cx: &mut VisualTestContext, page: &str) -> usize {
         assert!(named, "{page}: unlabelled control at {:?}", snapshot.path());
     }
     controls
+}
+
+/// Contacts are reached with Tab and chosen with Space, files offered with
+/// Return on the drop zone: no pointer needed.
+#[gpui_kit::test]
+fn contacts_are_chosen_from_the_keyboard(cx: &mut TestAppContext) {
+    let home = Home::new("keyboard");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    let tile = gpui_kit::ElementId::Name(format!("contact-{}", &LAN[..16]).into());
+    let mut reached = false;
+    for _ in 0..40 {
+        cx.update(|window, cx| window.press("tab", cx));
+        cx.run_until_parked();
+        if cx.update(|window, _| window.find(tile.clone()).focused()) == Some(true) {
+            reached = true;
+            break;
+        }
+    }
+    assert!(reached, "Tab never reached the first contact");
+    cx.update(|window, cx| window.press("space", cx));
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert!(app.model.selected.contains(LAN), "Space did not select");
+    });
+    cx.update(|window, cx| window.press("space", cx));
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.model.selected.is_empty()));
 }

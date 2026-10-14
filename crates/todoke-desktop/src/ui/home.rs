@@ -30,6 +30,18 @@ pub(super) const fn command_key() -> &'static str {
 impl Todoke {
     pub(super) fn render_home(&mut self, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let palette = tokens::palette(cx);
+        let devices: Vec<String> = self
+            .model
+            .contacts
+            .iter()
+            .map(|c| c.device.clone())
+            .collect();
+        self.tile_focus.retain(|device, _| devices.contains(device));
+        for device in devices {
+            self.tile_focus
+                .entry(device)
+                .or_insert_with(|| cx.focus_handle().tab_index(0).tab_stop(true));
+        }
         div()
             .flex()
             .flex_col()
@@ -114,6 +126,9 @@ impl Todoke {
                 format!("contact-{}", &device[..device.len().min(16)]).into(),
             ))
             .test_support()
+            .when_some(self.tile_focus.get(&device), |tile, focus| {
+                tile.track_focus(focus)
+            })
             .role(Role::CheckBox)
             .aria_label(spoken)
             .aria_toggled(if chosen {
@@ -121,7 +136,7 @@ impl Todoke {
             } else {
                 gpui_kit::Toggled::False
             })
-            .tab_stop(true)
+            .tab_index(0)
             .w(px(size::TILE))
             .p(px(space::M))
             .flex()
@@ -186,9 +201,10 @@ impl Todoke {
         div()
             .id("drop-zone")
             .test_support()
+            .track_focus(&self.zone_focus)
             .role(Role::Button)
             .aria_label(format!("{label}. Press to choose files ({m}O)."))
-            .tab_stop(true)
+            .tab_index(0)
             .flex()
             .flex_col()
             .items_center()

@@ -195,6 +195,9 @@ pub struct Todoke {
     /// its keys work and a screen reader announces it.
     sheet_focus: FocusHandle,
     focused_sheet: Option<String>,
+    /// Focus of each contact tile and of the drop zone, for the keyboard.
+    tile_focus: BTreeMap<String, FocusHandle>,
+    zone_focus: FocusHandle,
     search: Entity<InputState>,
     code: Entity<InputState>,
     qr_text: Entity<InputState>,
@@ -279,6 +282,8 @@ impl Todoke {
             focus: cx.focus_handle(),
             sheet_focus: cx.focus_handle(),
             focused_sheet: None,
+            tile_focus: BTreeMap::new(),
+            zone_focus: cx.focus_handle().tab_index(0).tab_stop(true),
             search,
             code,
             qr_text,
@@ -1010,6 +1015,7 @@ impl Todoke {
                     .role(Role::Tab)
                     .aria_label(label)
                     .aria_selected(selected)
+                    .tab_index(0)
                     .flex()
                     .items_center()
                     .justify_between()

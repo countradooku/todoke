@@ -41,6 +41,13 @@ workflow=.github/workflows/ci.yml
 
 expect pass "current configuration" "$deny" "$workflow"
 
+# deny.toml leaves the desktop app out (deny-desktop.toml covers it); without
+# that exclusion its GUI toolkit compiles getrandom 0.2 on Linux, which
+# deny.toml says is never compiled, and the guard must see it.
+mutate "$deny" "$scratch/no-exclude.toml" 'exclude = ["todoke-desktop"]' ''
+expect fail "desktop graph checked against deny.toml when not excluded" "$scratch/no-exclude.toml" "$workflow" \
+    'getrandom@0.2.17 is compiled outside dev-dependencies'
+
 # A cross target missing from the guard's list.
 mutate "$workflow" "$scratch/extra-target.yml" '- target: wasm32-unknown-unknown' \
     '          - target: wasm32-unknown-unknown

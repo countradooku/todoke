@@ -98,7 +98,7 @@ impl Todoke {
                     .role(Role::Tab)
                     .aria_label(tab.label())
                     .aria_selected(selected)
-                    .tab_stop(true)
+                    .tab_index(0)
                     .px(px(space::L))
                     .py(px(space::S))
                     .rounded_full()
