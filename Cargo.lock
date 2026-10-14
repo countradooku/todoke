@@ -7869,6 +7869,9 @@ dependencies = [
  "serde_json",
  "subtle",
  "todoke-core",
+ "todoke-sys-linux",
+ "todoke-sys-macos",
+ "todoke-sys-windows",
  "tokio",
  "zeroize",
 ]
@@ -7975,14 +7978,29 @@ dependencies = [
 [[package]]
 name = "todoke-sys-linux"
 version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "zbus",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-sys-macos"
 version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "security-framework",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-sys-windows"
 version = "0.1.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-transfer"

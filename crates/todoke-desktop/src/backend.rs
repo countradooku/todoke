@@ -402,6 +402,8 @@ mod tests {
         let paths = Paths::under(&home.0);
         std::fs::create_dir_all(&home.0)?;
         let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+        // Tests never write to the developer's keyring.
+        config.key_storage = todoke_core::config::KeyStorage::File;
         config.lan.enabled = false;
         std::fs::write(&paths.config_file, serde_json::to_vec(&config)?)?;
         Ok(paths)

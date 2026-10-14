@@ -28,3 +28,12 @@ undocumented_unsafe_blocks = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zeroize.workspace = true
+# The freedesktop Secret Service over the session bus (pure Rust; already
+# in the graph for GPUI's accessibility and portals).
+zbus = "=5.19.0"
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+getrandom.workspace = true

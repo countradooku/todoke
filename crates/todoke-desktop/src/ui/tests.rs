@@ -957,6 +957,8 @@ fn a_stopped_core_is_let_go(cx: &mut TestAppContext) {
 fn write_config(home: &Home, edit: impl FnOnce(&mut CoreConfig)) -> Paths {
     let paths = Paths::under(&home.0);
     let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+    // Tests never write to the developer's keyring.
+    config.key_storage = todoke_core::config::KeyStorage::File;
     config.lan.enabled = false;
     edit(&mut config);
     if std::fs::create_dir_all(&home.0).is_err()

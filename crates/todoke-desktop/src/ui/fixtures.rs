@@ -43,6 +43,7 @@ pub fn script() -> impl Fn(&Request) -> Response + Send + Sync + 'static {
             pairing: false,
             hidden: false,
             history_days: 30,
+            key_protection: todoke_core::api::KeyProtection::Keychain,
         }),
         Request::Contacts => Response::Contacts(vec![
             contact(LAN, true, Some(Route::Lan)),

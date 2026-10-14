@@ -94,6 +94,24 @@ pub struct CoreConfig {
     /// receipt retention to local policy).
     #[serde(default = "default_history_days")]
     pub history_days: u32,
+    /// Where the key that seals the state is kept.
+    #[serde(default)]
+    pub key_storage: KeyStorage,
+}
+
+/// Where the key that seals the state is kept (§16 O9).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyStorage {
+    /// The platform's secret storage where it is available, else a file;
+    /// a key in a file moves to the platform once it is available. A key
+    /// never moves back to a file by itself.
+    #[default]
+    Auto,
+    /// The platform's secret storage, or the core does not start.
+    Platform,
+    /// A file only this user can read (servers without a keyring).
+    File,
 }
 
 /// The longest history retention, in days.
@@ -120,6 +138,7 @@ impl CoreConfig {
             relay_presence_seconds: default_presence(),
             hidden: false,
             history_days: default_history_days(),
+            key_storage: KeyStorage::Auto,
         }
     }
 }

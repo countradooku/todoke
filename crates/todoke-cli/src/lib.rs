@@ -70,7 +70,7 @@ pub fn short(hex: &str) -> &str {
 #[must_use]
 pub fn status(status: &StatusInfo) -> String {
     format!(
-        "device    {}\nsessions  {}\nlistening {}\ncontacts  {}\nopen      {}\npairing   {}\nvisible   {}\nhistory   {}\n",
+        "device    {}\nsessions  {}\nlistening {}\ncontacts  {}\nopen      {}\npairing   {}\nvisible   {}\nhistory   {}\nkey       {}\n",
         status.device,
         if status.sessions_enabled {
             "enabled"
@@ -93,6 +93,7 @@ pub fn status(status: &StatusInfo) -> String {
             1 => "1 day".to_owned(),
             days => format!("{days} days"),
         },
+        status.key_protection.label(),
     )
 }
 

@@ -41,6 +41,8 @@ fn core() -> AnyResult<(Scratch, Core, crate::Paths)> {
         std::fs::set_permissions(&paths.state_dir, std::fs::Permissions::from_mode(0o700))?;
     }
     let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+    // Tests never write to the developer's keyring.
+    config.key_storage = todoke_core::config::KeyStorage::File;
     config.lan.enabled = false;
     let core = Core::start(
         config,
@@ -236,6 +238,8 @@ async fn a_hosted_daemon_serves_until_dropped() -> AnyResult<()> {
     let paths = crate::Paths::under(&home);
     std::fs::create_dir_all(&home)?;
     let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+    // Tests never write to the developer's keyring.
+    config.key_storage = todoke_core::config::KeyStorage::File;
     config.lan.enabled = false;
     std::fs::write(&paths.config_file, serde_json::to_vec(&config)?)?;
     let hosted = tokio::task::spawn_blocking({

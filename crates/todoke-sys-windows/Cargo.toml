@@ -28,3 +28,12 @@ undocumented_unsafe_blocks = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[target.'cfg(windows)'.dependencies]
+zeroize.workspace = true
+# DPAPI and the TPM's key storage provider (raw bindings; the calls are in
+# dpapi.rs, each unsafe block justified).
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+getrandom.workspace = true

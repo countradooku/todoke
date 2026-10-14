@@ -68,6 +68,7 @@ impl Device {
             relay_presence_seconds: 300,
             hidden: false,
             history_days: 30,
+            key_storage: todoke_core::config::KeyStorage::File,
         };
         std::fs::write(&paths.config_file, serde_json::to_vec_pretty(&config)?)?;
         Ok(Self {
@@ -82,6 +83,8 @@ impl Device {
         let paths = Paths::under(&home);
         std::fs::create_dir_all(&home)?;
         let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+        // Tests never write to the developer's keyring.
+        config.key_storage = todoke_core::config::KeyStorage::File;
         config.lan.enabled = false;
         config.relays = vec![relay.clone()];
         config.relay_presence_seconds = 10;
