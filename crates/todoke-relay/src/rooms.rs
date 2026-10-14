@@ -261,6 +261,11 @@ impl<S> Rooms<S> {
         room: RoomId,
         candidates: Vec<Candidate>,
     ) -> Result<(), CloseCode> {
+        // A room closed meanwhile (the other member left, it expired) is
+        // not this member's fault.
+        if self.member(ticket).is_none() {
+            return Err(CloseCode::Unavailable);
+        }
         let valid = ticket.room == room
             && self
                 .member(ticket)
@@ -310,6 +315,9 @@ impl<S> Rooms<S> {
         room: RoomId,
         streams: S,
     ) -> Result<Forwarded<S>, (CloseCode, S)> {
+        if self.member(ticket).is_none() {
+            return Err((CloseCode::Unavailable, streams));
+        }
         let valid = ticket.room == room
             && self
                 .member(ticket)

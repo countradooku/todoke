@@ -260,3 +260,22 @@ fn a_waiting_member_can_take_its_streams_back() -> Result<(), String> {
     assert_eq!(rooms.len(), 0);
     Ok(())
 }
+
+/// A record for a room that closed meanwhile (the other member left) is
+/// not this member's fault: it hears `Unavailable`, never `Malformed`.
+#[test]
+fn a_room_gone_meanwhile_is_unavailable() -> Result<(), String> {
+    let now = Instant::now();
+    let mut rooms = table();
+    let (first, second, _, _) = matched(&mut rooms, now)?;
+    rooms.close(second.ticket, CloseCode::Unavailable);
+    assert!(matches!(
+        rooms.forward(first.ticket, first.ticket.room, "first"),
+        Err((CloseCode::Unavailable, "first"))
+    ));
+    assert_eq!(
+        rooms.candidates(first.ticket, first.ticket.room, Vec::new()),
+        Err(CloseCode::Unavailable)
+    );
+    Ok(())
+}

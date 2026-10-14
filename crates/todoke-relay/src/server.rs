@@ -629,6 +629,10 @@ async fn serve_room(
                 Ok(Some(Control::Candidates { room: named, candidates })) => {
                     let passed = lock(&shared.rooms).candidates(ticket, named, candidates);
                     if let Err(code) = passed {
+                        let code = match inbox.try_recv() {
+                            Ok(RoomEvent::Closed(closed)) => closed,
+                            _ => code,
+                        };
                         close(&mut tx, Some(room), code, metrics).await;
                         return;
                     }
@@ -656,7 +660,14 @@ async fn serve_room(
     };
     let forwarded = lock(&shared.rooms).forward(ticket, forward_room, mine);
     match forwarded {
-        Err((code, mut mine)) => close(&mut mine.send, Some(room), code, metrics).await,
+        Err((code, mut mine)) => {
+            // If the room closed meanwhile, its member is told why.
+            let code = match inbox.try_recv() {
+                Ok(RoomEvent::Closed(closed)) => closed,
+                _ => code,
+            };
+            close(&mut mine.send, Some(room), code, metrics).await;
+        }
         Ok(Forwarded::Tunnel { mine, theirs }) => tunnel(shared, mine, theirs, room).await,
         Ok(Forwarded::Waiting) => {
             // The streams wait in the room for the other Forward; anything
