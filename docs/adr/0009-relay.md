@@ -114,6 +114,28 @@ adds: unspecified behavior must not be filled in by code.
    - On a tunnel, the smaller full device key initiates, and the QR scanner
      initiates (§4).
    - A relay error pauses that contact for 30 seconds.
+9a. **R1 hardening.**
+    - A tunnel is accepted only for what it was opened for: a contact
+      tunnel carries that contact's session only, and a QR wait carries
+      QR pairing only. Human-code pairing (and its CodeOfferRequest) is
+      accepted only on the LAN, so a relay cannot reach a shown code (O8).
+    - A registration's room is taken when it is scheduled, so one tick
+      never starts more than two. Contacts leave one room free while a QR
+      offer is shown or a scanner waits; stopping the offer ends its relay
+      wait at once; the scanner retries a connection that did not come up.
+    - A tunnel that led to no session pauses that contact, doubling from
+      one minute to 16, so a relay answering for absent peers cannot spend
+      the §13 attempt budget. A stale discovery table registers nothing.
+    - The client lets a relay open no streams and bounds its receive
+      window (1 MiB); the wait for ForwardReady has one deadline, and
+      Candidates and Punch are taken at most once each; a refused
+      connection is reported as refused, not as TLS; every resolved
+      address is tried.
+    - The node rate-limits new connections (20 a second) and Registers
+      (10 a second) per source, answering `Quota`; closes connections
+      that hold no room for 30 seconds; no longer scans the room table on
+      each Register; and keeps a waiting member's streams until a closure
+      or the room's end, whatever else the other member sends.
 10. **Closing a tunnel waits for its bytes.** Dropping a QUIC connection
     discards data in flight, which lost a session's last handshake message
     in testing. A dropped tunnel finishes its stream and keeps the
@@ -187,6 +209,22 @@ adds: unspecified behavior must not be filled in by code.
     and the test retries a connection that did not come up, as the app does.
   - Fix: several endpoints sharing the port with `SO_REUSEPORT` (Linux), or
     more nodes in the list.
+- **Presence windows assume clocks within 30 seconds.** §1 tolerates 120
+  seconds of skew; devices further apart never overlap in a window, and
+  around an epoch boundary (every 900 seconds) skewed devices hold
+  different tokens. Fix: register through the window plus a skew margin,
+  and the adjacent epoch's token near a boundary (two rooms allow it).
+- **Memory at the node is bounded per connection, not globally:** at the
+  defaults, 20000 connections could hold up to about 28 GB of flow-control
+  buffers if every one carried a tunnel whose far end does not read. Fix:
+  a global buffer budget, or a lower `--max-connections` for small hosts
+  (documented in the relay's README).
+- **Tunnel throughput** is capped by the 1 MiB per-direction bound (§10):
+  about 448 KiB per round trip on each leg (72 Mbit/s at 50 ms, 18 Mbit/s
+  at 200 ms). Fix: none within §10; direct paths (O7) remove it.
+- **"Endpoint" is a QUIC connection.** §10's two rooms per endpoint are
+  enforced per connection (by stream credit, not RelayClose), so one host
+  may hold 64 × 2 rooms. Fix: count rooms per source too.
 - **A tunnel lasts at most 24 hours** (§10). A longer transfer is cut and
   resumes with a fresh Accept (§7.5).
 - **Supply chain:**
