@@ -139,18 +139,23 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         return Err("not offered".into());
     };
     let offered = wait_for(&mut alice_events, |event| match event {
-        Event::OfferReceived {
-            transfer,
-            entries,
-            from,
-            ..
-        } => Some((transfer.clone(), entries.len(), from.clone())),
+        Event::OfferReceived(offer) => Some((
+            offer.transfer.clone(),
+            offer.entries.len(),
+            offer.from.clone(),
+        )),
         _ => None,
     })
     .await?;
     assert_eq!(offered.0, transfer);
     assert_eq!(offered.2, bob_hex);
     assert_eq!(offered.1, 5);
+    // An interface that starts now still sees it.
+    let Response::Offers(waiting) = alice.request(Request::Offers).await else {
+        return Err("no offers".into());
+    };
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(waiting[0].transfer, transfer);
     assert_eq!(
         alice
             .request(Request::Accept {

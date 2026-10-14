@@ -2,7 +2,7 @@
 
 use core::cell::{Cell, RefCell};
 use core::time::Duration;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -27,8 +27,8 @@ use zeroize::Zeroizing;
 use super::session::{self, SessionCommand};
 use super::{Envelope, StartError};
 use crate::api::{
-    ContactInfo, ErrorCode, Event, MIN_PREFIX, Request, Response, StatusInfo, StrangerInfo,
-    TransferInfo, Way, hex,
+    ContactInfo, ErrorCode, Event, MIN_PREFIX, OfferInfo, Request, Response, StatusInfo,
+    StrangerInfo, TransferInfo, TransferState, Way, hex,
 };
 use crate::config::CoreConfig;
 use crate::discovery::Backend;
@@ -52,6 +52,8 @@ const RETRY_FIRST: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(60);
 /// How many stranger devices a QR scan tries.
 const MAX_QR_TARGETS: usize = 4;
+/// Finished transfers remembered for `Transfers`.
+const MAX_FINISHED: usize = 256;
 
 /// The trusted wall clock.
 pub(super) fn wall() -> UnixTime {
@@ -86,7 +88,8 @@ pub(super) struct PeerQueue {
 pub(super) struct TransferRecord {
     pub(super) peer: Ed25519PublicKey,
     pub(super) way: Way,
-    pub(super) state: &'static str,
+    pub(super) state: TransferState,
+    pub(super) detail: Option<String>,
     pub(super) done: u64,
     pub(super) total: u64,
 }
@@ -116,7 +119,10 @@ pub(super) struct State {
     pub(super) queues: RefCell<BTreeMap<Ed25519PublicKey, PeerQueue>>,
     pub(super) transfers: RefCell<BTreeMap<TransferId, TransferRecord>>,
     /// The file IDs of each offer received, for "accept all".
-    pub(super) offered_files: RefCell<BTreeMap<TransferId, Vec<u32>>>,
+    /// Received offers, until they are decided or end.
+    pub(super) received: RefCell<BTreeMap<TransferId, OfferInfo>>,
+    /// Finished transfers, oldest first.
+    finished: RefCell<VecDeque<TransferId>>,
     /// Addresses each contact was last reached at (its own listener's).
     pub(super) last_known: RefCell<BTreeMap<Ed25519PublicKey, Vec<SocketAddr>>>,
     retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
@@ -195,7 +201,8 @@ impl State {
             sessions: RefCell::new(BTreeMap::new()),
             queues: RefCell::new(BTreeMap::new()),
             transfers: RefCell::new(BTreeMap::new()),
-            offered_files: RefCell::new(BTreeMap::new()),
+            received: RefCell::new(BTreeMap::new()),
+            finished: RefCell::new(VecDeque::new()),
             last_known: RefCell::new(BTreeMap::new()),
             retry: RefCell::new(BTreeMap::new()),
             pairing: Cell::new(None),
@@ -441,6 +448,7 @@ impl State {
             Request::Status => Response::Status(self.status()),
             Request::Contacts => Response::Contacts(self.contact_list().await),
             Request::Transfers => Response::Transfers(self.transfer_list()),
+            Request::Offers => Response::Offers(self.offers_waiting()),
             Request::PairShowQr => self.show_qr(),
             Request::PairShowCode => self.show_code(),
             Request::StopPairing => {
@@ -522,10 +530,79 @@ impl State {
                 transfer: hex(id),
                 peer: hex(record.peer.as_bytes()),
                 way: record.way,
-                state: record.state.to_owned(),
+                state: record.state,
+                detail: record.detail.clone(),
                 bytes_done: record.done,
                 bytes_total: record.total,
             })
+            .collect()
+    }
+
+    /// Records a new transfer.
+    pub(super) fn remember(&self, id: TransferId, record: TransferRecord) {
+        self.transfers.borrow_mut().insert(id, record);
+        self.finished.borrow_mut().retain(|old| *old != id);
+    }
+
+    /// Moves a transfer to `next`; a received offer leaves the list of
+    /// those awaiting a decision. Beyond [`MAX_FINISHED`] finished
+    /// transfers, the oldest are forgotten.
+    pub(super) fn set_state(&self, id: &TransferId, next: TransferState) {
+        if next != TransferState::AwaitingDecision {
+            self.received.borrow_mut().remove(id);
+        }
+        let mut transfers = self.transfers.borrow_mut();
+        let Some(record) = transfers.get_mut(id) else {
+            return;
+        };
+        let newly_finished = !record.state.is_finished() && next.is_finished();
+        record.state = next;
+        if newly_finished {
+            let mut finished = self.finished.borrow_mut();
+            finished.push_back(*id);
+            while finished.len() > MAX_FINISHED {
+                if let Some(old) = finished.pop_front() {
+                    transfers.remove(&old);
+                }
+            }
+        }
+    }
+
+    /// A session with `peer` ended: what was moving or awaiting a decision
+    /// in it can only resume in the next one (§7.5).
+    pub(super) fn interrupt(&self, peer: &Ed25519PublicKey) {
+        let open: Vec<TransferId> = self
+            .transfers
+            .borrow()
+            .iter()
+            .filter(|(_, record)| {
+                record.peer == *peer
+                    && matches!(
+                        record.state,
+                        TransferState::AwaitingDecision
+                            | TransferState::Accepted
+                            | TransferState::Transferring
+                    )
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        for id in open {
+            self.set_state(&id, TransferState::Interrupted);
+        }
+    }
+
+    /// Received offers still awaiting a decision.
+    fn offers_waiting(&self) -> Vec<OfferInfo> {
+        let transfers = self.transfers.borrow();
+        self.received
+            .borrow()
+            .iter()
+            .filter(|(id, _)| {
+                transfers
+                    .get(*id)
+                    .is_some_and(|record| record.state == TransferState::AwaitingDecision)
+            })
+            .map(|(_, offer)| offer.clone())
             .collect()
     }
 
@@ -715,12 +792,13 @@ impl State {
         let response = match send::prepare(&walked, wall(), &mut queue.source) {
             Ok(prepared) => {
                 let transfer_id = *prepared.transfer_id();
-                self.transfers.borrow_mut().insert(
+                self.remember(
                     transfer_id,
                     TransferRecord {
                         peer,
                         way: Way::Outgoing,
-                        state: "offered",
+                        state: TransferState::Offered,
+                        detail: None,
                         done: 0,
                         total: prepared.total_bytes(),
                     },

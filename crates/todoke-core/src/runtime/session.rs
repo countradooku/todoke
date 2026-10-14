@@ -13,7 +13,7 @@ use todoke_transport::{Established, TcpLink};
 use tokio::sync::{mpsc, oneshot};
 
 use super::running::{PeerQueue, State, TransferRecord, wall};
-use crate::api::{EntryInfo, ErrorCode, Event, Response, Way, hex};
+use crate::api::{EntryInfo, ErrorCode, Event, OfferInfo, Response, TransferState, Way, hex};
 
 /// How long the session waits for a frame before looking at commands.
 const POLL: Duration = Duration::from_millis(100);
@@ -107,7 +107,7 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
             .transfers
             .borrow()
             .values()
-            .any(|record| record.peer == peer && record.state != "done");
+            .any(|record| record.peer == peer && !record.state.is_finished());
         if !busy
             && waiting.is_empty()
             && prepared.is_empty()
@@ -121,6 +121,7 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
     while let Some(event) = engine.pop_event() {
         report(&state, peer, event);
     }
+    state.interrupt(&peer);
     let mut offers = engine.take_resumable();
     offers.extend(waiting);
     let (source, _) = engine.into_parts();
@@ -139,7 +140,12 @@ pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>)
 fn offer_or_report(state: &State, engine: &mut Engine<'_>, offer: OutgoingOffer, now: Duration) {
     let id = *offer.transfer_id();
     if engine.offer(offer, now).is_err() {
-        end(state, &id, "failed", "the peer cannot take this offer");
+        end(
+            state,
+            &id,
+            TransferState::Failed,
+            "the peer cannot take this offer",
+        );
     }
 }
 
@@ -153,7 +159,12 @@ fn offer_new(
 ) {
     let id = *prepared.transfer_id();
     let Some(negotiated) = engine.negotiated() else {
-        end(state, &id, "failed", "the session is not ready");
+        end(
+            state,
+            &id,
+            TransferState::Failed,
+            "the session is not ready",
+        );
         return;
     };
     let built = crate::send::build(
@@ -168,7 +179,7 @@ fn offer_new(
         Err(_) => end(
             state,
             &id,
-            "failed",
+            TransferState::Failed,
             "the receiver cannot take a transfer this large",
         ),
     }
@@ -214,20 +225,27 @@ fn apply(
 /// Every file of an offered transfer (for "accept all").
 fn selectable(state: &State, id: &TransferId) -> Vec<u32> {
     state
-        .offered_files
+        .received
         .borrow()
         .get(id)
-        .cloned()
-        .unwrap_or_default()
+        .map_or_else(Vec::new, |offer| {
+            offer
+                .entries
+                .iter()
+                .filter(|entry| !entry.directory)
+                .map(|entry| entry.id)
+                .collect()
+        })
 }
 
-fn end(state: &State, id: &TransferId, reason: &str, message: &str) {
+fn end(state: &State, id: &TransferId, reason: TransferState, message: &str) {
+    state.set_state(id, reason);
     if let Some(record) = state.transfers.borrow_mut().get_mut(id) {
-        record.state = "done";
+        record.detail = Some(message.to_owned());
     }
     state.emit(Event::Ended {
         transfer: hex(id),
-        reason: reason.to_owned(),
+        reason,
         message: message.to_owned(),
     });
 }
@@ -244,27 +262,18 @@ fn offer_received(
     peer: todoke_crypto::identity::Ed25519PublicKey,
     view: &todoke_transfer::OfferView,
 ) {
-    let files: Vec<u32> = view
-        .entries
-        .iter()
-        .filter(|entry| entry.kind == todoke_proto::transfer::EntryKind::File)
-        .map(|entry| entry.id)
-        .collect();
-    state
-        .offered_files
-        .borrow_mut()
-        .insert(view.transfer_id, files);
-    state.transfers.borrow_mut().insert(
+    state.remember(
         view.transfer_id,
         TransferRecord {
             peer,
             way: Way::Incoming,
-            state: "awaiting_decision",
+            state: TransferState::AwaitingDecision,
+            detail: None,
             done: 0,
             total: view.total_bytes,
         },
     );
-    state.emit(Event::OfferReceived {
+    let offer = OfferInfo {
         transfer: hex(view.transfer_id),
         from: hex(view.sender.as_bytes()),
         entries: view
@@ -280,7 +289,12 @@ fn offer_received(
             .collect(),
         total_bytes: view.total_bytes,
         resume: view.resume_selection.clone(),
-    });
+    };
+    state
+        .received
+        .borrow_mut()
+        .insert(view.transfer_id, offer.clone());
+    state.emit(Event::OfferReceived(offer));
 }
 
 /// Mirrors an engine event into the core's records and events.
@@ -290,14 +304,14 @@ fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event:
         TransferEvent::Accepted {
             transfer_id, bytes, ..
         } => {
+            state.set_state(&transfer_id, TransferState::Accepted);
             if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
-                record.state = "accepted";
                 record.total = bytes;
             }
         }
         TransferEvent::Progress(progress) => {
             if let Some(record) = state.transfers.borrow_mut().get_mut(&progress.transfer_id) {
-                record.state = "transferring";
+                record.state = TransferState::Transferring;
                 record.done = progress.bytes_done;
                 record.total = progress.bytes_total;
             }
@@ -310,17 +324,13 @@ fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event:
             });
         }
         TransferEvent::Completed { transfer_id } => {
-            if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
-                record.state = "done";
-            }
+            state.set_state(&transfer_id, TransferState::Received);
             state.emit(Event::Completed {
                 transfer: hex(transfer_id),
             });
         }
         TransferEvent::DeliveryConfirmed { transfer_id, .. } => {
-            if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
-                record.state = "done";
-            }
+            state.set_state(&transfer_id, TransferState::Delivered);
             state.emit(Event::Delivered {
                 transfer: hex(transfer_id),
             });
@@ -329,18 +339,23 @@ fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event:
             end(
                 state,
                 &transfer_id,
-                "unconfirmed",
+                TransferState::Unconfirmed,
                 "no signed receipt arrived",
             );
         }
         TransferEvent::Rejected { transfer_id, .. } => {
-            end(state, &transfer_id, "rejected", "the receiver declined");
+            end(
+                state,
+                &transfer_id,
+                TransferState::Rejected,
+                "the receiver declined",
+            );
         }
         TransferEvent::Cancelled { transfer_id, .. } => {
             end(
                 state,
                 &transfer_id,
-                "cancelled",
+                TransferState::Cancelled,
                 "the transfer was cancelled",
             );
         }
@@ -349,15 +364,18 @@ fn report(state: &State, peer: todoke_crypto::identity::Ed25519PublicKey, event:
             failure,
             ..
         } => {
-            end(state, &transfer_id, "failed", &failure.code.to_string());
+            end(
+                state,
+                &transfer_id,
+                TransferState::Failed,
+                &failure.code.to_string(),
+            );
         }
         TransferEvent::Interrupted { transfer_id, .. } => {
-            if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
-                record.state = "interrupted";
-            }
+            state.set_state(&transfer_id, TransferState::Interrupted);
             state.emit(Event::Ended {
                 transfer: hex(transfer_id),
-                reason: "interrupted".to_owned(),
+                reason: TransferState::Interrupted,
                 message: "the connection ended; the transfer can resume".to_owned(),
             });
         }

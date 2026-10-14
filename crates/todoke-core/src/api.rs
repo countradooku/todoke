@@ -34,6 +34,9 @@ pub enum Request {
     Contacts,
     /// Transfers in progress or awaiting a decision.
     Transfers,
+    /// Received offers awaiting a decision, with their entries: what an
+    /// interface that starts late has not seen as events.
+    Offers,
     /// Show a QR pairing offer (this device responds) and advertise in
     /// stranger mode for its lifetime.
     PairShowQr,
@@ -133,6 +136,21 @@ pub struct ContactInfo {
     pub connected: bool,
 }
 
+/// An offer this device received.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OfferInfo {
+    /// The transfer, hex.
+    pub transfer: String,
+    /// The sender, hex.
+    pub from: String,
+    /// The entries; names are untrusted.
+    pub entries: Vec<EntryInfo>,
+    /// Bytes in all files.
+    pub total_bytes: u64,
+    /// Files a previous Accept selected, when this resumes a transfer.
+    pub resume: Option<Vec<u32>>,
+}
+
 /// One entry of an offer.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EntryInfo {
@@ -168,13 +186,75 @@ pub struct TransferInfo {
     pub peer: String,
     /// Which way.
     pub way: Way,
-    /// Where it stands: `offered`, `awaiting_decision`, `accepted`,
-    /// `transferring`, `interrupted`.
-    pub state: String,
+    /// Where it stands.
+    pub state: TransferState,
+    /// Why it ended, when it failed: the protocol error code.
+    pub detail: Option<String>,
     /// Bytes done of the selected files.
     pub bytes_done: u64,
     /// Bytes selected.
     pub bytes_total: u64,
+}
+
+/// Where a transfer stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferState {
+    /// Sent to the peer, or waiting for a session to send it in.
+    Offered,
+    /// Received; waiting for this user to accept or decline.
+    AwaitingDecision,
+    /// Accepted; no file data yet.
+    Accepted,
+    /// File data is moving.
+    Transferring,
+    /// The connection ended; it resumes in the next session (§7.5).
+    Interrupted,
+    /// Every selected file arrived and was published.
+    Received,
+    /// The receiver's signed receipt arrived (§7.7).
+    Delivered,
+    /// Sent, but no signed receipt arrived.
+    Unconfirmed,
+    /// The receiver declined.
+    Rejected,
+    /// Either side cancelled.
+    Cancelled,
+    /// It failed; see the detail.
+    Failed,
+}
+
+impl TransferState {
+    /// Whether nothing more happens to the transfer.
+    #[must_use]
+    pub const fn is_finished(self) -> bool {
+        !matches!(
+            self,
+            Self::Offered
+                | Self::AwaitingDecision
+                | Self::Accepted
+                | Self::Transferring
+                | Self::Interrupted
+        )
+    }
+
+    /// Its name, as in JSON.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Offered => "offered",
+            Self::AwaitingDecision => "awaiting_decision",
+            Self::Accepted => "accepted",
+            Self::Transferring => "transferring",
+            Self::Interrupted => "interrupted",
+            Self::Received => "received",
+            Self::Delivered => "delivered",
+            Self::Unconfirmed => "unconfirmed",
+            Self::Rejected => "rejected",
+            Self::Cancelled => "cancelled",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 /// A nearby device in stranger mode.
@@ -203,7 +283,7 @@ pub struct StatusInfo {
 
 /// The core's answer to a request.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "response", rename_all = "snake_case")]
+#[serde(tag = "response", content = "body", rename_all = "snake_case")]
 pub enum Response {
     /// Done.
     Done,
@@ -213,6 +293,8 @@ pub enum Response {
     Contacts(Vec<ContactInfo>),
     /// The transfers.
     Transfers(Vec<TransferInfo>),
+    /// Received offers awaiting a decision.
+    Offers(Vec<OfferInfo>),
     /// A QR offer to show: secret until it is used or expires (§3.1).
     Qr {
         /// The QR text.
@@ -284,18 +366,7 @@ pub enum Event {
     },
     /// An offer awaits the user's decision (§7.2); it expires after 300
     /// seconds.
-    OfferReceived {
-        /// The transfer, hex.
-        transfer: String,
-        /// The sender, hex.
-        from: String,
-        /// The entries; names are untrusted.
-        entries: Vec<EntryInfo>,
-        /// Bytes in all files.
-        total_bytes: u64,
-        /// Files a previous Accept selected, when this resumes a transfer.
-        resume: Option<Vec<u32>>,
-    },
+    OfferReceived(OfferInfo),
     /// Bytes moved.
     Progress {
         /// The transfer, hex.
@@ -323,8 +394,9 @@ pub enum Event {
     Ended {
         /// The transfer, hex.
         transfer: String,
-        /// `rejected`, `cancelled`, `failed`, or `interrupted` (resumable).
-        reason: String,
+        /// `unconfirmed`, `rejected`, `cancelled`, `failed`, or
+        /// `interrupted` (it resumes in the next session).
+        reason: TransferState,
         /// For people.
         message: String,
     },
@@ -382,6 +454,71 @@ mod tests {
             }
         );
         assert!(serde_json::from_str::<Request>(r#"{"request":"format_disk"}"#).is_err());
+        Ok(())
+    }
+
+    /// Every response shape survives JSON (internally tagged enums cannot
+    /// hold sequences, hence the adjacent tagging).
+    #[test]
+    fn every_response_round_trips() -> TestResult {
+        let responses = [
+            Response::Done,
+            Response::Contacts(vec![ContactInfo {
+                device: "aa".into(),
+                person: "bb".into(),
+                available: true,
+                nearby: false,
+                connected: false,
+            }]),
+            Response::Transfers(vec![TransferInfo {
+                transfer: "ab".into(),
+                peer: "cd".into(),
+                way: Way::Incoming,
+                state: TransferState::Failed,
+                detail: Some("hash_mismatch".into()),
+                bytes_done: 1,
+                bytes_total: 2,
+            }]),
+            Response::Offers(Vec::new()),
+            Response::Strangers(vec![StrangerInfo {
+                stranger: "cc".into(),
+            }]),
+            Response::Code {
+                code: "0123456789".into(),
+                expires_at: 1,
+            },
+            Response::error(ErrorCode::State, "no"),
+        ];
+        for response in responses {
+            let text = serde_json::to_string(&response)?;
+            assert_eq!(serde_json::from_str::<Response>(&text)?, response, "{text}");
+        }
+        let event = Event::OfferReceived(OfferInfo {
+            transfer: "dd".into(),
+            from: "ee".into(),
+            entries: vec![EntryInfo {
+                id: 1,
+                parent: 0,
+                directory: false,
+                name: "n".into(),
+                size: 1,
+            }],
+            total_bytes: 1,
+            resume: Some(vec![1]),
+        });
+        let ended = Event::Ended {
+            transfer: "dd".into(),
+            reason: TransferState::Interrupted,
+            message: "m".into(),
+        };
+        for event in [event, ended] {
+            let text = serde_json::to_string(&event)?;
+            assert_eq!(serde_json::from_str::<Event>(&text)?, event, "{text}");
+        }
+        assert!(
+            serde_json::to_string(&TransferState::AwaitingDecision)?
+                .contains(TransferState::AwaitingDecision.as_str())
+        );
         Ok(())
     }
 
