@@ -10,3 +10,31 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "todoke-relay"
+path = "src/main.rs"
+
+[dependencies]
+todoke-proto.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+quinn.workspace = true
+rustls.workspace = true
+webpki.workspace = true
+libcrux-sha2.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "signal"] }
+# A self-signed certificate for a relay without one (its key is then pinned).
+rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "pem"] }
+# The localhost metrics endpoint.
+axum = { version = "=0.8.9", default-features = false, features = ["http1", "tokio"] }
+clap.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# The relay's own client, as endpoints use it.
+todoke-transport.workspace = true
+futures-io.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "test-util"] }
