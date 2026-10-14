@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory as _, Parser, Subcommand, ValueEnum};
-use todoke_cli::{bytes, contacts, entries, escape, event, qr, short, status, transfers};
+use todoke_cli::{bytes, contacts, entries, escape, event, history, qr, short, status, transfers};
 use todoke_core::api::{ErrorCode, Event, OfferInfo, Request, Response, TransferState};
 use todoke_daemon::Paths;
 use todoke_daemon::ipc::Client;
@@ -70,6 +70,17 @@ enum Command {
         /// The transfer.
         transfer: String,
     },
+    /// Finished transfers kept in the sealed history.
+    History {
+        /// Forget them all.
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Whether contacts can see this device (on the LAN and at relays).
+    Visibility {
+        /// `hidden` or `contacts`.
+        visibility: Visibility,
+    },
     /// Print events as they happen (for notifiers: `--json`).
     Events,
     /// Run or install the background daemon.
@@ -121,6 +132,14 @@ enum Daemon {
         /// The service manager.
         kind: ServiceKind,
     },
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum Visibility {
+    /// Contacts see this device.
+    Contacts,
+    /// No one sees this device; it still reaches contacts it sends to.
+    Hidden,
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -244,6 +263,41 @@ fn show(
     Ok(())
 }
 
+/// The history and visibility commands.
+async fn privacy(json: bool, mut daemon: Client, command: Command) -> Result<(), Failure> {
+    match command {
+        Command::History { clear: false } => show(
+            json,
+            &daemon.request(Request::History).await?,
+            |r| match r {
+                Response::History(list) => Some(history(list)),
+                _ => None,
+            },
+        ),
+        Command::History { clear: true } => {
+            show(json, &daemon.request(Request::ClearHistory).await?, |_| {
+                Some("history cleared\n".to_owned())
+            })
+        }
+        Command::Visibility { visibility } => {
+            let hidden = matches!(visibility, Visibility::Hidden);
+            show(
+                json,
+                &daemon.request(Request::SetHidden { hidden }).await?,
+                |_| {
+                    Some(if hidden {
+                        "hidden from contacts until `todoke visibility contacts` or a restart\n"
+                            .to_owned()
+                    } else {
+                        "visible to contacts\n".to_owned()
+                    })
+                },
+            )
+        }
+        _ => Ok(()),
+    }
+}
+
 async fn client(json: bool, command: Command) -> Result<(), Failure> {
     let mut daemon = connect().await?;
     match command {
@@ -267,6 +321,9 @@ async fn client(json: bool, command: Command) -> Result<(), Failure> {
                 _ => None,
             },
         ),
+        Command::History { .. } | Command::Visibility { .. } => {
+            privacy(json, daemon, command).await
+        }
         Command::Strangers => show(
             json,
             &daemon.request(Request::Strangers).await?,

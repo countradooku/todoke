@@ -215,7 +215,8 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         let bytes = manifest.bytes();
         let total =
             u32::try_from(bytes.len()).map_err(|_| EngineError::Offer(OfferError::Limits))?;
-        let start = ManifestStart::new(transfer_id, *manifest.hash(), total)
+        let manifest_hash = *manifest.hash();
+        let start = ManifestStart::new(transfer_id, manifest_hash, total)
             .map_err(|_| EngineError::Offer(OfferError::Limits))?;
         let mut parts = Vec::new();
         for (index, data) in bytes.chunks(MAX_MANIFEST_PART_DATA).enumerate() {
@@ -240,7 +241,10 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
                 expiry,
             })),
         );
-        self.event(TransferEvent::OfferSent { transfer_id });
+        self.event(TransferEvent::OfferSent {
+            transfer_id,
+            manifest_hash,
+        });
         Ok(())
     }
 

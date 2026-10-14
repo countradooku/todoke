@@ -28,11 +28,12 @@ use super::relay::Role;
 use super::session::{self, SessionCommand};
 use super::{Envelope, StartError};
 use crate::api::{
-    ContactInfo, ErrorCode, Event, MIN_PREFIX, OfferInfo, Request, Response, StatusInfo,
-    StrangerInfo, TransferInfo, TransferState, Way, hex,
+    ContactInfo, ErrorCode, Event, HISTORY_NAMES, HistoryEntry, MIN_PREFIX, OfferInfo, ReceiptInfo,
+    Request, Response, Route, StatusInfo, StrangerInfo, TransferInfo, TransferState, Way, hex,
 };
-use crate::config::CoreConfig;
+use crate::config::{CoreConfig, MAX_HISTORY_DAYS};
 use crate::discovery::Backend;
+use crate::history::History;
 use crate::profile::{Contacts, Identity, Profile};
 use crate::send;
 use crate::storage_key::StorageKeySource;
@@ -149,6 +150,26 @@ impl Idle {
     }
 }
 
+/// The history entry of a transfer that just finished at `now`.
+fn history_entry(id: &TransferId, record: &TransferRecord, now: UnixTime) -> HistoryEntry {
+    HistoryEntry {
+        transfer: hex(id),
+        peer: hex(record.peer.as_bytes()),
+        way: record.way,
+        state: record.state,
+        detail: record.detail.clone(),
+        finished_at: now.seconds(),
+        files: record.files,
+        bytes: record.total,
+        names: record.names.clone(),
+        manifest_hash: record.manifest_hash.map(hex),
+        receipt: record.receipt.map(|(id, completed_at)| ReceiptInfo {
+            id: hex(id),
+            completed_at: completed_at.seconds(),
+        }),
+    }
+}
+
 /// Offers to list, in order, at most [`MAX_LISTED_ENTRIES`] entries in all
 /// but never none when one waits.
 pub(super) fn capped<'a>(offers: impl Iterator<Item = &'a OfferInfo>) -> Vec<OfferInfo> {
@@ -173,6 +194,14 @@ pub(super) struct TransferRecord {
     pub(super) detail: Option<String>,
     pub(super) done: u64,
     pub(super) total: u64,
+    /// For the history: files offered, then selected.
+    pub(super) files: u32,
+    /// For the history: the first top-level names.
+    pub(super) names: Vec<String>,
+    /// The manifest's hash, once the offer was sent or received.
+    pub(super) manifest_hash: Option<[u8; 32]>,
+    /// The signed receipt's ID and completion time (§7.7).
+    pub(super) receipt: Option<([u8; 16], UnixTime)>,
 }
 
 /// Where an accepted link came from, and so what it may carry.
@@ -213,6 +242,8 @@ pub(super) struct State {
     advertiser: RefCell<Advertiser>,
     backend: RefCell<Backend>,
     pub(super) sessions: RefCell<BTreeMap<Ed25519PublicKey, mpsc::Sender<SessionCommand>>>,
+    /// How each open session reaches its contact.
+    pub(super) routes: RefCell<BTreeMap<Ed25519PublicKey, Route>>,
     pub(super) queues: RefCell<BTreeMap<Ed25519PublicKey, PeerQueue>>,
     pub(super) transfers: RefCell<BTreeMap<TransferId, TransferRecord>>,
     /// Received offers, until they are decided or end.
@@ -224,6 +255,10 @@ pub(super) struct State {
     retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
     pub(super) pairing: Cell<Option<Pairing>>,
     strangers_until: Cell<Duration>,
+    /// Hidden from contacts: no paired advertisement, no relay presence.
+    pub(super) hidden: Cell<bool>,
+    /// Finished transfers, sealed at rest.
+    history: RefCell<History<SoftwareSealer>>,
 }
 
 impl State {
@@ -241,6 +276,15 @@ impl State {
             .storage_key()
             .map_err(|error| StartError::Io(error.kind()))?;
         let sealer = SoftwareSealer::new(StorageKey::from_bytes(Zeroizing::new(*key)));
+        if config.history_days > MAX_HISTORY_DAYS {
+            return Err(StartError::Io(std::io::ErrorKind::InvalidInput));
+        }
+        let history = History::open(
+            &config.state_dir,
+            SoftwareSealer::new(StorageKey::from_bytes(Zeroizing::new(*key))),
+            config.history_days,
+            now,
+        );
         std::fs::create_dir_all(&config.downloads_dir)
             .map_err(|error| StartError::Io(error.kind()))?;
         let destination = DirDestination::open(&config.downloads_dir)
@@ -283,6 +327,7 @@ impl State {
         let table = contacts
             .discovery_table(now)
             .map_err(|_| StartError::Io(std::io::ErrorKind::Other))?;
+        let hidden = config.hidden;
         Ok(Rc::new(Self {
             config,
             identity,
@@ -300,6 +345,7 @@ impl State {
             advertiser: RefCell::new(Advertiser::new()),
             backend: RefCell::new(backend),
             sessions: RefCell::new(BTreeMap::new()),
+            routes: RefCell::new(BTreeMap::new()),
             queues: RefCell::new(BTreeMap::new()),
             transfers: RefCell::new(BTreeMap::new()),
             received: RefCell::new(BTreeMap::new()),
@@ -308,6 +354,8 @@ impl State {
             retry: RefCell::new(BTreeMap::new()),
             pairing: Cell::new(None),
             strangers_until: Cell::new(Duration::ZERO),
+            hidden: Cell::new(hidden),
+            history: RefCell::new(history),
         }))
     }
 
@@ -345,10 +393,13 @@ impl State {
             let table = self.table.borrow();
             let mut directory = self.directory.borrow_mut();
             directory.set_stranger_browsing(mono < self.strangers_until.get());
-            let plan = self
-                .advertiser
-                .borrow_mut()
-                .plan(&table, None, now, mono, &mut OsRandom);
+            let mut plan =
+                self.advertiser
+                    .borrow_mut()
+                    .plan(&table, None, now, mono, &mut OsRandom);
+            if self.hidden.get() {
+                plan.paired = None;
+            }
             if self.pairing.get().is_some() && plan.stranger.is_none() {
                 // The stranger advertisement expired with the offer.
                 self.pairing.set(None);
@@ -646,6 +697,18 @@ impl State {
                 self.to_session(&transfer, SessionCommand::Decline).await
             }
             Request::Cancel { transfer } => self.cancel(&transfer).await,
+            Request::SetHidden { hidden } => {
+                self.hidden.set(hidden);
+                Response::Done
+            }
+            Request::History => Response::History(self.history.borrow().list(wall())),
+            Request::ClearHistory => {
+                if self.history.borrow_mut().clear() {
+                    Response::Done
+                } else {
+                    Response::error(ErrorCode::Internal, "the history could not be deleted")
+                }
+            }
         }
     }
 
@@ -660,6 +723,8 @@ impl State {
             contacts: self.table.borrow().len(),
             sessions: self.sessions.borrow().len(),
             pairing: self.pairing.get().is_some(),
+            hidden: self.hidden.get(),
+            history_days: self.history.borrow().days(),
         }
     }
 
@@ -668,6 +733,7 @@ impl State {
         let mono = self.mono();
         let directory = self.directory.borrow();
         let sessions = self.sessions.borrow();
+        let routes = self.routes.borrow();
         contacts
             .contacts()
             .map(|contact| {
@@ -678,6 +744,7 @@ impl State {
                     available: matches!(contacts.availability(&device), Ok(Ok(_))),
                     nearby: directory.contact(&device, mono).is_some(),
                     connected: sessions.contains_key(&device),
+                    route: routes.get(&device).copied(),
                 }
             })
             .collect()
@@ -719,7 +786,13 @@ impl State {
             return;
         };
         let was = idle(record.state);
+        let finished = !record.state.is_finished() && next.is_finished();
         record.state = next;
+        if finished {
+            let now = wall();
+            let entry = history_entry(id, record, now);
+            self.history.borrow_mut().record(entry, now);
+        }
         for old in self.finished.borrow_mut().update(*id, was, idle(next)) {
             transfers.remove(&old);
         }
@@ -995,6 +1068,10 @@ impl State {
                 detail: None,
                 done: 0,
                 total: prepared.total_bytes(),
+                files: prepared.files(),
+                names: prepared.top_names(HISTORY_NAMES),
+                manifest_hash: None,
+                receipt: None,
             },
         );
         if let Err(response) = self.queue(peer, prepared).await {

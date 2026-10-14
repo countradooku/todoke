@@ -86,10 +86,25 @@ pub struct CoreConfig {
     /// faster to reach and costs more sessions.
     #[serde(default = "default_presence")]
     pub relay_presence_seconds: u32,
+    /// Start hidden from contacts (see `Request::SetHidden`).
+    #[serde(default)]
+    pub hidden: bool,
+    /// How many days finished transfers stay in the sealed history: at
+    /// most [`MAX_HISTORY_DAYS`], by default 30; 0 keeps none (§7.7 leaves
+    /// receipt retention to local policy).
+    #[serde(default = "default_history_days")]
+    pub history_days: u32,
 }
+
+/// The longest history retention, in days.
+pub const MAX_HISTORY_DAYS: u32 = 3650;
 
 const fn default_presence() -> u32 {
     300
+}
+
+const fn default_history_days() -> u32 {
+    30
 }
 
 impl CoreConfig {
@@ -103,6 +118,8 @@ impl CoreConfig {
             discovery_folder: None,
             relays: Vec::new(),
             relay_presence_seconds: default_presence(),
+            hidden: false,
+            history_days: default_history_days(),
         }
     }
 }
@@ -119,6 +136,8 @@ mod tests {
         let minimal: CoreConfig =
             serde_json::from_str(r#"{"state_dir":"/s","downloads_dir":"/d"}"#)?;
         assert_eq!(minimal.lan, LanSettings::default());
+        assert!(!minimal.hidden);
+        assert_eq!(minimal.history_days, 30);
         assert!(!minimal.lan.allow_loopback);
         assert!(
             serde_json::from_str::<CoreConfig>(

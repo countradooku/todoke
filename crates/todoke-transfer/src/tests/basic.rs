@@ -90,10 +90,38 @@ pub(super) fn sent_transfer_error(link: &mut Link<'_>, to_bob: bool, code: Error
     })
 }
 
+/// The receipt the receiver signed is the one the sender verified.
+fn receipts_agree(sender: &[TransferEvent], receiver: &[TransferEvent]) -> TestResult {
+    let signed = receiver
+        .iter()
+        .find_map(|e| match e {
+            TransferEvent::Completed {
+                completed_at,
+                receipt_id,
+                ..
+            } => Some((*completed_at, *receipt_id)),
+            _ => None,
+        })
+        .ok_or("completed")?;
+    let verified = sender
+        .iter()
+        .find_map(|e| match e {
+            TransferEvent::DeliveryConfirmed {
+                completed_at,
+                receipt_id,
+                ..
+            } => Some((*completed_at, *receipt_id)),
+            _ => None,
+        })
+        .ok_or("delivery confirmed")?;
+    assert_eq!(signed, verified);
+    Ok(())
+}
+
 #[test]
 fn happy_path_multi_file_with_folders_and_empty_file() -> TestResult {
     let fixture = fixture()?;
-    let (mut link, transfer_id, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+    let (mut link, transfer_id, manifest) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
     let view = link
         .b_events
         .iter()
@@ -107,6 +135,13 @@ fn happy_path_multi_file_with_folders_and_empty_file() -> TestResult {
     assert_eq!(view.entries[4].name, "b.bin");
     assert_eq!(view.sender, fixture.alice.key());
     assert!(view.resume_selection.is_none());
+    // Both sides name the same manifest hash.
+    assert_eq!(view.manifest_hash, *manifest.hash());
+    assert!(has(&link.a_events, |e| matches!(
+        e,
+        TransferEvent::OfferSent { transfer_id: id, manifest_hash }
+            if *id == transfer_id && *manifest_hash == view.manifest_hash
+    )));
     // Names never appear in Debug output.
     let debug = format!("{:?}", link.b_events);
     assert!(!debug.contains("a.bin") && !debug.contains("photos") && !debug.contains("octet"));
@@ -126,14 +161,7 @@ fn happy_path_multi_file_with_folders_and_empty_file() -> TestResult {
         );
     }
     assert_eq!(sink.stored_segments(&transfer_id), 0);
-    assert!(has(&link.b_events, |e| matches!(
-        e,
-        TransferEvent::Completed { .. }
-    )));
-    assert!(has(&link.a_events, |e| matches!(
-        e,
-        TransferEvent::DeliveryConfirmed { .. }
-    )));
+    receipts_agree(&link.a_events, &link.b_events)?;
     // Progress events carry the transport label and reach the total.
     let last = link
         .b_events

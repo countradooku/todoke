@@ -192,6 +192,7 @@ fn offer_view(manifest: &CanonicalManifest, resume: Option<&Retained>) -> OfferV
         sender: *manifest.sender(),
         created_at: manifest.created_at(),
         expires_at: manifest.expires_at(),
+        manifest_hash: *manifest.hash(),
         file_count: manifest.manifest().file_count(),
         total_bytes: manifest.manifest().total_file_bytes(),
         entries,
@@ -1140,6 +1141,7 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
             self.fail_incoming_as(transfer_id, FailureCode::KeyStore, FailureCode::Storage);
             return;
         };
+        let receipt_id = *receipt.receipt_id();
         self.queue(FrameType::COMPLETE, complete.encode().to_vec());
         self.queue(FrameType::DELIVERY_RECEIPT, receipt.encode().to_vec());
         self.sink.finish(transfer_id);
@@ -1151,6 +1153,8 @@ impl<K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'_, K, S, R> {
         self.end_incoming(transfer_id, Outcome::Completed, late);
         self.event(TransferEvent::Completed {
             transfer_id: *transfer_id,
+            completed_at: wall,
+            receipt_id,
         });
     }
 }

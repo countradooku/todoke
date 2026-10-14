@@ -909,7 +909,7 @@ proptest! {
         }
         let id = run.transfer_id;
         let ended = |events: &[TransferEvent]| events.iter().rev().find_map(|e| match e {
-            TransferEvent::Completed { transfer_id }
+            TransferEvent::Completed { transfer_id, .. }
             | TransferEvent::DeliveryConfirmed { transfer_id, .. } if *transfer_id == id => Some("done"),
             TransferEvent::Cancelled { transfer_id, .. } if *transfer_id == id => Some("cancelled"),
             TransferEvent::Rejected { transfer_id, .. } if *transfer_id == id => Some("rejected"),

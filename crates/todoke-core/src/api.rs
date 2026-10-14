@@ -84,6 +84,19 @@ pub enum Request {
         /// The transfer.
         transfer: String,
     },
+    /// Stop (or resume) being visible to contacts: no LAN advertisement and
+    /// no relay presence while hidden. Contacts this device sends to are
+    /// still reached, and pairing still advertises in stranger mode while
+    /// an offer is shown.
+    SetHidden {
+        /// Whether to hide.
+        hidden: bool,
+    },
+    /// Finished transfers kept under the history policy
+    /// (`history_days`), newest first.
+    History,
+    /// Forget every finished transfer in the history.
+    ClearHistory,
 }
 
 impl fmt::Debug for Request {
@@ -135,6 +148,18 @@ pub struct ContactInfo {
     pub nearby: bool,
     /// Whether a session with it is open.
     pub connected: bool,
+    /// How the open session reaches it; `None` without one.
+    pub route: Option<Route>,
+}
+
+/// How a session reaches a contact.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Route {
+    /// Directly, on the local network.
+    Lan,
+    /// Through a relay (§10): end-to-end encrypted, forwarded by it.
+    Relay,
 }
 
 /// An offer this device received.
@@ -164,6 +189,10 @@ pub struct EntryInfo {
     /// The name as the peer sent it: untrusted display text. Interfaces
     /// must escape control and bidirectional characters before showing it.
     pub name: String,
+    /// The MIME type the peer claims (§7.1), `application/octet-stream`
+    /// when unknown: a display hint only, which grants nothing (no preview,
+    /// no execution).
+    pub mime: String,
     /// The size in bytes, 0 for directories.
     pub size: u64,
 }
@@ -280,6 +309,53 @@ pub struct StatusInfo {
     pub sessions: usize,
     /// Whether a pairing offer is shown.
     pub pairing: bool,
+    /// Whether this device is hidden from its contacts ([`Request::SetHidden`]).
+    pub hidden: bool,
+    /// How many days finished transfers stay in the history; 0 keeps none.
+    pub history_days: u32,
+}
+
+/// A finished transfer in the history.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryEntry {
+    /// The transfer, hex.
+    pub transfer: String,
+    /// The peer device, hex.
+    pub peer: String,
+    /// Which way.
+    pub way: Way,
+    /// How it ended: `received`, `delivered`, `unconfirmed`, `rejected`,
+    /// `cancelled`, or `failed`.
+    pub state: TransferState,
+    /// Why it ended, for people, when it did not complete.
+    pub detail: Option<String>,
+    /// When it ended, Unix seconds (this device's clock).
+    pub finished_at: u64,
+    /// Files offered, or selected once accepted.
+    pub files: u32,
+    /// Bytes offered, or selected once accepted.
+    pub bytes: u64,
+    /// The top-level names, at most [`HISTORY_NAMES`]; untrusted display
+    /// text for received transfers (escape before showing).
+    pub names: Vec<String>,
+    /// The manifest's hash, hex (§7.1), once the offer was sent or
+    /// received.
+    pub manifest_hash: Option<String>,
+    /// The signed delivery receipt (§7.7): the one this device signed as
+    /// receiver, or verified as sender.
+    pub receipt: Option<ReceiptInfo>,
+}
+
+/// The top-level names a history entry keeps.
+pub const HISTORY_NAMES: usize = 8;
+
+/// A signed delivery receipt (§7.7).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptInfo {
+    /// Its ID, hex.
+    pub id: String,
+    /// When the receiver finished, Unix seconds on its clock.
+    pub completed_at: u64,
 }
 
 /// The core's answer to a request.
@@ -317,6 +393,8 @@ pub enum Response {
     },
     /// Nearby strangers.
     Strangers(Vec<StrangerInfo>),
+    /// The history, newest first.
+    History(Vec<HistoryEntry>),
     /// An offer was queued.
     Offered {
         /// The transfer, hex.
@@ -413,6 +491,29 @@ pub enum Event {
     },
 }
 
+/// Escapes untrusted text for display: every control character and every
+/// character that hides or reorders text ([`todoke_fs::is_invisible`]:
+/// bidi controls, tags, fillers, joiners, variation selectors, and the
+/// rest of the default-ignorable code points) becomes `\u{…}`; a backslash
+/// becomes `\\`. Every interface shows peer-chosen names through it, so
+/// `invoice\u{202e}fdp.exe` cannot pass for a PDF.
+#[cfg(not(target_family = "wasm"))]
+#[must_use]
+pub fn escape(text: &str) -> String {
+    use core::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c == '\\' {
+            out.push_str("\\\\");
+        } else if c.is_control() || todoke_fs::is_invisible(c) {
+            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Lowercase hex.
 #[must_use]
 pub fn hex(bytes: impl AsRef<[u8]>) -> String {
@@ -447,6 +548,9 @@ mod tests {
                 transfer: "00ff".into(),
                 files: Some(vec![2, 3]),
             },
+            Request::SetHidden { hidden: true },
+            Request::History,
+            Request::ClearHistory,
         ] {
             let text = serde_json::to_string(&request)?;
             assert_eq!(serde_json::from_str::<Request>(&text)?, request);
@@ -479,7 +583,8 @@ mod tests {
                 person: "bb".into(),
                 available: true,
                 nearby: false,
-                connected: false,
+                connected: true,
+                route: Some(Route::Relay),
             }]),
             Response::Transfers(vec![TransferInfo {
                 transfer: "ab".into(),
@@ -491,6 +596,22 @@ mod tests {
                 bytes_total: 2,
             }]),
             Response::Offers(Vec::new()),
+            Response::History(vec![HistoryEntry {
+                transfer: "ab".into(),
+                peer: "cd".into(),
+                way: Way::Outgoing,
+                state: TransferState::Delivered,
+                detail: None,
+                finished_at: 9,
+                files: 2,
+                bytes: 3,
+                names: vec!["n".into()],
+                manifest_hash: Some("ef".into()),
+                receipt: Some(ReceiptInfo {
+                    id: "01".into(),
+                    completed_at: 8,
+                }),
+            }]),
             Response::Strangers(vec![StrangerInfo {
                 stranger: "cc".into(),
             }]),
@@ -512,6 +633,7 @@ mod tests {
                 parent: 0,
                 directory: false,
                 name: "n".into(),
+                mime: "text/plain".into(),
                 size: 1,
             }],
             total_bytes: 1,
@@ -558,6 +680,14 @@ mod tests {
             paths: vec!["/home/me/private".into()],
         };
         assert!(!format!("{send:?}").contains("private"));
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    #[test]
+    fn names_are_escaped_for_display() {
+        assert_eq!(escape("invoice\u{202e}fdp.exe"), "invoice\\u{202e}fdp.exe");
+        assert_eq!(escape("a\\b\u{1b}[2J"), "a\\\\b\\u{1b}[2J");
+        assert_eq!(escape("caf\u{e9} \u{1f600}"), "caf\u{e9} \u{1f600}");
     }
 
     #[test]
