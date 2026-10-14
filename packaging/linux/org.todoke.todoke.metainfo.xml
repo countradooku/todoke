@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream metadata (Flathub, GNOME Software, KDE Discover). -->
+<component type="desktop-application">
+  <id>org.todoke.todoke</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>Apache-2.0 OR MIT</project_license>
+
+  <name>todoke</name>
+  <summary>End-to-end encrypted file transfer between your devices</summary>
+  <developer id="org.todoke">
+    <name>todoke</name>
+  </developer>
+
+  <description>
+    <p>
+      todoke sends files and folders between your phones and computers.
+      Devices pair once, by QR code or a short code, and every transfer
+      is end-to-end encrypted, whether it crosses the local network or a
+      relay.
+    </p>
+    <ul>
+      <li>Nothing is accepted until the receiver agrees to the offer</li>
+      <li>Send from the file manager, the clipboard, or the command line</li>
+      <li>No account and no telemetry</li>
+    </ul>
+  </description>
+
+  <launchable type="desktop-id">org.todoke.todoke.desktop</launchable>
+  <provides>
+    <binary>todoke-desktop</binary>
+    <binary>todoke</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/countradooku/todoke</url>
+  <url type="bugtracker">https://github.com/countradooku/todoke/issues</url>
+  <url type="vcs-browser">https://github.com/countradooku/todoke</url>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#8ca6ff</color>
+    <color type="primary" scheme_preference="dark">#324fd1</color>
+  </branding>
+
+  <screenshots>
+    <screenshot type="default">
+      <caption>Paired devices, ready to send</caption>
+      <image>https://raw.githubusercontent.com/countradooku/todoke/main/docs/qa/screenshots/home-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Accepting an offer</caption>
+      <image>https://raw.githubusercontent.com/countradooku/todoke/main/docs/qa/screenshots/receive-light.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Pairing a device by QR code</caption>
+      <image>https://raw.githubusercontent.com/countradooku/todoke/main/docs/qa/screenshots/pairing-qr-dark.png</image>
+    </screenshot>
+  </screenshots>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <content_rating type="oars-1.1"/>
+
+  <releases>
+    <release version="0.1.0" date="2026-10-14">
+      <description>
+        <p>First release.</p>
+      </description>
+    </release>
+  </releases>
+</component>

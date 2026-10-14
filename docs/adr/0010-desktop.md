@@ -189,14 +189,17 @@ retention is local policy (§7.7).
   through a core request (a sealed, in-memory source).
 - **Closing the window stops a hosted core**, and with it receiving. Fix: a
   menu-bar or tray presence and a login item that runs the daemon; the app
-  then always attaches.
+  then always attaches. *Addressed in ADR 0011 where a tray host exists
+  (closing keeps the core running); a Linux session without one still
+  quits.*
 - **No system notification** announces an offer while the window is in
   the background. Fix: GPUI's system notifications on `OfferReceived`
-  (sender and counts only, never names).
+  (sender and counts only, never names). *Addressed in ADR 0011.*
 - **The history keeps names and peers at rest** (sealed, but under the
   storage key file, which has no platform protection yet, §16 O9) for 30
   days by default. Fix: O9's platform key storage; reconsider the default
-  retention.
+  retention. *The platform key storage is in ADR 0011; the retention
+  default stands.*
 - **History writes on the core's thread:** every finished transfer seals
   and syncs the whole history (up to 2000 entries) synchronously, briefly
   stalling sessions on slow storage. Fix: append-only sealed records, or the

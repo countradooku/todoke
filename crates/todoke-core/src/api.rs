@@ -313,6 +313,44 @@ pub struct StatusInfo {
     pub hidden: bool,
     /// How many days finished transfers stay in the history; 0 keeps none.
     pub history_days: u32,
+    /// What protects the key that seals this device's state.
+    pub key_protection: KeyProtection,
+}
+
+/// What protects the key that seals a device's state (§16 O9).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KeyProtection {
+    /// A file only this user can read.
+    File,
+    /// The macOS Keychain.
+    Keychain,
+    /// The macOS Keychain, wrapped by a key in the Secure Enclave.
+    SecureEnclave,
+    /// Windows DPAPI (this user's credentials).
+    Dpapi,
+    /// Windows DPAPI, wrapped by a key in the TPM.
+    Tpm,
+    /// The freedesktop Secret Service (GNOME Keyring, `KWallet`).
+    SecretService,
+    /// The XDG secret portal (Flatpak).
+    Portal,
+}
+
+impl KeyProtection {
+    /// Its name for people.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::File => "a file only you can read",
+            Self::Keychain => "the Keychain",
+            Self::SecureEnclave => "the Keychain, wrapped by the Secure Enclave",
+            Self::Dpapi => "Windows Data Protection",
+            Self::Tpm => "Windows Data Protection, wrapped by the TPM",
+            Self::SecretService => "the Secret Service (your keyring)",
+            Self::Portal => "the desktop's secret portal",
+        }
+    }
 }
 
 /// A finished transfer in the history.

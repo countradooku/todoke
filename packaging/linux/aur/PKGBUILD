@@ -1,0 +1,66 @@
+# Maintainer: todoke maintainers <countradooku@users.noreply.github.com>
+# Template for the AUR: set pkgver, run updpkgsums, regenerate .SRCINFO
+# (makepkg --printsrcinfo > .SRCINFO).
+
+pkgname=todoke
+pkgver=0.1.0
+pkgrel=1
+pkgdesc='End-to-end encrypted file transfer between your devices'
+arch=('x86_64' 'aarch64')
+url='https://github.com/countradooku/todoke'
+license=('Apache-2.0 OR MIT')
+depends=(
+  'fontconfig'
+  'freetype2'
+  'gcc-libs'
+  'glibc'
+  'hicolor-icon-theme'
+  'libx11'
+  'libxcb'
+  'libxkbcommon'
+  'libxkbcommon-x11'
+  'vulkan-icd-loader'
+  'wayland'
+)
+makedepends=('cargo' 'clang' 'cmake')
+optdepends=(
+  'python-nautilus: Send with todoke in Files (Nautilus)'
+  'gnome-keyring: Secret Service for the storage key'
+  'kwallet: Secret Service for the storage key'
+)
+# aws-lc-sys's C objects and the Rust objects must not meet in LTO.
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('@SHA256@')
+
+prepare() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$pkgname-$pkgver"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  # Release build: sessions stay disabled (no unaudited-dev).
+  cargo build --frozen --release -p todoke-desktop -p todoke-cli
+}
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 target/release/todoke-desktop "$pkgdir/usr/bin/todoke-desktop"
+  install -Dm755 target/release/todoke "$pkgdir/usr/bin/todoke"
+  install -Dm644 packaging/linux/org.todoke.todoke.desktop "$pkgdir/usr/share/applications/org.todoke.todoke.desktop"
+  install -Dm644 packaging/linux/org.todoke.todoke.metainfo.xml "$pkgdir/usr/share/metainfo/org.todoke.todoke.metainfo.xml"
+  local size
+  for size in 16 24 32 48 64 128 256 512; do
+    install -Dm644 "packaging/icons/todoke-$size.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/org.todoke.todoke.png"
+  done
+  install -Dm644 packaging/icons/todoke.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/org.todoke.todoke.svg"
+  install -Dm644 packaging/linux/dolphin/org.todoke.todoke.desktop "$pkgdir/usr/share/kio/servicemenus/org.todoke.todoke.desktop"
+  install -Dm644 packaging/linux/nemo/todoke.nemo_action "$pkgdir/usr/share/nemo/actions/todoke.nemo_action"
+  install -Dm644 packaging/linux/nautilus/todoke.py "$pkgdir/usr/share/nautilus-python/extensions/todoke.py"
+  install -Dm644 -t "$pkgdir/usr/share/licenses/$pkgname" LICENSE-APACHE LICENSE-MIT
+}

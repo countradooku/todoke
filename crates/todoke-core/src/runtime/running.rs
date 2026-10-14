@@ -259,6 +259,8 @@ pub(super) struct State {
     pub(super) hidden: Cell<bool>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
+    /// What protects the storage key.
+    key_protection: crate::api::KeyProtection,
 }
 
 impl State {
@@ -269,12 +271,17 @@ impl State {
         events: broadcast::Sender<Event>,
     ) -> Result<Rc<Self>, StartError> {
         let now = wall();
-        let profile =
-            Profile::open(&config.state_dir, key_source, now).map_err(StartError::Profile)?;
-        let (identity, contacts) = profile.into_parts();
+        // The private state directory first: a key file goes in it.
+        crate::profile::private_dir(&config.state_dir).map_err(StartError::Profile)?;
+        // Asked once: a platform store may cost a round trip (or a prompt).
         let key = key_source
             .storage_key()
-            .map_err(|error| StartError::Io(error.kind()))?;
+            .map_err(|_| StartError::Profile(crate::profile::ProfileError::StorageKey))?;
+        let key_protection = key_source.protection();
+        let fetched = crate::storage_key::Fetched(Zeroizing::new(*key));
+        let profile =
+            Profile::open(&config.state_dir, &fetched, now).map_err(StartError::Profile)?;
+        let (identity, contacts) = profile.into_parts();
         let sealer = SoftwareSealer::new(StorageKey::from_bytes(Zeroizing::new(*key)));
         if config.history_days > MAX_HISTORY_DAYS {
             return Err(StartError::Io(std::io::ErrorKind::InvalidInput));
@@ -356,6 +363,7 @@ impl State {
             strangers_until: Cell::new(Duration::ZERO),
             hidden: Cell::new(hidden),
             history: RefCell::new(history),
+            key_protection,
         }))
     }
 
@@ -725,6 +733,7 @@ impl State {
             pairing: self.pairing.get().is_some(),
             hidden: self.hidden.get(),
             history_days: self.history.borrow().days(),
+            key_protection: self.key_protection,
         }
     }
 

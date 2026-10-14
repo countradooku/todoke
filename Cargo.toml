@@ -22,6 +22,10 @@ todoke-fs = { path = "crates/todoke-fs", version = "0.1.0" }
 todoke-core = { path = "crates/todoke-core", version = "0.1.0" }
 todoke-daemon = { path = "crates/todoke-daemon", version = "0.1.0" }
 todoke-transfer = { path = "crates/todoke-transfer", version = "0.1.0" }
+todoke-sys-linux = { path = "crates/todoke-sys-linux", version = "0.1.0" }
+todoke-sys-macos = { path = "crates/todoke-sys-macos", version = "0.1.0" }
+todoke-sys-windows = { path = "crates/todoke-sys-windows", version = "0.1.0" }
+todoke-shell-windows = { path = "crates/todoke-shell-windows", version = "0.1.0" }
 todoke-transport = { path = "crates/todoke-transport", version = "0.1.0", default-features = false }
 # RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
 base45 = "=3.2.0"
@@ -77,6 +81,17 @@ qrcode = { version = "=0.14.1", default-features = false }
 # The desktop app's UI toolkit (GPUI and its styled components); its tree is
 # held to deny-desktop.toml.
 gpui-kit = "=0.7.3"
+# The tray icon (Windows), menu-bar item (macOS), and StatusNotifierItem
+# (Linux, through ksni: no GTK).
+tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
+# The global shortcut (Windows, macOS, X11).
+global-hotkey = "=0.8.0"
+# Windows: WinRT and COM projections (the desktop pieces of
+# todoke-sys-windows, and the Explorer command); features per crate.
+windows = { version = "=0.62.2", default-features = false }
+windows-core = "=0.62.2"
+# macOS: Objective-C (the desktop pieces of todoke-sys-macos).
+objc2 = "=0.6.5"
 # Command lines: the todoke CLI and the relay server.
 clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # Certificate parsing for relay key pins (rustls's own verifier crate).

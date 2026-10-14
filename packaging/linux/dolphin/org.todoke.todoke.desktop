@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Service
+X-KDE-ServiceTypes=KonqPopupMenu/Plugin
+MimeType=all/all;inode/directory;
+Actions=send;
+X-KDE-Priority=TopLevel
+Icon=org.todoke.todoke
+
+[Desktop Action send]
+Name=Send with todoke
+Icon=org.todoke.todoke
+Exec=todoke-desktop --send %F

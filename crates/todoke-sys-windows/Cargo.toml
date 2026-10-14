@@ -11,6 +11,11 @@ publish.workspace = true
 # Cargo does not support overriding individual inherited workspace lints.
 # Keep these tables aligned with workspace.lints except unsafe_code:
 # narrowly scoped, reviewed allows are possible only in this boundary crate.
+[features]
+# The desktop app's pieces (login item, Explorer verbs, Share target); the
+# daemon and the CLI need only the key store.
+desktop = ["dep:windows", "dep:windows-registry"]
+
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -28,3 +33,24 @@ undocumented_unsafe_blocks = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[target.'cfg(windows)'.dependencies]
+zeroize.workspace = true
+# DPAPI and the TPM's key storage provider (raw bindings; the calls are in
+# dpapi.rs, each unsafe block justified).
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
+# Package identity, the startup task, and share activation (WinRT; safe
+# projections). Already in the graph through GPUI.
+windows = { workspace = true, optional = true, features = [
+    "ApplicationModel",
+    "ApplicationModel_Activation",
+    "ApplicationModel_DataTransfer",
+    "ApplicationModel_DataTransfer_ShareTarget",
+    "Storage",
+    "Win32_Foundation",
+] }
+# This user's Run key and Explorer verbs (safe registry API).
+windows-registry = { version = "=0.6.1", optional = true }
+
+[target.'cfg(windows)'.dev-dependencies]
+getrandom.workspace = true

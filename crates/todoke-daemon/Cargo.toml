@@ -29,6 +29,16 @@ tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros", "
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true
 
+# Where the storage key is kept (§16 O9): the platform's secret storage.
+[target.'cfg(target_os = "macos")'.dependencies]
+todoke-sys-macos.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+todoke-sys-windows.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+todoke-sys-linux.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 

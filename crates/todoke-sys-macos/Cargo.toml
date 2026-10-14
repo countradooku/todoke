@@ -11,6 +11,11 @@ publish.workspace = true
 # Cargo does not support overriding individual inherited workspace lints.
 # Keep these tables aligned with workspace.lints except unsafe_code:
 # narrowly scoped, reviewed allows are possible only in this boundary crate.
+[features]
+# The desktop app's pieces (login item, Services); the daemon and the CLI
+# need only the key store.
+desktop = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit", "dep:objc2-service-management"]
+
 [lints.rust]
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "deny"
@@ -28,3 +33,22 @@ undocumented_unsafe_blocks = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+zeroize.workspace = true
+# The Keychain and the Secure Enclave through safe bindings (already in the
+# graph for the relay's platform certificate checks). OSX_10_15: the
+# data-protection keychain.
+security-framework = { version = "=3.7.0", default-features = false, features = ["OSX_10_15"] }
+# Adding an item without the "create or update" of security-framework's
+# password helpers: a stored key is never replaced.
+core-foundation = "=0.10.1"
+# The login item (SMAppService) and the Services provider behind "Send with
+# todoke" in Finder; the same objc2 crates the tray already brings.
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSError", "NSString", "NSURL", "NSObject"] }
+objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "NSApplication", "NSPasteboard", "NSPasteboardItem", "NSResponder"] }
+objc2-service-management = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+getrandom.workspace = true

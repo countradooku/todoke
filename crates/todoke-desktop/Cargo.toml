@@ -28,6 +28,10 @@ path = "src/main.rs"
 name = "screenshots"
 required-features = ["mock"]
 
+[[example]]
+name = "icons"
+required-features = ["mock"]
+
 [dependencies]
 todoke-core.workspace = true
 serde.workspace = true
@@ -53,6 +57,27 @@ qrcode.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 # PNG output of the screenshot tool (`mock` feature only).
 image = { version = "=0.25.10", default-features = false, features = ["png"], optional = true }
+# The tray or menu-bar item, and the global shortcut.
+tray-icon.workspace = true
+global-hotkey.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+# O_NOFOLLOW for the handoff log (tests).
+rustix.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Whether a tray host runs; autostart, file-manager actions, the portal
+# global shortcut.
+todoke-sys-linux = { workspace = true, features = ["desktop"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The login item and the Finder Quick Action (Services).
+todoke-sys-macos = { workspace = true, features = ["desktop"] }
+objc2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# The login item, Explorer verbs, and the Share target.
+todoke-sys-windows = { workspace = true, features = ["desktop"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
 # Headless windows, simulated input, and the accessibility tree in tests.

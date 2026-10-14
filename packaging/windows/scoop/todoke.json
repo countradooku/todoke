@@ -1,0 +1,31 @@
+{
+    "version": "0.1.0",
+    "description": "End-to-end encrypted file transfer between your devices",
+    "homepage": "https://github.com/countradooku/todoke",
+    "license": "Apache-2.0|MIT",
+    "notes": "Your profile stays in %APPDATA%\\todoke and %LOCALAPPDATA%\\todoke when todoke is uninstalled.",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/countradooku/todoke/releases/download/v0.1.0/todoke-0.1.0-windows-x64.zip",
+            "hash": "@SHA256_ZIP_X64@"
+        }
+    },
+    "bin": [
+        "todoke.exe",
+        "todoke-desktop.exe"
+    ],
+    "shortcuts": [
+        [
+            "todoke-desktop.exe",
+            "todoke"
+        ]
+    ],
+    "checkver": "github",
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/countradooku/todoke/releases/download/v$version/todoke-$version-windows-x64.zip"
+            }
+        }
+    }
+}

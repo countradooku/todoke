@@ -1,0 +1,26 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# Template: replace @VERSION@, @SHA256_MSIX_X64@, and @SHA256_ZIP_X64@ with
+# the release assets' values.
+PackageIdentifier: todoke.todoke
+PackageVersion: "@VERSION@"
+MinimumOSVersion: 10.0.17763.0
+Commands:
+  - todoke
+  - todoke-desktop
+Installers:
+  - Architecture: x64
+    InstallerType: msix
+    InstallerUrl: https://github.com/countradooku/todoke/releases/download/v@VERSION@/todoke-@VERSION@-windows-x64.msix
+    InstallerSha256: "@SHA256_MSIX_X64@"
+  - Architecture: x64
+    InstallerType: zip
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: todoke.exe
+        PortableCommandAlias: todoke
+      - RelativeFilePath: todoke-desktop.exe
+        PortableCommandAlias: todoke-desktop
+    InstallerUrl: https://github.com/countradooku/todoke/releases/download/v@VERSION@/todoke-@VERSION@-windows-x64.zip
+    InstallerSha256: "@SHA256_ZIP_X64@"
+ManifestType: installer
+ManifestVersion: 1.10.0

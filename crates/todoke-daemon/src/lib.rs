@@ -13,6 +13,8 @@
 //! | [`host`] | The same inside another process (the desktop app): the core for it, served on the endpoint from a thread of its own |
 //! | [`ipc`] | The IPC messages, the client the CLI uses, and who may connect (only this user) |
 //! | [`paths`] | Configuration, state, and Downloads locations (`TODOKE_HOME` overrides) |
+//! | [`handoff`] | The desktop app's single window: a second launch hands its request over |
+//! | [`keys`] | Where the storage key is kept: the platform's secret storage, behind the core's policy |
 //! | [`service`] | Service definitions: a systemd user unit, a launchd agent, a Windows logon task |
 //!
 //! Notifications: the daemon runs no commands. A notifier subscribes to the
@@ -23,7 +25,11 @@
 #[cfg(not(target_family = "wasm"))]
 mod endpoint;
 #[cfg(not(target_family = "wasm"))]
+pub mod handoff;
+#[cfg(not(target_family = "wasm"))]
 pub mod ipc;
+#[cfg(not(target_family = "wasm"))]
+pub mod keys;
 pub mod paths;
 #[cfg(not(target_family = "wasm"))]
 mod server;
@@ -85,7 +91,7 @@ pub fn run(paths: &Paths) -> Result<(), DaemonError> {
     let listener = runtime
         .block_on(endpoint::Listener::bind(&paths.endpoint()))
         .map_err(DaemonError::Endpoint)?;
-    let key = todoke_core::KeyFile::new(paths.storage_key());
+    let key = keys::source(&config);
     let core = todoke_core::Core::start(config, Box::new(key)).map_err(core_error)?;
     runtime.block_on(async {
         let stop = std::sync::Arc::new(tokio::sync::Notify::new());
@@ -212,7 +218,7 @@ impl Drop for Hosted {
 pub fn host(paths: &Paths) -> Result<Hosted, DaemonError> {
     let config = prepare(paths)?;
     let endpoint = paths.endpoint();
-    let key = todoke_core::KeyFile::new(paths.storage_key());
+    let key = keys::source(&config);
     let stop = std::sync::Arc::new(tokio::sync::Notify::new());
     let (started, ready) = std::sync::mpsc::channel();
     let serving = std::sync::Arc::clone(&stop);

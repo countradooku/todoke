@@ -1,0 +1,9 @@
+[Nemo Action]
+Name=Send with todoke
+Comment=Send the selection to a contact
+Exec=todoke-desktop --send %F
+Icon-Name=org.todoke.todoke
+Selection=notnone
+Extensions=any;dir;
+Quote=double
+Dependencies=todoke-desktop;

@@ -72,3 +72,7 @@ Thumbs.db
 # Local ChatGPT project reference files are not part of the repository.
 /AGENTS.md
 /sources/
+# Packages built by packaging/ scripts, and the Flatpak's generated cargo sources.
+/dist/
+/packaging/linux/flatpak/cargo-sources.json
+__pycache__/

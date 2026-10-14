@@ -28,6 +28,7 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
         relay_presence_seconds: 300,
         hidden: false,
         history_days: 30,
+        key_storage: crate::config::KeyStorage::Auto,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));

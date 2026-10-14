@@ -445,7 +445,7 @@ fn issue(
 
 /// Creates `dir` if needed, private to this user on Unix (0700), and
 /// refuses one that others can read or write.
-fn private_dir(dir: &Path) -> Result<(), ProfileError> {
+pub(crate) fn private_dir(dir: &Path) -> Result<(), ProfileError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::{DirBuilderExt as _, PermissionsExt as _};

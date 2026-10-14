@@ -120,6 +120,11 @@ exceptions = [
     # inotify (file watching on Linux, gpui-component). ISC requires retaining notices.
     { crate = "inotify@0.11.5", allow = ["ISC"] },
     { crate = "inotify-sys@0.1.8", allow = ["ISC"] },
+    # The Linux tray item (StatusNotifierItem over D-Bus, without GTK) through
+    # tray-icon's ksni backend: at runtime in todoke-desktop on Linux only.
+    # The Unlicense is a public-domain dedication (OSI approved); see
+    # docs/adr/0011-os-integration.md.
+    { crate = "ksni@0.3.6", allow = ["Unlicense"] },
     # enum-iterator (gpui-component). 0BSD is permissive and needs no notice.
     { crate = "enum-iterator@2.3.0", allow = ["0BSD"] },
     { crate = "enum-iterator-derive@1.5.0", allow = ["0BSD"] },
@@ -214,6 +219,11 @@ skip = [
     { crate = "toml_edit@0.22.27", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "usvg@0.45.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "windows@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    # The global shortcut (global-hotkey 0.8.0, the latest) pins these;
+    # muda (the tray's menus) and everything else use the newer ones. See
+    # docs/adr/0011-os-integration.md.
+    { crate = "keyboard-types@0.7.0", reason = "global-hotkey 0.8.0 (the global shortcut); muda uses 0.8. Upstream must converge." },
+    { crate = "windows-sys@0.59.0", reason = "global-hotkey 0.8.0 (the global shortcut) on Windows; everything else uses 0.61. Upstream must converge." },
     { crate = "windows-core@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "windows-implement@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "windows-interface@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },

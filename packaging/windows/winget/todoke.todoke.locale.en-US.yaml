@@ -1,0 +1,25 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.10.0.schema.json
+# Template: replace @VERSION@.
+PackageIdentifier: todoke.todoke
+PackageVersion: "@VERSION@"
+PackageLocale: en-US
+Publisher: todoke
+PublisherUrl: https://github.com/countradooku/todoke
+PublisherSupportUrl: https://github.com/countradooku/todoke/issues
+PackageName: todoke
+PackageUrl: https://github.com/countradooku/todoke
+License: Apache-2.0 OR MIT
+LicenseUrl: https://github.com/countradooku/todoke/blob/main/LICENSE-APACHE
+ShortDescription: End-to-end encrypted file transfer between your devices
+Description: |-
+  todoke sends files and folders between your phones and computers. Devices
+  pair once, and every transfer is end-to-end encrypted. The package holds
+  the desktop app (todoke-desktop) and the command line (todoke).
+Moniker: todoke
+Tags:
+  - encryption
+  - file-sharing
+  - file-transfer
+  - send-files
+ManifestType: defaultLocale
+ManifestVersion: 1.10.0

@@ -57,6 +57,7 @@ impl Todoke {
         .child(connections(&config, palette, cx))
         .child(self.security(&config, palette, cx))
         .child(self.devices(palette, cx))
+        .child(self.this_computer(palette, cx))
         .child(self.appearance(palette, cx))
         .child(self.about(palette))
         .into_any_element()
@@ -148,8 +149,14 @@ impl Todoke {
                     }),
             )
             .child(muted(format!("Sessions: {sessions}"), palette))
+            .when_some(status.map(|s| s.key_protection), |card, protection| {
+                card.child(muted(
+                    format!("The key that seals this device's state is kept in {}.", protection.label()),
+                    palette,
+                ))
+            })
             .child(muted(
-                "Keys and history are sealed under the storage key in the state folder. Received names are shown escaped; MIME types grant nothing.",
+                "Keys, contacts, and history are sealed under that key. Received names are shown escaped; MIME types grant nothing.",
                 palette,
             ))
             .child(label("Keep history for"))
