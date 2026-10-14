@@ -143,10 +143,22 @@ async fn tunnel(alice: &Device, bob: &Device) -> AnyResult<(RelayLink, RelayLink
     let token = RendezvousToken::new(*token)?;
     let (one, two) = (RelayClient::new()?, RelayClient::new()?);
     let wait = Duration::from_secs(10);
-    let (a, b) = tokio::join!(
-        one.rendezvous(&relay, token, wait),
-        two.rendezvous(&relay, token, wait)
-    );
+    // Tried again if a connection did not come up: many tests at once on
+    // one loopback can lose handshakes, and the app retries too.
+    let meet = |client: RelayClient| {
+        let relay = relay.clone();
+        async move {
+            let mut attempts = 0;
+            loop {
+                attempts += 1;
+                match client.rendezvous(&relay, token, wait).await {
+                    Err(crate::relay::RelayError::Unreachable(_)) if attempts < 3 => {}
+                    other => return other,
+                }
+            }
+        }
+    };
+    let (a, b) = tokio::join!(meet(one), meet(two));
     Ok((a?, b?))
 }
 

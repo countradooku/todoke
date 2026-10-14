@@ -23,6 +23,7 @@ relay = [
     "dep:libcrux-sha2",
     "dep:blake3",
     "dep:getrandom",
+    "tokio/macros",
 ]
 
 [dependencies]

@@ -47,6 +47,8 @@ const ANSWER_TIMEOUT: Duration = Duration::from_secs(10);
 /// open, a dead relay is noticed.
 const KEEP_ALIVE: Duration = Duration::from_secs(10);
 const IDLE: Duration = Duration::from_secs(30);
+/// The tunnel's receive window: what a relay can make this device buffer.
+const STREAM_WINDOW: u32 = 1 << 20;
 
 /// A relay this device may use. Everything here is local configuration;
 /// nothing is learned from the network.
@@ -220,18 +222,22 @@ impl RelayClient {
             _ => return Err(RelayError::Protocol),
         }
         write(&mut send, &Control::Forward { room }).await?;
+        // One deadline for the whole wait (the room's lifetime), and each
+        // optional record at most once (§10): a relay can neither stall
+        // the rendezvous nor flood it.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(u64::from(ttl));
+        let (mut candidates, mut punch) = (false, false);
         loop {
-            let next = tokio::time::timeout(
-                Duration::from_secs(u64::from(MAX_ROOM_SECONDS)),
-                reader.next(&mut recv),
-            )
-            .await
-            .map_err(|_| RelayError::Protocol)??;
+            let next = tokio::time::timeout_at(deadline, reader.next(&mut recv))
+                .await
+                .map_err(|_| RelayError::Protocol)??;
             match next {
                 Control::ForwardReady { room: named } if named == room => break,
                 // Allowed before ForwardReady, and ignored: no probes.
-                Control::Candidates { room: named, .. } | Control::Punch { room: named, .. }
-                    if named == room => {}
+                Control::Candidates { room: named, .. } if named == room && !candidates => {
+                    candidates = true;
+                }
+                Control::Punch { room: named, .. } if named == room && !punch => punch = true,
                 Control::RelayClose { code, .. } => return Err(RelayError::Closed(code)),
                 _ => return Err(RelayError::Protocol),
             }
@@ -248,25 +254,32 @@ impl RelayClient {
         })
     }
 
+    /// Connects to the relay, trying each address its name resolves to in
+    /// turn; TLS failures are not retried on another address.
     async fn connect(&self, relay: &RelayEndpoint) -> Result<quinn::Connection, RelayError> {
-        let address = tokio::net::lookup_host(&relay.address)
+        let addresses: Vec<SocketAddr> = tokio::net::lookup_host(&relay.address)
             .await
             .map_err(|error| RelayError::Unreachable(error.kind()))?
-            .next()
-            .ok_or(RelayError::Unreachable(io::ErrorKind::NotFound))?;
-        let config = self.client_config(relay)?;
-        self.endpoint
-            .connect_with(config, address, &relay.server_name)
-            .map_err(|_| RelayError::Unreachable(io::ErrorKind::InvalidInput))?
-            .await
-            .map_err(|error| match error {
-                quinn::ConnectionError::TransportError(_)
-                | quinn::ConnectionError::ConnectionClosed(_) => RelayError::Tls,
-                quinn::ConnectionError::TimedOut => {
-                    RelayError::Unreachable(io::ErrorKind::TimedOut)
+            .take(4)
+            .collect();
+        let mut failure = RelayError::Unreachable(io::ErrorKind::NotFound);
+        for address in addresses {
+            let config = self.client_config(relay)?;
+            let connecting = self
+                .endpoint
+                .connect_with(config, address, &relay.server_name)
+                .map_err(|_| RelayError::Unreachable(io::ErrorKind::InvalidInput))?;
+            match connecting.await {
+                Ok(connection) => return Ok(connection),
+                Err(error) => {
+                    failure = connection_error(&error);
+                    if failure == RelayError::Tls {
+                        return Err(failure);
+                    }
                 }
-                _ => RelayError::Unreachable(io::ErrorKind::ConnectionRefused),
-            })
+            }
+        }
+        Err(failure)
     }
 
     fn client_config(&self, relay: &RelayEndpoint) -> Result<quinn::ClientConfig, RelayError> {
@@ -295,15 +308,41 @@ impl RelayClient {
             quinn::crypto::rustls::QuicClientConfig::try_from(tls).map_err(|_| RelayError::Tls)?;
         let mut config = quinn::ClientConfig::new(Arc::new(crypto));
         let mut transport = quinn::TransportConfig::default();
+        // The relay opens no streams: nothing it sends unasked is
+        // buffered, and the one tunnel stream's window is bounded.
         transport
             .keep_alive_interval(Some(KEEP_ALIVE))
             .max_concurrent_uni_streams(quinn::VarInt::from_u32(0))
+            .max_concurrent_bidi_streams(quinn::VarInt::from_u32(0))
+            .stream_receive_window(quinn::VarInt::from_u32(STREAM_WINDOW))
+            .receive_window(quinn::VarInt::from_u32(STREAM_WINDOW))
             .datagram_receive_buffer_size(None);
         if let Ok(idle) = quinn::IdleTimeout::try_from(IDLE) {
             transport.max_idle_timeout(Some(idle));
         }
         config.transport_config(Arc::new(transport));
         Ok(config)
+    }
+}
+
+/// What a failed connection means: TLS (a certificate, pin, or ALPN
+/// alert), a relay at its limits (refused), or no answer.
+fn connection_error(error: &quinn::ConnectionError) -> RelayError {
+    let code = match error {
+        quinn::ConnectionError::TransportError(error) => Some(error.code),
+        quinn::ConnectionError::ConnectionClosed(close) => Some(close.error_code),
+        quinn::ConnectionError::TimedOut => {
+            return RelayError::Unreachable(io::ErrorKind::TimedOut);
+        }
+        _ => None,
+    };
+    match code {
+        Some(code) if code == quinn::TransportErrorCode::CONNECTION_REFUSED => {
+            RelayError::Unreachable(io::ErrorKind::ConnectionRefused)
+        }
+        // TLS alerts are carried as CRYPTO_ERROR codes 0x0100..=0x01ff.
+        Some(code) if (0x100..=0x1ff).contains(&u64::from(code)) => RelayError::Tls,
+        _ => RelayError::Unreachable(io::ErrorKind::ConnectionAborted),
     }
 }
 
