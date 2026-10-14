@@ -64,11 +64,16 @@ pub struct Config {
     pub tunnel_bytes: u64,
     /// How long a tunnel lasts (at most 24 hours).
     pub tunnel_lifetime: Duration,
+    /// New connections a second from one source (bursts of twice that).
+    pub connections_per_source_per_second: u32,
+    /// Registers a second from one source (bursts of twice that).
+    pub registers_per_source_per_second: u32,
 }
 
 impl Config {
     /// The defaults on `listen`: §10's tunnel limits, 20000 connections, 64
-    /// from one source, 50000 rooms.
+    /// from one source (20 new ones a second), 10 registers a second from
+    /// one source, 50000 rooms.
     #[must_use]
     pub const fn new(listen: SocketAddr) -> Self {
         Self {
@@ -78,6 +83,8 @@ impl Config {
             max_rooms: 50_000,
             tunnel_bytes: MAX_TUNNEL_BYTES,
             tunnel_lifetime: Duration::from_secs(MAX_TUNNEL_SECONDS),
+            connections_per_source_per_second: 20,
+            registers_per_source_per_second: 10,
         }
     }
 }
@@ -197,10 +204,54 @@ struct Streams {
     early: Vec<u8>,
 }
 
+/// A rate limit (the generic cell rate algorithm): one event every
+/// `interval`, bursts of `burst` events.
+#[derive(Clone, Copy)]
+struct Rate {
+    interval: Duration,
+    burst: u32,
+}
+
+impl Rate {
+    /// `per_second` events a second, bursts of two seconds' worth.
+    fn per_second(per_second: u32) -> Self {
+        let per_second = per_second.max(1);
+        Self {
+            interval: Duration::from_secs(1) / per_second,
+            burst: per_second.saturating_mul(2),
+        }
+    }
+}
+/// A connection holding no room for this long is closed.
+const ROOMLESS: Duration = Duration::from_secs(30);
+
+/// One source's connections and rate state, kept while it has connections
+/// or its limits have not recovered: in memory only.
+struct Source {
+    connections: usize,
+    /// When the connection and register allowances are full again.
+    connect_full: Instant,
+    register_full: Instant,
+}
+
+impl Source {
+    /// Whether one more event fits `rate`, whose allowance is full again at
+    /// `full`; if it does, `full` moves on.
+    fn allow(full: &mut Instant, rate: Rate, now: Instant) -> bool {
+        let start = (*full).max(now);
+        let limit = now + rate.interval * rate.burst;
+        if start + rate.interval > limit {
+            return false;
+        }
+        *full = start + rate.interval;
+        true
+    }
+}
+
 struct Shared {
     config: Config,
     rooms: Mutex<Rooms<Streams>>,
-    sources: Mutex<HashMap<IpAddr, usize>>,
+    sources: Mutex<HashMap<IpAddr, Source>>,
     metrics: Arc<Metrics>,
     next_endpoint: AtomicU64,
 }
@@ -259,9 +310,13 @@ impl Relay {
                 let mut tick = tokio::time::interval(Duration::from_secs(1));
                 loop {
                     tick.tick().await;
-                    let mut rooms = lock(&shared.rooms);
-                    rooms.expire(Instant::now());
-                    shared.metrics.rooms.store(rooms.len(), Ordering::Relaxed);
+                    let now = Instant::now();
+                    {
+                        let mut rooms = lock(&shared.rooms);
+                        rooms.expire(now);
+                        shared.metrics.rooms.store(rooms.len(), Ordering::Relaxed);
+                    }
+                    forget_sources(&shared, now);
                 }
             })
         };
@@ -288,7 +343,7 @@ impl Relay {
             let shared = Arc::clone(shared);
             tokio::spawn(async move {
                 if let Ok(connection) = incoming.await {
-                    serve_connection(&shared, connection).await;
+                    serve_connection(&shared, connection, source).await;
                 }
                 release(&shared, source);
             });
@@ -324,32 +379,80 @@ fn admit(shared: &Shared, source: IpAddr) -> bool {
     if metrics.connections.load(Ordering::Relaxed) >= shared.config.max_connections {
         return false;
     }
+    let now = Instant::now();
     let mut sources = lock(&shared.sources);
-    let count = sources.entry(source).or_insert(0);
-    if *count >= shared.config.max_connections_per_source {
+    let entry = sources.entry(source).or_insert(Source {
+        connections: 0,
+        connect_full: now,
+        register_full: now,
+    });
+    if entry.connections >= shared.config.max_connections_per_source
+        || !Source::allow(
+            &mut entry.connect_full,
+            Rate::per_second(shared.config.connections_per_source_per_second),
+            now,
+        )
+    {
         return false;
     }
-    *count += 1;
+    entry.connections += 1;
     metrics.connections.fetch_add(1, Ordering::Relaxed);
     true
 }
 
 fn release(shared: &Shared, source: IpAddr) {
     let mut sources = lock(&shared.sources);
-    if let Some(count) = sources.get_mut(&source) {
-        *count -= 1;
-        if *count == 0 {
-            sources.remove(&source);
-        }
+    if let Some(entry) = sources.get_mut(&source) {
+        entry.connections = entry.connections.saturating_sub(1);
     }
     shared.metrics.connections.fetch_sub(1, Ordering::Relaxed);
 }
 
-async fn serve_connection(shared: &Arc<Shared>, connection: quinn::Connection) {
+/// Whether `source` may register one more room now.
+fn may_register(shared: &Shared, source: IpAddr) -> bool {
+    let now = Instant::now();
+    lock(&shared.sources).get_mut(&source).is_some_and(|entry| {
+        Source::allow(
+            &mut entry.register_full,
+            Rate::per_second(shared.config.registers_per_source_per_second),
+            now,
+        )
+    })
+}
+
+/// Forgets sources with no connections whose limits have recovered.
+fn forget_sources(shared: &Shared, now: Instant) {
+    lock(&shared.sources).retain(|_, entry| {
+        entry.connections > 0 || entry.connect_full > now || entry.register_full > now
+    });
+}
+
+/// Serves a connection's streams, one room each, and closes it once it has
+/// held no room for [`ROOMLESS`]: a connection kept alive with nothing to
+/// do would hold its slots forever.
+async fn serve_connection(shared: &Arc<Shared>, connection: quinn::Connection, source: IpAddr) {
     let endpoint = shared.next_endpoint.fetch_add(1, Ordering::Relaxed);
-    while let Ok((send, recv)) = connection.accept_bi().await {
-        let shared = Arc::clone(shared);
-        tokio::spawn(async move { serve_room(&shared, endpoint, send, recv).await });
+    let open = Arc::new(AtomicUsize::new(0));
+    loop {
+        let accepted = tokio::select! {
+            accepted = connection.accept_bi() => accepted,
+            () = tokio::time::sleep(ROOMLESS) => {
+                if open.load(Ordering::Relaxed) == 0 {
+                    connection.close(CLOSED, b"");
+                    return;
+                }
+                continue;
+            }
+        };
+        let Ok((send, recv)) = accepted else {
+            return;
+        };
+        let (shared, open) = (Arc::clone(shared), Arc::clone(&open));
+        open.fetch_add(1, Ordering::Relaxed);
+        tokio::spawn(async move {
+            serve_room(&shared, endpoint, source, send, recv).await;
+            open.fetch_sub(1, Ordering::Relaxed);
+        });
     }
 }
 
@@ -395,7 +498,13 @@ async fn close(stream: &mut SendStream, room: Option<RoomId>, code: CloseCode, m
 }
 
 #[expect(clippy::too_many_lines, reason = "one room's protocol, in order")]
-async fn serve_room(shared: &Arc<Shared>, endpoint: u64, mut tx: SendStream, mut rx: RecvStream) {
+async fn serve_room(
+    shared: &Arc<Shared>,
+    endpoint: u64,
+    source: IpAddr,
+    mut tx: SendStream,
+    mut rx: RecvStream,
+) {
     let metrics = &shared.metrics;
     let mut reader = Reader { buffer: Vec::new() };
     let first = tokio::time::timeout(REGISTER_DEADLINE, reader.next(&mut rx)).await;
@@ -408,6 +517,10 @@ async fn serve_room(shared: &Arc<Shared>, endpoint: u64, mut tx: SendStream, mut
         close(&mut tx, None, CloseCode::Malformed, metrics).await;
         return;
     };
+    if !may_register(shared, source) {
+        close(&mut tx, None, CloseCode::Quota, metrics).await;
+        return;
+    }
     let (events, mut inbox) = mpsc::channel(4);
     let joined = lock(&shared.rooms).register(
         &token,
@@ -510,22 +623,25 @@ async fn serve_room(shared: &Arc<Shared>, endpoint: u64, mut tx: SendStream, mut
         Err((code, mut mine)) => close(&mut mine.send, Some(room), code, metrics).await,
         Ok(Forwarded::Tunnel { mine, theirs }) => tunnel(shared, mine, theirs, room).await,
         Ok(Forwarded::Waiting) => {
-            // The streams wait in the room for the other Forward.
-            tokio::select! {
-                () = tokio::time::sleep_until(joined.expires.into()) => {
-                    let mine = lock(&shared.rooms).withdraw(ticket, CloseCode::Expired);
-                    if let Some(mut mine) = mine {
-                        close(&mut mine.send, Some(room), CloseCode::Expired, metrics).await;
-                    }
+            // The streams wait in the room for the other Forward; anything
+            // but a closure (the other's Candidates or Punch) changes
+            // nothing now.
+            let deadline = tokio::time::sleep_until(joined.expires.into());
+            tokio::pin!(deadline);
+            let code = loop {
+                tokio::select! {
+                    () = &mut deadline => break CloseCode::Expired,
+                    event = inbox.recv() => match event {
+                        Some(RoomEvent::Closed(code)) => break code,
+                        // The room became a tunnel (its channel closed).
+                        None => return,
+                        Some(_) => {}
+                    },
                 }
-                event = inbox.recv() => {
-                    if let Some(RoomEvent::Closed(code)) = event {
-                        let mine = lock(&shared.rooms).withdraw(ticket, code);
-                        if let Some(mut mine) = mine {
-                            close(&mut mine.send, Some(room), code, metrics).await;
-                        }
-                    }
-                }
+            };
+            let mine = lock(&shared.rooms).withdraw(ticket, code);
+            if let Some(mut mine) = mine {
+                close(&mut mine.send, Some(room), code, metrics).await;
             }
         }
     }

@@ -60,6 +60,8 @@ async fn ten_thousand_concurrent_rendezvous() -> AnyResult<()> {
     // Every client is on loopback: one source.
     config.max_connections = 2 * rooms as usize + 100;
     config.max_connections_per_source = config.max_connections;
+    config.connections_per_source_per_second = u32::MAX;
+    config.registers_per_source_per_second = u32::MAX;
     let relay = Relay::bind(config, &identity)?;
     let endpoint = Arc::new(RelayEndpoint {
         name: "load".into(),

@@ -50,6 +50,12 @@ mod app {
         /// Rooms open at once.
         #[arg(long, default_value_t = 50_000)]
         max_rooms: usize,
+        /// New connections a second from one source.
+        #[arg(long, default_value_t = 20)]
+        connections_per_source_per_second: u32,
+        /// Registers a second from one source.
+        #[arg(long, default_value_t = 10)]
+        registers_per_source_per_second: u32,
         /// Bytes each tunnel direction may carry (at most 16 TiB).
         #[arg(long)]
         tunnel_bytes: Option<u64>,
@@ -80,6 +86,8 @@ mod app {
         config.max_connections = args.max_connections;
         config.max_connections_per_source = args.max_connections_per_source;
         config.max_rooms = args.max_rooms;
+        config.connections_per_source_per_second = args.connections_per_source_per_second;
+        config.registers_per_source_per_second = args.registers_per_source_per_second;
         if let Some(bytes) = args.tunnel_bytes {
             config.tunnel_bytes = config.tunnel_bytes.min(bytes);
         }
@@ -135,14 +143,22 @@ mod app {
         if let (Ok(cert), Ok(key)) = (std::fs::read(&cert), std::fs::read(&key)) {
             return Identity::from_pem(&cert, &key);
         }
+        // A missing half (a crash between the two writes) means a new pair:
+        // each file is written whole under a temporary name, then renamed.
         std::fs::create_dir_all(state)?;
         let (identity, cert_pem, key_pem) = Identity::self_signed(names.to_vec())?;
         let mut options = std::fs::OpenOptions::new();
-        options.write(true).create_new(true);
+        options.write(true).create(true).truncate(true);
         #[cfg(unix)]
         std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        std::io::Write::write_all(&mut options.open(&key)?, key_pem.as_bytes())?;
-        std::fs::write(&cert, cert_pem)?;
+        let key_partial = state.join("key.pem.partial");
+        let mut file = options.open(&key_partial)?;
+        std::io::Write::write_all(&mut file, key_pem.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&key_partial, &key)?;
+        let cert_partial = state.join("cert.pem.partial");
+        std::fs::write(&cert_partial, cert_pem)?;
+        std::fs::rename(&cert_partial, &cert)?;
         Ok(identity)
     }
 }

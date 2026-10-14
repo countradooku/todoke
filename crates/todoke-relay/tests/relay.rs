@@ -59,12 +59,30 @@ async fn read_exact(link: &mut RelayLink, buffer: &mut [u8]) -> std::io::Result<
     Ok(())
 }
 
+/// A rendezvous, tried again (as the app does) if the connection did not
+/// come up: many tests at once on one loopback can lose handshakes.
+async fn meet(
+    client: &RelayClient,
+    relay: &RelayEndpoint,
+    token: RendezvousToken,
+    wait: Duration,
+) -> Result<RelayLink, RelayError> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match client.rendezvous(relay, token, wait).await {
+            Err(RelayError::Unreachable(std::io::ErrorKind::TimedOut)) if attempts < 3 => {}
+            other => return other,
+        }
+    }
+}
+
 async fn pair_up(relay: &RelayEndpoint, byte: u8) -> AnyResult<(RelayLink, RelayLink)> {
     let (one, two) = (RelayClient::new()?, RelayClient::new()?);
     let wait = Duration::from_secs(10);
     let (a, b) = tokio::join!(
-        one.rendezvous(relay, token(byte), wait),
-        two.rendezvous(relay, token(byte), wait)
+        meet(&one, relay, token(byte), wait),
+        meet(&two, relay, token(byte), wait)
     );
     Ok((a?, b?))
 }
@@ -198,6 +216,64 @@ async fn rooms_close_with_a_code_when_the_relay_is_full() -> AnyResult<()> {
         .map(|_| ());
     assert_eq!(refused, Err(RelayError::Closed(CloseCode::Unavailable)));
     let _ = first.await;
+    stop.notify_waiters();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_burst_of_registers_hears_quota() -> AnyResult<()> {
+    let (relay, stop) = relay(|config| {
+        config.registers_per_source_per_second = 1;
+        config.connections_per_source_per_second = 1000;
+    })?;
+    let client = Arc::new(RelayClient::new()?);
+    let mut tasks = Vec::new();
+    for byte in 0..6 {
+        let (client, relay) = (Arc::clone(&client), relay.clone());
+        tasks.push(tokio::spawn(async move {
+            client
+                .rendezvous(&relay, token(100 + byte), Duration::from_millis(500))
+                .await
+                .map(|_| ())
+        }));
+    }
+    let mut quota = 0;
+    for task in tasks {
+        if task.await? == Err(RelayError::Closed(CloseCode::Quota)) {
+            quota += 1;
+        }
+    }
+    // A burst of two registers is allowed; the rest hear Quota.
+    assert_eq!(quota, 4);
+    stop.notify_waiters();
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_connection_is_not_a_tls_failure() -> AnyResult<()> {
+    let (relay, stop) = relay(|config| config.max_connections_per_source = 1)?;
+    let waiting = tokio::spawn({
+        let relay = relay.clone();
+        async move {
+            RelayClient::new()?
+                .rendezvous(&relay, token(120), Duration::from_secs(3))
+                .await
+                .map(|_| ())
+                .map_err(|error| Box::new(error) as Box<dyn std::error::Error + Send + Sync>)
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let refused = RelayClient::new()?
+        .rendezvous(&relay, token(121), Duration::from_secs(1))
+        .await
+        .map(|_| ());
+    assert_eq!(
+        refused,
+        Err(RelayError::Unreachable(
+            std::io::ErrorKind::ConnectionRefused
+        ))
+    );
+    let _ = waiting.await;
     stop.notify_waiters();
     Ok(())
 }

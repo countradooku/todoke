@@ -163,8 +163,19 @@ impl<S> Rooms<S> {
         events: mpsc::Sender<RoomEvent>,
         now: Instant,
     ) -> Result<Joined, CloseCode> {
-        self.expire(now);
         let token = *token.as_bytes();
+        // An expired room for this token is closed now; others are left to
+        // the periodic `expire`, so a Register never scans the table.
+        if let Some(id) = self.by_token.get(&token).copied()
+            && self.open.get(&id).is_some_and(|room| room.expires <= now)
+            && let Some(room) = self.remove(id)
+        {
+            for member in room.members.iter().flatten() {
+                let _ = member
+                    .events
+                    .try_send(RoomEvent::Closed(CloseCode::Expired));
+            }
+        }
         let member = Member {
             endpoint,
             nonce,

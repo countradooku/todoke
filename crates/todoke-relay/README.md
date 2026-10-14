@@ -45,6 +45,11 @@ With `--cert` and `--key` (PEM, leaf first), devices may instead validate the ce
 | `--max-rooms` | 50000 | |
 | `--tunnel-bytes` | 16 TiB | per direction; §10's maximum |
 | `--tunnel-seconds` | 86400 | §10's maximum |
+| `--connections-per-source-per-second` | 20 | new connections; bursts of twice that |
+| `--registers-per-source-per-second` | 10 | registrations; bursts of twice that, then `Quota` |
+
+Each connection can buffer about 1.4 MiB of tunnel data at most, so
+memory is bounded by `--max-connections`: lower it on a small host.
 
 ## What it keeps
 
@@ -101,7 +106,8 @@ A device only reads lists from files its user chose; nothing is fetched. An entr
 
 ## Limits it enforces (§10)
 
-- Two clients per token, two rooms per connection.
+- Two clients per token, two rooms per connection; a connection with no
+  room for 30 seconds is closed.
 - A room lasts 120 seconds, and a member waits at most 30 seconds for the other.
 - Records come in order; a duplicate or unknown one closes the room.
 - Both members must send `Forward` before either gets `ForwardReady`.
