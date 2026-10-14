@@ -79,7 +79,7 @@ expect fail "grouped never-compiled entries" "$scratch/grouped.toml" "$workflow"
     'zeroize@1.9.1 is marked never compiled'
 
 # No classified license exceptions: fail closed.
-grep -v 'Never compiled: libcrux-secrets' "$deny" > "$scratch/unclassified.toml"
+grep -v '^[[:space:]]*# Never compiled' "$deny" > "$scratch/unclassified.toml"
 expect fail "no classified license exceptions" "$scratch/unclassified.toml" "$workflow" \
     'refusing to pass vacuously'
 

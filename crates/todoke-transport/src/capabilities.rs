@@ -56,11 +56,20 @@ pub enum Availability {
 #[must_use]
 pub const fn availability(transport: Transport) -> Availability {
     match transport {
-        Transport::LanTcp | Transport::Relay => {
+        Transport::LanTcp => {
             if cfg!(target_family = "wasm") {
                 Availability::Unsupported
             } else {
                 Availability::Available
+            }
+        }
+        Transport::Relay => {
+            if cfg!(target_family = "wasm") {
+                Availability::Unsupported
+            } else if cfg!(feature = "relay") {
+                Availability::Available
+            } else {
+                Availability::NotImplemented
             }
         }
         Transport::DirectQuic
@@ -88,8 +97,10 @@ mod tests {
     fn lan_and_relay_are_available_and_o7_transports_stay_gated() {
         let expected = if cfg!(target_family = "wasm") {
             Vec::new()
-        } else {
+        } else if cfg!(feature = "relay") {
             vec![Transport::LanTcp, Transport::Relay]
+        } else {
+            vec![Transport::LanTcp]
         };
         assert_eq!(available(), expected);
         for transport in [

@@ -35,6 +35,6 @@ clap.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 # The relay's own client, as endpoints use it.
-todoke-transport.workspace = true
+todoke-transport = { workspace = true, features = ["relay"] }
 futures-io.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "sync", "macros", "io-util", "test-util"] }

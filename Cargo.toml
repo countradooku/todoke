@@ -22,7 +22,7 @@ todoke-fs = { path = "crates/todoke-fs", version = "0.1.0" }
 todoke-core = { path = "crates/todoke-core", version = "0.1.0" }
 todoke-daemon = { path = "crates/todoke-daemon", version = "0.1.0" }
 todoke-transfer = { path = "crates/todoke-transfer", version = "0.1.0" }
-todoke-transport = { path = "crates/todoke-transport", version = "0.1.0" }
+todoke-transport = { path = "crates/todoke-transport", version = "0.1.0", default-features = false }
 # RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
 base45 = "=3.2.0"
 blake3 = { version = "=1.8.7", features = ["zeroize"] }

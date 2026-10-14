@@ -1326,4 +1326,5 @@ async fn the_responder_store_decides_after_the_claim() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "relay")]
 mod relay;

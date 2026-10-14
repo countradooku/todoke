@@ -38,7 +38,7 @@ zeroize.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 todoke-discovery.workspace = true
 todoke-fs.workspace = true
-todoke-transport.workspace = true
+todoke-transport = { workspace = true, features = ["relay"] }
 tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros"] }
 
 # O_NOFOLLOW for the storage key file.

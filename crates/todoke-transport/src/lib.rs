@@ -38,7 +38,7 @@ pub mod manager;
 pub mod policy;
 #[cfg(not(target_family = "wasm"))]
 pub mod race;
-#[cfg(not(target_family = "wasm"))]
+#[cfg(all(feature = "relay", not(target_family = "wasm")))]
 pub mod relay;
 #[cfg(not(target_family = "wasm"))]
 pub mod tcp;

@@ -11,6 +11,20 @@ publish.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = ["relay"]
+# The relay client (§10). Off in the fuzz and bench workspaces, which do
+# not need QUIC or TLS.
+relay = [
+    "dep:quinn",
+    "dep:rustls",
+    "dep:rustls-platform-verifier",
+    "dep:webpki",
+    "dep:libcrux-sha2",
+    "dep:blake3",
+    "dep:getrandom",
+]
+
 [dependencies]
 todoke-proto.workspace = true
 # Never enable a gate feature here (unaudited-suite-0001,
@@ -27,16 +41,16 @@ futures-io.workspace = true
 # options; tokio's `net` feature already depends on it.
 socket2 = "=0.6.5"
 tokio = { workspace = true, features = ["net", "time", "rt", "sync"] }
-# The relay transport (§10): QUIC v1 / TLS 1.3, validated by the platform
-# or a pinned key.
-quinn.workspace = true
-rustls.workspace = true
-rustls-platform-verifier.workspace = true
-webpki.workspace = true
-libcrux-sha2.workspace = true
+# The relay transport (§10, the `relay` feature): QUIC v1 / TLS 1.3,
+# validated by the platform or a pinned key.
+quinn = { workspace = true, optional = true }
+rustls = { workspace = true, optional = true }
+rustls-platform-verifier = { workspace = true, optional = true }
+webpki = { workspace = true, optional = true }
+libcrux-sha2 = { workspace = true, optional = true }
 # Rendezvous hashing over the relay list.
-blake3.workspace = true
-getrandom.workspace = true
+blake3 = { workspace = true, optional = true }
+getrandom = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest.workspace = true
