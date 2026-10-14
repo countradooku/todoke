@@ -4,7 +4,7 @@
 # Linux network namespaces, root required (CI only).
 #
 #   client-a 10.1.0.2 -- nat-a 10.1.0.1 | 203.0.113.11 --+
-#                                                        wan -- relay 203.0.113.10
+#                                                        wan (router) -- relay 203.0.113.10
 #   client-b 10.2.0.2 -- nat-b 10.2.0.1 | 203.0.113.12 --+
 #
 # NAT types (first argument):
@@ -67,18 +67,20 @@ for ns in "${namespaces[@]}"; do
     in_ns "$ns" ip link set lo up
 done
 
-# The public network: a bridge in "wan" joining the relay and both NATs.
-in_ns wan ip link add br0 type bridge
-in_ns wan ip link set br0 up
+# The public network: "wan" routes between the relay and both NATs over
+# point-to-point links. A router, not a bridge: with br_netfilter loaded
+# (Docker on CI runners), bridged packets would pass through netfilter.
+in_ns wan sysctl -qw net.ipv4.ip_forward=1
 link_wan() {
     local ns="$1" address="$2"
     ip link add "w-$ns" type veth peer name pub
     ip link set "w-$ns" netns wan
     ip link set pub netns "$ns"
-    in_ns wan ip link set "w-$ns" master br0
+    in_ns wan ip addr add 203.0.113.1 peer "$address" dev "w-$ns"
     in_ns wan ip link set "w-$ns" up
-    in_ns "$ns" ip addr add "$address/24" dev pub
+    in_ns "$ns" ip addr add "$address" peer 203.0.113.1 dev pub
     in_ns "$ns" ip link set pub up
+    in_ns "$ns" ip route add default via 203.0.113.1
 }
 link_wan relay 203.0.113.10
 link_wan nat-a 203.0.113.11
