@@ -25,7 +25,10 @@ fn png(size: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 /// A Windows icon: PNG entries (Vista and later).
 fn ico() -> Result<Vec<u8>, Box<dyn std::error::Error>> {
     let sizes = [16_u32, 24, 32, 48, 64, 128, 256];
-    let images: Vec<Vec<u8>> = sizes.iter().map(|&size| png(size)).collect::<Result<_, _>>()?;
+    let images: Vec<Vec<u8>> = sizes
+        .iter()
+        .map(|&size| png(size))
+        .collect::<Result<_, _>>()?;
     let count = u16::try_from(sizes.len())?;
     let mut out = Vec::new();
     out.extend_from_slice(&[0, 0, 1, 0]);

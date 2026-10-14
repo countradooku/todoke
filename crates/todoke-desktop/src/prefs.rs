@@ -1,6 +1,6 @@
 //! Settings on disk: the core's `config.json` (shared with the daemon and
 //! the CLI), relay lists the user imports, and the app's own preferences
-//! (`desktop.json` next to it: only the theme). Nothing here is secret.
+//! (`desktop.json` next to it: the theme and the global shortcut). Nothing here is secret.
 
 use std::path::{Path, PathBuf};
 
@@ -28,6 +28,10 @@ pub struct Prefs {
     /// The theme.
     #[serde(default)]
     pub theme: ThemeChoice,
+    /// The global shortcut; `None` for the default: on, except on Wayland,
+    /// where turning it on asks the desktop.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut: Option<bool>,
 }
 
 fn prefs_file(paths: &Paths) -> PathBuf {
@@ -239,6 +243,7 @@ mod tests {
         assert_eq!(load_prefs(&paths), Prefs::default());
         let prefs = Prefs {
             theme: ThemeChoice::Dark,
+            shortcut: Some(false),
         };
         save_prefs(&paths, &prefs)?;
         assert_eq!(load_prefs(&paths), prefs);

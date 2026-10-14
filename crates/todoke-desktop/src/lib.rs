@@ -17,12 +17,14 @@
 //! | --- | --- |
 //! | [`tokens`] | Every color, space, radius, type size, and duration |
 //! | [`format`] | Sizes, durations, fingerprints, kinds of file, escaping |
+//! | [`hotkey`] | The global shortcut (system, or the Wayland portal) |
 //! | [`icon`] | The todoke mark, drawn in code (tray, packaged icons) |
 //! | [`launch`] | Command-line arguments, and handing them to a running window |
 //! | [`model`] | The state, driven by events and answers (pure) |
 //! | [`backend`] | Hosting the daemon, or attaching to a running one |
 //! | [`prefs`] | `config.json`, relay lists, and the theme preference |
 //! | [`outbox`] | Clipboard text sent as a private file |
+//! | [`system`] | Starting at login, "Send with todoke" in file managers |
 //! | [`tray`] | The tray or menu-bar item |
 //! | [`ui`] | The window: pages, the receive sheet, key bindings |
 //!
@@ -37,6 +39,8 @@ pub mod backend;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod format;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod hotkey;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod icon;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod launch;
@@ -46,6 +50,8 @@ pub mod model;
 pub mod outbox;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod prefs;
+#[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+pub mod system;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
 pub mod tray;
 #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]

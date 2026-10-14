@@ -10,6 +10,11 @@
 //!
 //! | Module | What it binds |
 //! | --- | --- |
+//! | [`autostart`] | Starting at login (XDG autostart, or the Background portal) |
+//! | [`desktop_entry`] | Quoting for desktop entries |
+//! | [`file_managers`] | "Send with todoke" in Dolphin, Nemo, and Nautilus |
+//! | [`global_shortcuts`] | A global shortcut through the `GlobalShortcuts` portal |
+//! | [`portal`] | XDG desktop portal requests |
 //! | [`secret_service`] | The storage key in the freedesktop Secret Service |
 //! | [`tray`] | Whether a `StatusNotifierItem` host shows tray items |
 //!
@@ -17,6 +22,16 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(target_os = "linux")]
+pub mod autostart;
+#[cfg(target_os = "linux")]
+pub mod desktop_entry;
+#[cfg(target_os = "linux")]
+pub mod file_managers;
+#[cfg(target_os = "linux")]
+pub mod global_shortcuts;
+#[cfg(target_os = "linux")]
+pub mod portal;
 #[cfg(target_os = "linux")]
 pub mod secret_service;
 #[cfg(target_os = "linux")]

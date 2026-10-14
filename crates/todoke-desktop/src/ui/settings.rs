@@ -57,6 +57,7 @@ impl Todoke {
         .child(connections(&config, palette, cx))
         .child(self.security(&config, palette, cx))
         .child(self.devices(palette, cx))
+        .child(self.this_computer(palette, cx))
         .child(self.appearance(palette, cx))
         .child(self.about(palette))
         .into_any_element()

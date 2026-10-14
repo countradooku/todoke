@@ -11,6 +11,8 @@
 //! | Module | What it binds |
 //! | --- | --- |
 //! | [`keychain`] | The storage key in the Keychain, wrapped by the Secure Enclave where entitled |
+//! | [`login_item`] | Starting at login (a bundled launch agent, `SMAppService`) |
+//! | [`services`] | "Send with todoke" in Finder's Quick Actions and the Services menu |
 //!
 //! Read `docs/adr/0011-os-integration.md` before adding behavior.
 
@@ -18,3 +20,7 @@
 
 #[cfg(target_os = "macos")]
 pub mod keychain;
+#[cfg(target_os = "macos")]
+pub mod login_item;
+#[cfg(target_os = "macos")]
+pub mod services;

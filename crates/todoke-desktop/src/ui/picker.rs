@@ -11,6 +11,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
+use todoke_daemon::handoff::MAX_PATHS;
+use zeroize::Zeroizing;
+
 use gpui_kit::TestSupportExt as _;
 use gpui_kit::component::Disableable as _;
 use gpui_kit::component::checkbox::Checkbox;
@@ -24,13 +27,15 @@ use super::{ClosePicker, PICKER, Todoke};
 use crate::format;
 use crate::tokens::{self, Palette, radius, size, space, text};
 
-/// What the picker sends.
+/// What the picker sends: taken when it opens, so what the user sees is
+/// what is sent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Offered {
     /// Files and folders (absolute paths).
     Paths(Vec<PathBuf>),
-    /// What the clipboard holds when Send is pressed.
-    Clipboard,
+    /// Text (from the clipboard, a selection, or the Services menu), sent as
+    /// a file.
+    Text(Zeroizing<String>),
 }
 
 /// The picker's state.
@@ -71,17 +76,37 @@ impl State {
 const LISTED: usize = 5;
 
 impl Todoke {
-    /// Opens the picker for `offered` (replacing one open), with the
-    /// contacts selected on Home (or the only one) chosen.
+    /// Opens the picker for `offered`, with the contacts selected on Home
+    /// (or the only one) chosen. Paths join those of a picker already open
+    /// (Explorer starts one process per selected file); anything else
+    /// replaces it. Either way Send waits the decision delay again.
     pub(crate) fn pick(&mut self, offered: Offered, cx: &mut Context<Self>) {
         let generation = self
             .picker
             .open
             .as_ref()
             .map_or(0, |picker| picker.generation + 1);
+        let (offered, chosen) = match (self.picker.open.take(), offered) {
+            (
+                Some(Picker {
+                    offered: Offered::Paths(mut open),
+                    chosen,
+                    ..
+                }),
+                Offered::Paths(more),
+            ) => {
+                for path in more {
+                    if open.len() < MAX_PATHS && !open.contains(&path) {
+                        open.push(path);
+                    }
+                }
+                (Offered::Paths(open), chosen)
+            }
+            (_, offered) => (offered, self.targets().into_iter().collect()),
+        };
         self.picker.open = Some(Picker {
             offered,
-            chosen: self.targets().into_iter().collect(),
+            chosen,
             armed: false,
             generation,
         });
@@ -113,10 +138,7 @@ impl Todoke {
             return;
         };
         let targets: Vec<String> = picker.chosen.into_iter().collect();
-        match picker.offered {
-            Offered::Paths(paths) => self.send_paths(&paths, &targets, None, cx),
-            Offered::Clipboard => self.send_clipboard_to(targets, cx),
-        }
+        self.send_offered(picker.offered, targets, cx);
         cx.notify();
     }
 
@@ -143,7 +165,14 @@ impl Todoke {
                     listed,
                 )
             }
-            Offered::Clipboard => ("Send what the clipboard holds".to_owned(), Vec::new()),
+            Offered::Text(text) => (
+                "Send text".to_owned(),
+                vec![format!(
+                    "{}: “{}”",
+                    format::plural(text.chars().count(), "character", "characters"),
+                    preview(text)
+                )],
+            ),
         };
         let count = picker.chosen.len();
         let list = self.contact_list(&picker.chosen, palette, cx);
@@ -266,5 +295,29 @@ impl Todoke {
                     .child(muted(proximity.label(), palette))
             }))
             .into_any_element()
+    }
+}
+
+/// The start of `text` as the picker shows it: its first line, at most
+/// 40 characters, escaped.
+fn preview(text: &str) -> String {
+    let line = text.trim_start().lines().next().unwrap_or_default();
+    let mut shown: String = line.chars().take(40).collect();
+    if shown.len() < line.len() || text.trim().lines().nth(1).is_some() {
+        shown.push('…');
+    }
+    format::name(&shown)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preview;
+
+    #[test]
+    fn previews_are_short_and_escaped() {
+        assert_eq!(preview("meet at 6"), "meet at 6");
+        assert_eq!(preview("  first\nsecond"), "first…");
+        assert_eq!(preview(&"x".repeat(50)), format!("{}…", "x".repeat(40)));
+        assert_eq!(preview("a\u{202e}b"), "a\\u{202e}b");
     }
 }

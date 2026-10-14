@@ -8,6 +8,7 @@
 //! label for screen readers; every action has a key binding.
 
 mod assets;
+mod computer;
 #[cfg(any(test, feature = "mock"))]
 pub mod fixtures;
 mod history;
@@ -245,6 +246,12 @@ pub struct Todoke {
     active: bool,
     /// The offers notified, whose notifications go when they do.
     notified: BTreeSet<String>,
+    /// This computer's settings, once read (never in tests: they would
+    /// change the machine running them).
+    system: Option<computer::System>,
+    /// Where the global shortcut sends its presses; `None` in tests.
+    commander: Option<Commander>,
+    shortcut: Option<crate::hotkey::Shortcut>,
     /// Unix seconds, ticking each second (countdowns).
     now: u64,
     /// The one-second tick (countdowns).
@@ -297,6 +304,9 @@ impl Todoke {
             outbox_pending: BTreeMap::new(),
             active: true,
             notified: BTreeSet::new(),
+            system: None,
+            commander: None,
+            shortcut: None,
             now: unix_now(),
             ticker: None,
             loops: Vec::new(),
@@ -437,6 +447,7 @@ impl Todoke {
                 let (prefs, started) = started;
                 app.prefs = prefs;
                 app.apply_theme(window, cx);
+                app.apply_shortcut(cx);
                 match started {
                     Ok(started) => app.attach(started.backend, started.connection, cx),
                     Err(connection) => {
@@ -864,18 +875,36 @@ impl Todoke {
     fn send_clipboard(&mut self, cx: &mut Context<Self>) {
         let targets = self.targets();
         if targets.is_empty() && !self.model.contacts.is_empty() {
-            self.pick(picker::Offered::Clipboard, cx);
+            self.pick_clipboard(false, cx);
             return;
         }
-        self.send_clipboard_to(targets, cx);
+        if let Some(offered) = self.read_clipboard(false, cx) {
+            self.send_offered(offered, targets, cx);
+        }
     }
 
-    /// Sends what the clipboard holds to `targets`.
-    fn send_clipboard_to(&mut self, targets: Vec<String>, cx: &mut Context<Self>) {
-        let Some(item) = cx.read_from_clipboard() else {
+    /// What the clipboard (or, on Linux with `selection`, the text
+    /// selected anywhere, if any) holds; a notice when nothing can be sent.
+    fn read_clipboard(
+        &mut self,
+        selection: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<picker::Offered> {
+        #[cfg(target_os = "linux")]
+        let item = selection
+            .then(|| cx.read_from_primary())
+            .flatten()
+            .filter(|item| item.text().is_some_and(|text| !text.trim().is_empty()))
+            .or_else(|| cx.read_from_clipboard());
+        #[cfg(not(target_os = "linux"))]
+        let item = {
+            let _ = selection;
+            cx.read_from_clipboard()
+        };
+        let Some(item) = item else {
             self.model.notify(Level::Info, "The clipboard is empty.");
             cx.notify();
-            return;
+            return None;
         };
         let paths: Vec<PathBuf> = item
             .entries()
@@ -887,17 +916,47 @@ impl Todoke {
             .flatten()
             .collect();
         if !paths.is_empty() {
-            self.send_paths(&paths, &targets, None, cx);
-            return;
+            return Some(picker::Offered::Paths(paths));
         }
-        let Some(text) = item.text() else {
-            self.model.notify(
-                Level::Info,
-                "Only text and files can be sent from the clipboard.",
-            );
-            cx.notify();
-            return;
-        };
+        if let Some(text) = item.text() {
+            return Some(picker::Offered::Text(zeroize::Zeroizing::new(text)));
+        }
+        self.model.notify(
+            Level::Info,
+            "Only text and files can be sent from the clipboard.",
+        );
+        cx.notify();
+        None
+    }
+
+    /// Asks who to send what the clipboard holds now (taken now: what the
+    /// user sees in the picker is what is sent).
+    pub(crate) fn pick_clipboard(&mut self, selection: bool, cx: &mut Context<Self>) {
+        if let Some(offered) = self.read_clipboard(selection, cx) {
+            self.pick(offered, cx);
+        }
+    }
+
+    /// Sends `offered` to `targets`.
+    fn send_offered(
+        &mut self,
+        offered: picker::Offered,
+        targets: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
+        match offered {
+            picker::Offered::Paths(paths) => self.send_paths(&paths, &targets, None, cx),
+            picker::Offered::Text(text) => self.send_text(text, targets, cx),
+        }
+    }
+
+    /// Offers `text` to `targets`, as a private file in the outbox.
+    fn send_text(
+        &mut self,
+        text: zeroize::Zeroizing<String>,
+        targets: Vec<String>,
+        cx: &mut Context<Self>,
+    ) {
         if targets.is_empty() {
             self.ask_for_targets(cx);
             return;
@@ -906,10 +965,7 @@ impl Todoke {
         let now = unix_now();
         cx.spawn(async move |this, cx| {
             let written = cx
-                .background_spawn(async move {
-                    let text = zeroize::Zeroizing::new(text);
-                    outbox::write(&state, &text, now)
-                })
+                .background_spawn(async move { outbox::write(&state, &text, now) })
                 .await;
             let _ = this.update(cx, |app, cx| match written {
                 Ok(file) => app.send_paths(std::slice::from_ref(&file), &targets, Some(&file), cx),
@@ -940,9 +996,30 @@ impl Todoke {
         match handoff {
             Handoff::Show => {}
             Handoff::Send { paths } => self.pick(picker::Offered::Paths(paths), cx),
-            Handoff::SendClipboard => self.pick(picker::Offered::Clipboard, cx),
+            Handoff::SendClipboard => self.pick_clipboard(false, cx),
         }
         cx.notify();
+    }
+
+    /// A command from outside the window (see [`Command`]).
+    pub(crate) fn command(
+        &mut self,
+        command: Command,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match command {
+            Command::Handoff(handoff) => self.handoff(handoff, window, cx),
+            Command::SendSelection => {
+                window.activate_window();
+                self.pick_clipboard(true, cx);
+            }
+            Command::SendText(text) => {
+                window.activate_window();
+                self.pick(picker::Offered::Text(text), cx);
+            }
+            Command::Quit => {}
+        }
     }
 
     /// Accepts the offer shown: all files, or those chosen.
@@ -1426,16 +1503,27 @@ impl Render for Todoke {
 use gpui_kit::prelude::FluentBuilder as _;
 
 /// What the app is asked to do from outside the window.
-#[derive(Debug)]
-enum Command {
+pub(crate) enum Command {
     /// From another launch, Finder, the Dock, the tray, or a notification.
     Handoff(Handoff),
+    /// The global shortcut: the selection (Linux) or the clipboard.
+    SendSelection,
+    /// Text from the Services menu (macOS).
+    SendText(zeroize::Zeroizing<String>),
     /// From the tray.
     Quit,
 }
 
 type Commands = tokio::sync::mpsc::UnboundedReceiver<Command>;
-type Commander = tokio::sync::mpsc::UnboundedSender<Command>;
+pub(crate) type Commander = tokio::sync::mpsc::UnboundedSender<Command>;
+
+/// What the app holds while it runs: dropping any of it undoes it.
+struct Held {
+    _listening: Option<handoff::Listening>,
+    tray: Option<crate::tray::Tray>,
+    #[cfg(target_os = "macos")]
+    _services: Option<todoke_sys_macos::services::Services>,
+}
 
 /// Opens the window and runs the app until it quits; or, when this
 /// profile's window already runs, hands it what this launch asks for.
@@ -1443,13 +1531,31 @@ pub fn run() {
     let launch = std::env::current_dir()
         .map_err(|error| format!("no working directory: {error}"))
         .and_then(|cwd| crate::launch::parse(std::env::args_os().skip(1), &cwd));
-    let launch = match launch {
+    let mut launch = match launch {
         Ok(launch) => launch,
         Err(error) => {
             eprintln!("todoke: {error}");
             std::process::exit(2);
         }
     };
+    if launch.send_stdin {
+        match crate::launch::read_paths(std::io::stdin().lock()) {
+            Ok(paths) => launch.handoff = Handoff::Send { paths },
+            Err(error) => {
+                eprintln!("todoke: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
+    // Started by the Share sheet (MSIX).
+    #[cfg(windows)]
+    if let Some(paths) = todoke_sys_windows::share_target::shared_files() {
+        launch.handoff = if paths.is_empty() {
+            Handoff::Show
+        } else {
+            Handoff::Send { paths }
+        };
+    }
     if launch.version {
         println!("todoke-desktop {}", env!("CARGO_PKG_VERSION"));
         return;
@@ -1492,14 +1598,36 @@ pub fn run() {
         cx.on_system_notification_response(move |_, _| {
             let _ = notified.send(Command::Handoff(Handoff::Show));
         });
-        let tray = crate::tray::install(move |action| {
-            let _ = commander.send(match action {
-                crate::tray::Action::Open => Command::Handoff(Handoff::Show),
-                crate::tray::Action::SendClipboard => Command::Handoff(Handoff::SendClipboard),
-                crate::tray::Action::Quit => Command::Quit,
-            });
-        });
-        open_window(paths, launch, (listening, tray), commands, cx);
+        #[cfg(target_os = "macos")]
+        let services = {
+            let services = commander.clone();
+            objc2::MainThreadMarker::new().map(|mtm| {
+                todoke_sys_macos::services::provide(mtm, move |service| {
+                    use todoke_sys_macos::services::Service;
+                    let _ = services.send(match service {
+                        Service::Files(paths) => Command::Handoff(Handoff::Send { paths }),
+                        Service::Text(text) => Command::SendText(zeroize::Zeroizing::new(text)),
+                    });
+                })
+            })
+        };
+        let tray = {
+            let commander = commander.clone();
+            crate::tray::install(move |action| {
+                let _ = commander.send(match action {
+                    crate::tray::Action::Open => Command::Handoff(Handoff::Show),
+                    crate::tray::Action::SendClipboard => Command::Handoff(Handoff::SendClipboard),
+                    crate::tray::Action::Quit => Command::Quit,
+                });
+            })
+        };
+        let held = Held {
+            _listening: listening,
+            tray,
+            #[cfg(target_os = "macos")]
+            _services: services,
+        };
+        open_window(paths, launch, held, (commander, commands), cx);
     });
 }
 
@@ -1566,8 +1694,8 @@ fn window_options(background: bool, cx: &App) -> gpui_kit::WindowOptions {
 fn open_window(
     paths: Paths,
     launch: crate::launch::Launch,
-    held: (Option<handoff::Listening>, Option<crate::tray::Tray>),
-    mut commands: Commands,
+    held: Held,
+    (commander, mut commands): (Commander, Commands),
     cx: &mut App,
 ) {
     let crate::launch::Launch {
@@ -1578,6 +1706,7 @@ fn open_window(
     let opened = gpui_kit::open_window(window_options(background, cx), cx, |window, cx| {
         cx.new(|cx| {
             let mut app = Todoke::new(paths, window, cx);
+            app.connect_system(commander, cx);
             app.start(window, cx);
             if !background {
                 app.handoff(request, window, cx);
@@ -1593,7 +1722,7 @@ fn open_window(
             return;
         }
     };
-    let stays = held.1.is_some();
+    let stays = held.tray.is_some();
     {
         let view = view.clone();
         cx.on_window_closed(move |cx, _| {
@@ -1612,26 +1741,29 @@ fn open_window(
         let _held = held;
         let mut window = Some(window);
         while let Some(command) = commands.recv().await {
-            let handoff = match command {
-                Command::Handoff(handoff) => handoff,
-                Command::Quit => {
-                    cx.update(|cx| cx.quit());
-                    break;
+            if matches!(command, Command::Quit) {
+                cx.update(|cx| cx.quit());
+                break;
+            }
+            // The window takes the command; if it was closed, a new one.
+            let mut command = Some(command);
+            if let Some(open) = window {
+                let handed = open.update(cx, |_, window, cx| {
+                    if let Some(command) = command.take() {
+                        view.update(cx, |app, cx| app.command(command, window, cx));
+                    }
+                });
+                if handed.is_err() {
+                    window = None;
                 }
-            };
-            let handed = window.and_then(|open| {
-                open.update(cx, |_, window, cx| {
-                    view.update(cx, |app, cx| app.handoff(handoff.clone(), window, cx));
-                })
-                .ok()
-            });
-            if handed.is_none() {
+            }
+            if let Some(command) = command {
                 let view = view.clone();
                 window = cx.update(|cx| {
                     gpui_kit::open_window(window_options(false, cx), cx, |window, cx| {
                         view.update(cx, |app, cx| {
                             app.reopened(window, cx);
-                            app.handoff(handoff, window, cx);
+                            app.command(command, window, cx);
                         });
                         view
                     })

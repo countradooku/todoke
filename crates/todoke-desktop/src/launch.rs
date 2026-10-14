@@ -1,5 +1,5 @@
 //! How the app was launched: `todoke-desktop [--background]
-//! [--send PATH... | --send-clipboard] [--version]`. File managers, the
+//! [--send PATH... | --send-stdin | --send-clipboard] [--version]`. File managers, the
 //! Quick Action, and login items launch it this way; a second launch hands
 //! the request to the window already running (`todoke_daemon::handoff`).
 
@@ -17,6 +17,9 @@ pub struct Launch {
     pub background: bool,
     /// Print the version and exit.
     pub version: bool,
+    /// Read the paths to send from standard input ([`read_paths`]): the
+    /// Explorer command passes any number this way.
+    pub send_stdin: bool,
 }
 
 /// Parses `args` (without the program name), resolving relative paths
@@ -30,6 +33,7 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
         handoff: Handoff::Show,
         background: false,
         version: false,
+        send_stdin: false,
     };
     let mut sending: Option<Vec<PathBuf>> = None;
     for arg in args {
@@ -45,12 +49,13 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
         match arg.to_str() {
             Some("--send") => sending = Some(Vec::new()),
             Some("--send-clipboard") => launch.handoff = Handoff::SendClipboard,
+            Some("--send-stdin") => launch.send_stdin = true,
             Some("--background") => launch.background = true,
             Some("--version" | "-V") => launch.version = true,
             Some(other) if other.starts_with("-psn_") => {} // macOS Finder's process serial
             _ => {
                 return Err(format!(
-                    "unknown argument {:?}; usage: todoke-desktop [--background] [--send PATH... | --send-clipboard] [--version]",
+                    "unknown argument {:?}; usage: todoke-desktop [--background] [--send PATH... | --send-stdin | --send-clipboard] [--version]",
                     arg.to_string_lossy()
                 ));
             }
@@ -66,6 +71,43 @@ pub fn parse(args: impl IntoIterator<Item = OsString>, cwd: &Path) -> Result<Lau
         launch.handoff = Handoff::Send { paths };
     }
     Ok(launch)
+}
+
+/// At most this many bytes of paths on standard input.
+const MAX_STDIN: u64 = 8 << 20;
+
+/// The paths on standard input of `--send-stdin`: UTF-8, each ended by a
+/// NUL byte, absolute.
+///
+/// # Errors
+///
+/// For people: unreadable, too long, not UTF-8, relative, or none.
+pub fn read_paths(input: impl std::io::Read) -> Result<Vec<PathBuf>, String> {
+    use std::io::Read as _;
+    let mut bytes = Vec::new();
+    input
+        .take(MAX_STDIN + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("cannot read the paths: {error}"))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_STDIN {
+        return Err("too many paths".to_owned());
+    }
+    let mut paths = Vec::new();
+    for raw in bytes.split(|byte| *byte == 0).filter(|raw| !raw.is_empty()) {
+        let text = std::str::from_utf8(raw).map_err(|_| "a path is not UTF-8".to_owned())?;
+        let path = PathBuf::from(text);
+        if !path.is_absolute() {
+            return Err(format!("{} is not an absolute path", path.display()));
+        }
+        paths.push(path);
+        if paths.len() > MAX_PATHS {
+            return Err(format!("at most {MAX_PATHS} files at once"));
+        }
+    }
+    if paths.is_empty() {
+        return Err("no paths to send".to_owned());
+    }
+    Ok(paths)
 }
 
 /// The path of a `file:` URL (macOS hands files opened with the app as
@@ -152,6 +194,25 @@ mod tests {
         assert!(parse(args(&["--nope"]), cwd).is_err());
         assert!(parse(args(&["--send", "a"]), Path::new("relative")).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn paths_come_from_standard_input() {
+        let root = if cfg!(windows) { "C:\\" } else { "/" };
+        let input = format!("{root}a b\0{root}c\0");
+        assert_eq!(
+            read_paths(input.as_bytes()),
+            Ok(vec![
+                PathBuf::from(format!("{root}a b")),
+                PathBuf::from(format!("{root}c"))
+            ])
+        );
+        assert!(read_paths(&b"relative\0"[..]).is_err());
+        assert!(read_paths(&b"\0\0"[..]).is_err());
+        assert!(read_paths(&b"/\xff\0"[..]).is_err());
+        assert!(
+            parse(args(&["--send-stdin"]), Path::new("/")).is_ok_and(|launch| launch.send_stdin)
+        );
     }
 
     #[cfg(unix)]
