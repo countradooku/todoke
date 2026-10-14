@@ -30,6 +30,37 @@ impl Default for LanSettings {
     }
 }
 
+/// A relay this device may use (§10). The same entries make up a shareable
+/// relay list ([`RelayList`]). A relay is untrusted: it only matches and
+/// forwards ciphertext.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayConfig {
+    /// Its name: unique in a list, and the rendezvous-hashing key, so
+    /// devices with the same list meet on the same relay.
+    pub name: String,
+    /// `host:port` of its UDP listener.
+    pub address: String,
+    /// The TLS server name.
+    pub server_name: String,
+    /// Its key pin (`spki-sha256:` and 64 hex digits). Without one the
+    /// platform validates its certificate; validation is never skipped.
+    #[serde(default)]
+    pub pin: Option<String>,
+}
+
+/// A relay list as a file (`{"version": 1, "relays": [...]}`): how
+/// operators of federated relays publish them. It is only ever read from a
+/// local file the user chose; nothing is fetched.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RelayList {
+    /// The format version, 1.
+    pub version: u16,
+    /// The relays.
+    pub relays: Vec<RelayConfig>,
+}
+
 /// The core's configuration.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -46,6 +77,19 @@ pub struct CoreConfig {
     /// `unaudited-dev` feature.
     #[serde(default)]
     pub discovery_folder: Option<PathBuf>,
+    /// The relays to meet contacts through when they are not nearby (§10);
+    /// none means no relay is used.
+    #[serde(default)]
+    pub relays: Vec<RelayConfig>,
+    /// How often, in seconds, two idle devices meet at a relay so that
+    /// either can reach the other: at least 10, by default 300. Shorter is
+    /// faster to reach and costs more sessions.
+    #[serde(default = "default_presence")]
+    pub relay_presence_seconds: u32,
+}
+
+const fn default_presence() -> u32 {
+    300
 }
 
 impl CoreConfig {
@@ -57,6 +101,8 @@ impl CoreConfig {
             downloads_dir,
             lan: LanSettings::default(),
             discovery_folder: None,
+            relays: Vec::new(),
+            relay_presence_seconds: default_presence(),
         }
     }
 }

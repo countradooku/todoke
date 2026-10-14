@@ -24,6 +24,8 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
             allow_loopback: true,
         },
         discovery_folder: Some(discovery.to_owned()),
+        relays: Vec::new(),
+        relay_presence_seconds: 300,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
@@ -473,5 +475,95 @@ async fn declines_and_cancels_reach_both_sides() -> AnyResult<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+/// A relay on this runtime with a self-signed certificate, as devices
+/// configure it (pinned).
+fn relay() -> AnyResult<crate::config::RelayConfig> {
+    let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+    let relay = todoke_relay::Relay::bind(
+        todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+        &identity,
+    )?;
+    let config = crate::config::RelayConfig {
+        name: "test".into(),
+        address: relay.local_addr()?.to_string(),
+        server_name: "relay.test".into(),
+        pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+    };
+    tokio::spawn(relay.run(std::sync::Arc::new(tokio::sync::Notify::new())));
+    Ok(config)
+}
+
+/// A device with no LAN at all: only the relay.
+fn remote_device(root: &Path, name: &str, relay: &crate::config::RelayConfig) -> AnyResult<Core> {
+    let mut config = CoreConfig::new(
+        root.join(name).join("state"),
+        root.join(name).join("downloads"),
+    );
+    config.lan.enabled = false;
+    config.relays = vec![relay.clone()];
+    config.relay_presence_seconds = 10;
+    std::fs::create_dir_all(root.join(name))?;
+    let key = KeyFile::new(root.join(name).join("storage.key"));
+    Ok(Core::start(config, Box::new(key))?)
+}
+
+/// Two devices that cannot see each other pair by QR through a relay
+/// (the scanner initiates, §4), then a file goes through it: the sender
+/// waits at the relay, and the receiver comes at its presence window.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()> {
+    let scratch = Scratch::new("remote")?;
+    let relay = relay()?;
+    let alice = remote_device(&scratch.0, "alice", &relay)?;
+    let bob = remote_device(&scratch.0, "bob", &relay)?;
+    let alice_hex = device_hex(&alice).await?;
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    let Response::Qr { text, .. } = alice.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    let paired = bob.request(Request::PairScanQr { text }).await;
+    assert!(matches!(paired, Response::Paired { .. }), "{paired:?}");
+    wait_for(&mut alice_events, |event| match event {
+        Event::Paired { .. } => Some(()),
+        _ => None,
+    })
+    .await?;
+    std::fs::write(scratch.0.join("far.txt"), b"through the relay")?;
+    let Response::Offered { transfer, .. } = bob
+        .request(Request::Send {
+            contact: alice_hex[..12].to_owned(),
+            paths: vec![scratch.0.join("far.txt")],
+        })
+        .await
+    else {
+        return Err("not offered".into());
+    };
+    wait_for(&mut alice_events, |event| match event {
+        Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        alice
+            .request(Request::Accept {
+                transfer: transfer.clone(),
+                files: None,
+            })
+            .await,
+        Response::Done
+    );
+    wait_for(&mut bob_events, |event| match event {
+        Event::Delivered { transfer: done } if *done == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        std::fs::read(scratch.0.join("alice").join("downloads").join("far.txt"))?,
+        b"through the relay"
+    );
     Ok(())
 }
