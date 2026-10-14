@@ -191,23 +191,35 @@ mod tests {
         list.iter().map(OsString::from).collect()
     }
 
+    /// The working directory of these tests, absolute on every platform.
+    fn home() -> PathBuf {
+        PathBuf::from(if cfg!(windows) {
+            "C:\\home\\me"
+        } else {
+            "/home/me"
+        })
+    }
+
+    /// An absolute path elsewhere.
+    fn elsewhere(name: &str) -> String {
+        if cfg!(windows) {
+            format!("D:\\abs\\{name}")
+        } else {
+            format!("/abs/{name}")
+        }
+    }
+
     #[test]
     fn launches_are_parsed() -> Result<(), String> {
-        let cwd = Path::new("/home/me");
+        let cwd = &home();
         assert_eq!(parse(args(&[]), cwd)?.handoff, Handoff::Show);
-        let launch = parse(
-            args(&["--background", "--send", "a.txt", "/abs/b", "--odd"]),
-            cwd,
-        )?;
+        let b = elsewhere("b");
+        let launch = parse(args(&["--background", "--send", "a.txt", &b, "--odd"]), cwd)?;
         assert!(launch.background);
         assert_eq!(
             launch.handoff,
             Handoff::Send {
-                paths: vec![
-                    "/home/me/a.txt".into(),
-                    "/abs/b".into(),
-                    "/home/me/--odd".into()
-                ]
+                paths: vec![cwd.join("a.txt"), b.into(), cwd.join("--odd")]
             }
         );
         assert_eq!(
@@ -219,10 +231,11 @@ mod tests {
         assert!(parse(args(&["--send"]), cwd).is_err());
         assert!(parse(args(&["--nope"]), cwd).is_err());
         // Open With passes bare paths.
+        let c = elsewhere("c");
         assert_eq!(
-            parse(args(&["b.txt", "/abs/c"]), cwd)?.handoff,
+            parse(args(&["b.txt", &c]), cwd)?.handoff,
             Handoff::Send {
-                paths: vec!["/home/me/b.txt".into(), "/abs/c".into()]
+                paths: vec![cwd.join("b.txt"), c.into()]
             }
         );
         assert!(parse(args(&["--send", "a"]), Path::new("relative")).is_err());
@@ -233,13 +246,13 @@ mod tests {
     /// options before them still apply.
     #[test]
     fn bare_paths_mix_with_options() -> Result<(), String> {
-        let cwd = Path::new("/home/me");
+        let cwd = &home();
         let launch = parse(args(&["--background", "a", "b"]), cwd)?;
         assert!(launch.background);
         assert_eq!(
             launch.handoff,
             Handoff::Send {
-                paths: vec!["/home/me/a".into(), "/home/me/b".into()]
+                paths: vec![cwd.join("a"), cwd.join("b")]
             }
         );
         Ok(())
@@ -249,7 +262,7 @@ mod tests {
     /// path, not an option (a file named `-rf` or `--version`).
     #[test]
     fn a_dashed_path_after_send_is_a_path() -> Result<(), String> {
-        let cwd = Path::new("/home/me");
+        let cwd = &home();
         let launch = parse(args(&["--send", "-rf", "--version", "--background"]), cwd)?;
         assert!(!launch.version);
         assert!(!launch.background);
@@ -257,9 +270,9 @@ mod tests {
             launch.handoff,
             Handoff::Send {
                 paths: vec![
-                    "/home/me/-rf".into(),
-                    "/home/me/--version".into(),
-                    "/home/me/--background".into()
+                    cwd.join("-rf"),
+                    cwd.join("--version"),
+                    cwd.join("--background")
                 ]
             }
         );
@@ -296,9 +309,7 @@ mod tests {
         assert!(read_paths(&b"relative\0"[..]).is_err());
         assert!(read_paths(&b"\0\0"[..]).is_err());
         assert!(read_paths(&b"/\xff\0"[..]).is_err());
-        assert!(
-            parse(args(&["--send-stdin"]), Path::new("/")).is_ok_and(|launch| launch.send_stdin)
-        );
+        assert!(parse(args(&["--send-stdin"]), &home()).is_ok_and(|launch| launch.send_stdin));
     }
 
     #[cfg(unix)]
