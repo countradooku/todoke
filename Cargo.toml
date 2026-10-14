@@ -17,6 +17,10 @@ publish = false
 # Path dependencies shared by several members (cargo-deny workspace-duplicate).
 todoke-crypto = { path = "crates/todoke-crypto", version = "0.1.0" }
 todoke-proto = { path = "crates/todoke-proto", version = "0.1.0" }
+todoke-discovery = { path = "crates/todoke-discovery", version = "0.1.0" }
+todoke-fs = { path = "crates/todoke-fs", version = "0.1.0" }
+todoke-core = { path = "crates/todoke-core", version = "0.1.0" }
+todoke-daemon = { path = "crates/todoke-daemon", version = "0.1.0" }
 todoke-transfer = { path = "crates/todoke-transfer", version = "0.1.0" }
 todoke-transport = { path = "crates/todoke-transport", version = "0.1.0" }
 # RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
@@ -46,12 +50,19 @@ pakery-crypto = { version = "=0.6.0", default-features = false, features = ["ris
 proptest = { version = "=1.12.0", default-features = false, features = ["std"] }
 # The RNG trait of pakery's API (code pairing only).
 rand_core = { version = "=0.10.1", default-features = false }
+# Local formats and the daemon's IPC (todoke-core, todoke-daemon).
+serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+# Constant-time comparisons.
+subtle = { version = "=2.6.1", default-features = false }
 # Unicode normalization tables: the §7.1 NFC check (todoke-proto) and the
 # receiver's collision keys (todoke-fs).
 unicode-normalization = { version = "=0.1.25", default-features = false }
 # Runtime Noise engine (todoke-crypto) and the offline fixture generator
 # (todoke-proto). Only `hfs` here; see docs/adr/0001-noise-crate.md.
+# Unix system calls without unsafe code: filesystem (todoke-fs,
+# todoke-core) and this user's ID for the daemon's IPC check.
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process"] }
 # The LAN transport's async runtime (todoke-transport); features are chosen
 # by each user.
 tokio = { version = "=1.53.2", default-features = false }

@@ -109,7 +109,6 @@ impl Drop for PreparedFile {
 pub struct FsSource {
     outboards: PathBuf,
     files: BTreeMap<(TransferId, u32), PreparedFile>,
-    counter: u64,
 }
 
 impl fmt::Debug for FsSource {
@@ -129,16 +128,10 @@ impl FsSource {
     /// The I/O error if the directory cannot be prepared.
     pub fn new(state: &Path) -> io::Result<Self> {
         let outboards = state.join("outboards");
-        remove_tree(&outboards)?;
-        let mut builder = std::fs::DirBuilder::new();
-        builder.recursive(true);
-        #[cfg(unix)]
-        std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
-        builder.create(&outboards)?;
+        private_empty_dir(&outboards)?;
         Ok(Self {
             outboards,
             files: BTreeMap::new(),
-            counter: 0,
         })
     }
 
@@ -147,67 +140,9 @@ impl FsSource {
     ///
     /// # Errors
     ///
-    /// [`SourceError::NotFound`]; [`SourceError::Io`] for a read failure,
-    /// a path that is not a regular file (`InvalidInput`), or a file that
-    /// changed while it was hashed (`Other`).
+    /// As [`Preparer::prepare`].
     pub fn prepare(&mut self, path: &Path) -> Result<PreparedFile, SourceError> {
-        let io = |error: io::Error| match error.kind() {
-            io::ErrorKind::NotFound => SourceError::NotFound,
-            kind => SourceError::Io(kind),
-        };
-        // Windows refuses to open a directory as a file (`PermissionDenied`):
-        // a refused open of something that is not a regular file is reported
-        // as such, on every platform. The check that counts is below, on the
-        // opened handle.
-        let mut file = File::open(path).map_err(|error| {
-            if std::fs::metadata(path).is_ok_and(|meta| !meta.is_file()) {
-                SourceError::Io(io::ErrorKind::InvalidInput)
-            } else {
-                io(error)
-            }
-        })?;
-        let before = file.metadata().map_err(io)?;
-        if !before.is_file() {
-            return Err(SourceError::Io(io::ErrorKind::InvalidInput));
-        }
-        self.counter += 1;
-        let mut random = [0; 8];
-        getrandom::fill(&mut random).map_err(|_| SourceError::Io(io::ErrorKind::Other))?;
-        let outboard_path = self
-            .outboards
-            .join(format!("{}-{}.obao", hex(&random), self.counter));
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create_new(true);
-        #[cfg(unix)]
-        std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-        let mut outboard = options.open(&outboard_path).map_err(io)?;
-        let built = write_outboard(&mut file, &mut outboard);
-        let after = file.metadata().map_err(io);
-        let (root, size) = match (built, after) {
-            (Ok(built), Ok(after))
-                if Fingerprint::of(&after) == Fingerprint::of(&before)
-                    && built.1 == after.len() =>
-            {
-                built
-            }
-            (built, _) => {
-                let _ = remove(&outboard_path);
-                return Err(match built {
-                    Err(error) => io(error),
-                    Ok(_) => SourceError::Io(io::ErrorKind::Other),
-                });
-            }
-        };
-        file.seek(SeekFrom::Start(0)).map_err(io)?;
-        outboard.seek(SeekFrom::Start(0)).map_err(io)?;
-        Ok(PreparedFile {
-            file,
-            outboard,
-            outboard_path,
-            fingerprint: Fingerprint::of(&before),
-            root,
-            size,
-        })
+        prepare_in(&self.outboards, path, None)
     }
 
     /// Serves `prepared` as file `file_id` of `transfer_id`.
@@ -220,6 +155,148 @@ impl FsSource {
     pub fn remove_transfer(&mut self, transfer_id: &TransferId) {
         self.files.retain(|(id, _), _| id != transfer_id);
     }
+}
+
+/// Hashes files for offers on any thread: a [`PreparedFile`] can be
+/// prepared away from the thread that serves it and then
+/// [inserted](FsSource::insert) into a source. Outboards are kept in its
+/// own private directory.
+#[derive(Clone, Debug)]
+pub struct Preparer {
+    outboards: PathBuf,
+}
+
+impl Preparer {
+    /// A preparer keeping outboards in `dir` (private application
+    /// storage), which it empties first. One preparer per directory.
+    ///
+    /// # Errors
+    ///
+    /// The I/O error if the directory cannot be prepared.
+    pub fn new(dir: &Path) -> io::Result<Self> {
+        private_empty_dir(dir)?;
+        Ok(Self {
+            outboards: dir.to_owned(),
+        })
+    }
+
+    /// Opens and hashes the file at `path` and builds its outboard.
+    ///
+    /// The final component is opened without following a link and without
+    /// waiting on a FIFO. With `expected` (what `symlink_metadata` showed
+    /// when the caller chose the path), the opened file must be that same
+    /// file in the same state: a path swapped since (for a link, a special
+    /// file, or another file, anywhere along it) is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::NotFound`]; [`SourceError::Io`] for a read failure,
+    /// a path that is not a regular file or a link (`InvalidInput`), or a
+    /// file that changed since `expected` or while it was hashed (`Other`).
+    pub fn prepare(
+        &self,
+        path: &Path,
+        expected: Option<&Metadata>,
+    ) -> Result<PreparedFile, SourceError> {
+        prepare_in(&self.outboards, path, expected)
+    }
+}
+
+/// Creates `dir` (0700 on Unix), emptied.
+fn private_empty_dir(dir: &Path) -> io::Result<()> {
+    remove_tree(dir)?;
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    std::os::unix::fs::DirBuilderExt::mode(&mut builder, 0o700);
+    builder.create(dir)
+}
+
+/// Opens a file to send: on Unix without following a final link and
+/// without blocking on a FIFO; on Windows without following a reparse
+/// point. The caller checks that what it opened is a regular file.
+fn open_source(path: &Path) -> io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let flags = (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::NONBLOCK).bits();
+        options.custom_flags(
+            i32::try_from(flags).map_err(|_| io::Error::from(io::ErrorKind::Unsupported))?,
+        );
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        /// `FILE_FLAG_OPEN_REPARSE_POINT`: open a link itself.
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(OPEN_REPARSE_POINT);
+    }
+    options.open(path)
+}
+
+fn prepare_in(
+    outboards: &Path,
+    path: &Path,
+    expected: Option<&Metadata>,
+) -> Result<PreparedFile, SourceError> {
+    let io = |error: io::Error| match error.kind() {
+        io::ErrorKind::NotFound => SourceError::NotFound,
+        kind => SourceError::Io(kind),
+    };
+    // A refused open of something that is not a regular file (Windows
+    // refuses directories, `PermissionDenied`; Unix refuses a final link,
+    // `ELOOP`) is reported as such. The check that counts is below, on
+    // the opened handle.
+    let mut file = open_source(path).map_err(|error| {
+        if std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_file()) {
+            SourceError::Io(io::ErrorKind::InvalidInput)
+        } else {
+            io(error)
+        }
+    })?;
+    let before = file.metadata().map_err(io)?;
+    if !before.is_file() {
+        return Err(SourceError::Io(io::ErrorKind::InvalidInput));
+    }
+    if expected.is_some_and(|expected| Fingerprint::of(expected) != Fingerprint::of(&before)) {
+        return Err(SourceError::Io(io::ErrorKind::Other));
+    }
+    let mut random = [0; 16];
+    getrandom::fill(&mut random).map_err(|_| SourceError::Io(io::ErrorKind::Other))?;
+    let outboard_path = outboards.join(format!("{}.obao", hex(&random)));
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut outboard = options.open(&outboard_path).map_err(io)?;
+    let built = write_outboard(&mut file, &mut outboard);
+    let after = file.metadata().map_err(io);
+    let (root, size) = match (built, after) {
+        (Ok(built), Ok(after))
+            if Fingerprint::of(&after) == Fingerprint::of(&before) && built.1 == after.len() =>
+        {
+            built
+        }
+        (built, _) => {
+            let _ = remove(&outboard_path);
+            return Err(match built {
+                Err(error) => io(error),
+                Ok(_) => SourceError::Io(io::ErrorKind::Other),
+            });
+        }
+    };
+    file.seek(SeekFrom::Start(0)).map_err(io)?;
+    outboard.seek(SeekFrom::Start(0)).map_err(io)?;
+    Ok(PreparedFile {
+        file,
+        outboard,
+        outboard_path,
+        fingerprint: Fingerprint::of(&before),
+        root,
+        size,
+    })
 }
 
 impl SendSource for FsSource {

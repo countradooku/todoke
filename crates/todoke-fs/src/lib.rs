@@ -116,7 +116,8 @@ mod tests;
 
 pub use name::extension::{ExtensionRisk, Platforms, RiskKind, extension_risk};
 pub use name::{
-    Change, Kind, MAX_COMPONENT_BYTES, MAX_COMPONENT_NFD_UNITS, NameRules, sanitize_component,
+    Change, Kind, MAX_COMPONENT_BYTES, MAX_COMPONENT_NFD_UNITS, NameRules, is_invisible,
+    sanitize_component,
 };
 pub use plan::{
     DestinationPlan, FsProfile, LocalName, PathLimit, PathUnits, PlannedEntry, Rejection, Renamed,
@@ -127,4 +128,4 @@ pub use shared::SharedSink;
 #[cfg(any(unix, windows))]
 pub use sink::{Durability, FsSink, OpenError, SinkConfig};
 #[cfg(any(unix, windows))]
-pub use source::{FsSource, PreparedFile};
+pub use source::{FsSource, PreparedFile, Preparer};

@@ -45,6 +45,11 @@ pub mod timer;
 #[cfg(all(test, not(target_family = "wasm")))]
 mod sim;
 #[cfg(all(test, not(target_family = "wasm")))]
+#[allow(
+    clippy::large_futures,
+    reason = "test sessions are awaited in place; with the workspace's \
+              development features their futures pass 16 KiB"
+)]
 mod tests;
 
 pub use link::{Link, LinkInfo, LinkKind};

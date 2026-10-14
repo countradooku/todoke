@@ -10,3 +10,40 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Turns on suite 0x0001 sessions and human-code pairing, which PROTOCOL §16
+# keeps out of production (O2, O6, O10). Development and test builds only:
+# scripts/ci/deny-exceptions-dev-only.sh fails if a shipped graph enables it.
+unaudited-dev = [
+    "todoke-crypto/unaudited-suite-0001",
+    "todoke-crypto/unaudited-code-pairing",
+]
+
+[dependencies]
+todoke-proto.workspace = true
+# Never enable a gate feature here directly: only through `unaudited-dev`.
+todoke-crypto.workspace = true
+todoke-transfer.workspace = true
+getrandom.workspace = true
+# The device's ML-KEM-768 public credential for its binding (§2, O11).
+libcrux-ml-kem.workspace = true
+# Command, event, and configuration types cross the daemon's local IPC.
+serde.workspace = true
+serde_json.workspace = true
+# NFC names in offers (§7.1).
+unicode-normalization.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+todoke-discovery.workspace = true
+todoke-fs.workspace = true
+todoke-transport.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros"] }
+
+# O_NOFOLLOW for the storage key file.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

@@ -27,6 +27,11 @@ version = "1.1.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.anstyle]]
+version = "1.0.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for clap_builder (help styling) in the todoke CLI; no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.arrayvec]]
 version = "0.7.8"
 criteria = "safe-to-deploy"
@@ -86,6 +91,31 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.clap]]
+version = "4.6.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the todoke CLI's argument parsing; imported audits cover only 4.5.20; replace with an audit or imported audit."
+
+[[exemptions.clap_builder]]
+version = "4.6.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for clap; imported audits cover only 4.5.20; replace with an audit or imported audit."
+
+[[exemptions.clap_complete]]
+version = "4.6.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the todoke CLI's shell completions; no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.clap_derive]]
+version = "4.6.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for clap's derive macros (build time only); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.clap_lex]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for clap_builder (splitting raw arguments); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.cmov]]
 version = "0.5.4"
@@ -437,6 +467,11 @@ version = "1.12.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.qrcode]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the todoke CLI (drawing pairing QR codes as text; default features off, no image dependency); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
 [[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
@@ -516,6 +551,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.11.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Version 0.11.0 was exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; upgraded to the latest release 0.11.1 on 2026-10-13 (riscv-zknh and AArch64 constant-loading changes, MSRV 1.88); replace with an audit or imported audit."
+
+[[exemptions.signal-hook-registry]]
+version = "1.4.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for tokio's signal feature (the daemon stops cleanly on SIGINT and SIGTERM); imported audits cover only 1.4.1; replace with an audit or imported audit."
 
 [[exemptions.signature]]
 version = "3.0.0"

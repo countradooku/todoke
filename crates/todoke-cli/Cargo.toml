@@ -10,3 +10,35 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "todoke"
+path = "src/main.rs"
+
+[features]
+# Sessions and code pairing (PROTOCOL §16 gates): development builds only.
+unaudited-dev = ["todoke-daemon/unaudited-dev"]
+
+[dependencies]
+todoke-core.workspace = true
+todoke-daemon.workspace = true
+# The table of characters that hide or reorder text, for escaping.
+todoke-fs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+clap_complete = "=4.6.11"
+# The pairing QR code drawn in the terminal; no image output.
+qrcode = { version = "=0.14.1", default-features = false }
+tokio = { workspace = true, features = ["rt", "time", "io-util", "io-std", "macros", "signal"] }
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# The end-to-end tests drive daemons with sessions enabled.
+todoke-daemon = { workspace = true, features = ["unaudited-dev"] }
+# Hashes of the files sent and received.
+blake3.workspace = true
+getrandom.workspace = true
+proptest.workspace = true

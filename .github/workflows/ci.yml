@@ -41,6 +41,18 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -W clippy::pedantic
       - name: Test, including documentation
         run: cargo test --workspace --locked
+      # The workspace's tests enable the development gates; built alone,
+      # the core and the shipped binary must refuse to start sessions.
+      - name: Check that release builds keep sessions disabled
+        run: |
+          cargo test -p todoke-core --lib --locked
+          cargo build -p todoke-cli --locked
+          home="$(mktemp -d)"
+          if TODOKE_HOME="$home" target/debug/todoke daemon run 2> "$home/err"; then
+            echo "the daemon started without the development gates" >&2
+            exit 1
+          fi
+          grep -q "sessions are disabled" "$home/err"
 
   supply-chain:
     name: Dependency policy and audits
@@ -116,6 +128,26 @@ jobs:
         run: cargo bench --manifest-path bench/Cargo.toml --locked --no-run
       - name: Run each benchmark once (criterion test mode)
         run: cargo test --manifest-path bench/Cargo.toml --locked --benches
+
+  # P10 acceptance (docs/adr/0008-core-daemon-cli.md): two daemon processes
+  # pair by code, send a 2 GiB folder, the receiver is killed half-way and
+  # restarted, the transfer resumes with a fresh Accept, and every file and
+  # the signed receipt are checked. Release build: 2 GiB through debug-built
+  # cryptography would take too long. The 96 MiB variant runs in every
+  # native test job. Sessions need the development gates, which only the
+  # test's own dev-dependency enables.
+  acceptance:
+    name: Two daemons, 2 GiB, crash and resume
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Run the 2 GiB acceptance test
+        run: cargo test --release --locked -p todoke-cli --test e2e -- --ignored
 
   # Kani proof harnesses for the receiver's consent gate (todoke-transfer's
   # gate_proofs module; docs/adr/0005-consent-api.md). Installed as Kani's

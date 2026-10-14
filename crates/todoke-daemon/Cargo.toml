@@ -10,3 +10,28 @@ publish.workspace = true
 
 [lints]
 workspace = true
+
+[features]
+# Sessions and code pairing (PROTOCOL §16 gates): development builds only.
+unaudited-dev = ["todoke-core/unaudited-dev"]
+
+[dependencies]
+todoke-core.workspace = true
+getrandom.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros", "io-util", "signal"] }
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# The server tests run a real core.
+todoke-core = { workspace = true, features = ["unaudited-dev"] }

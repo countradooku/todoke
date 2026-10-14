@@ -33,7 +33,7 @@ zeroize.workspace = true
 getrandom.workspace = true
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"] }
+rustix.workspace = true
 
 # Tests run real suite 0x0001 sessions to obtain verified Accepts (the
 # only source of AcceptedFile) and drive the transfer engine end to end;
