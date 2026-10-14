@@ -23,7 +23,8 @@
 //! `Cancel`/`CancelAck`, `Complete`, and `DeliveryReceipt` (the secret
 //! `FileKey` body is in `todoke-crypto`). The [`discovery`] records
 //! (§9): `DiscoveryRecord`, its mDNS TXT string, and the mDNS instance
-//! label.
+//! label. The [`relay`] control records (§10): the envelope and every
+//! record from `Register` to `RelayClose`.
 //! Read `docs/DESIGN.md` and `spec/PROTOCOL.md` before adding behavior.
 
 #![forbid(unsafe_code)]
@@ -31,6 +32,7 @@
 pub mod discovery;
 pub mod identity;
 pub mod pairing;
+pub mod relay;
 pub mod session;
 pub mod time;
 pub mod transfer;

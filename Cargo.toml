@@ -22,7 +22,7 @@ todoke-fs = { path = "crates/todoke-fs", version = "0.1.0" }
 todoke-core = { path = "crates/todoke-core", version = "0.1.0" }
 todoke-daemon = { path = "crates/todoke-daemon", version = "0.1.0" }
 todoke-transfer = { path = "crates/todoke-transfer", version = "0.1.0" }
-todoke-transport = { path = "crates/todoke-transport", version = "0.1.0" }
+todoke-transport = { path = "crates/todoke-transport", version = "0.1.0", default-features = false }
 # RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
 base45 = "=3.2.0"
 blake3 = { version = "=1.8.7", features = ["zeroize"] }
@@ -65,7 +65,19 @@ unicode-normalization = { version = "=0.1.25", default-features = false }
 rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs", "process"] }
 # The LAN transport's async runtime (todoke-transport); features are chosen
 # by each user.
-tokio = { version = "=1.53.2", default-features = false }
+tokio = { version = "=1.53.3", default-features = false }
+# QUIC v1 / TLS 1.3 to the relay (§10): the client in todoke-transport and the
+# server in todoke-relay. aws-lc-rs, TLS 1.3 only, X25519MLKEM768 preferred;
+# no 0-RTT, no logging.
+quinn = { version = "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
+# Command lines: the todoke CLI and the relay server.
+clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
+# Certificate parsing for relay key pins (rustls's own verifier crate).
+webpki = { package = "rustls-webpki", version = "=0.103.15", default-features = false, features = ["std"] }
+# Platform certificate validation for relays without a pinned key (§10).
+rustls-platform-verifier = "=0.7.1"
+todoke-relay = { path = "crates/todoke-relay", version = "0.1.0" }
 snow = { version = "=0.10.0", default-features = false, features = ["hfs"] }
 zeroize = "=1.9.1"
 

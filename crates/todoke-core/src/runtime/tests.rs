@@ -24,6 +24,8 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
             allow_loopback: true,
         },
         discovery_folder: Some(discovery.to_owned()),
+        relays: Vec::new(),
+        relay_presence_seconds: 300,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
@@ -473,5 +475,233 @@ async fn declines_and_cancels_reach_both_sides() -> AnyResult<()> {
             ..
         }
     ));
+    Ok(())
+}
+
+/// A relay on this runtime with a self-signed certificate, as devices
+/// configure it (pinned).
+fn relay() -> AnyResult<crate::config::RelayConfig> {
+    let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+    let relay = todoke_relay::Relay::bind(
+        todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+        &identity,
+    )?;
+    let config = crate::config::RelayConfig {
+        name: "test".into(),
+        address: relay.local_addr()?.to_string(),
+        server_name: "relay.test".into(),
+        pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+    };
+    tokio::spawn(relay.run(std::sync::Arc::new(tokio::sync::Notify::new())));
+    Ok(config)
+}
+
+/// A device with no LAN at all: only the relay.
+fn remote_device(root: &Path, name: &str, relay: &crate::config::RelayConfig) -> AnyResult<Core> {
+    let mut config = CoreConfig::new(
+        root.join(name).join("state"),
+        root.join(name).join("downloads"),
+    );
+    config.lan.enabled = false;
+    config.relays = vec![relay.clone()];
+    config.relay_presence_seconds = 10;
+    std::fs::create_dir_all(root.join(name))?;
+    let key = KeyFile::new(root.join(name).join("storage.key"));
+    Ok(Core::start(config, Box::new(key))?)
+}
+
+/// Two devices that cannot see each other pair by QR through a relay
+/// (the scanner initiates, §4), then a file goes through it: the sender
+/// waits at the relay, and the receiver comes at its presence window.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()> {
+    let scratch = Scratch::new("remote")?;
+    let relay = relay()?;
+    let alice = remote_device(&scratch.0, "alice", &relay)?;
+    let bob = remote_device(&scratch.0, "bob", &relay)?;
+    let alice_hex = device_hex(&alice).await?;
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    let Response::Qr { text, .. } = alice.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    let paired = bob.request(Request::PairScanQr { text }).await;
+    assert!(matches!(paired, Response::Paired { .. }), "{paired:?}");
+    wait_for(&mut alice_events, |event| match event {
+        Event::Paired { .. } => Some(()),
+        _ => None,
+    })
+    .await?;
+    std::fs::write(scratch.0.join("far.txt"), b"through the relay")?;
+    let Response::Offered { transfer, .. } = bob
+        .request(Request::Send {
+            contact: alice_hex[..12].to_owned(),
+            paths: vec![scratch.0.join("far.txt")],
+        })
+        .await
+    else {
+        return Err("not offered".into());
+    };
+    wait_for(&mut alice_events, |event| match event {
+        Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        alice
+            .request(Request::Accept {
+                transfer: transfer.clone(),
+                files: None,
+            })
+            .await,
+        Response::Done
+    );
+    wait_for(&mut bob_events, |event| match event {
+        Event::Delivered { transfer: done } if *done == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        std::fs::read(scratch.0.join("alice").join("downloads").join("far.txt"))?,
+        b"through the relay"
+    );
+    Ok(())
+}
+
+/// An in-memory link that claims to be `kind`.
+struct Pipe(tokio::io::DuplexStream, todoke_transport::LinkInfo);
+
+impl todoke_transport::Link for Pipe {
+    fn info(&self) -> &todoke_transport::LinkInfo {
+        &self.1
+    }
+}
+
+impl futures_io::AsyncRead for Pipe {
+    fn poll_read(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> core::task::Poll<std::io::Result<usize>> {
+        let mut read = tokio::io::ReadBuf::new(buf);
+        match tokio::io::AsyncRead::poll_read(core::pin::Pin::new(&mut self.0), cx, &mut read) {
+            core::task::Poll::Ready(Ok(())) => core::task::Poll::Ready(Ok(read.filled().len())),
+            core::task::Poll::Ready(Err(error)) => core::task::Poll::Ready(Err(error)),
+            core::task::Poll::Pending => core::task::Poll::Pending,
+        }
+    }
+}
+
+impl futures_io::AsyncWrite for Pipe {
+    fn poll_write(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &[u8],
+    ) -> core::task::Poll<std::io::Result<usize>> {
+        tokio::io::AsyncWrite::poll_write(core::pin::Pin::new(&mut self.0), cx, buf)
+    }
+    fn poll_flush(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(core::pin::Pin::new(&mut self.0), cx)
+    }
+    fn poll_close(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(core::pin::Pin::new(&mut self.0), cx)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Forged {
+    /// A `CodeOfferRequest` for the shown code (the displayer's stranger
+    /// token).
+    CodeRequest,
+    /// A QR-mode `ClientHello` for the shown QR offer.
+    QrHello,
+}
+
+/// Whether a device showing the offer that `forged` is for answers it when
+/// it arrives on a link from `origin`.
+async fn answered(forged: Forged, origin: super::running::Origin) -> AnyResult<bool> {
+    use tokio::io::AsyncReadExt as _;
+    let scratch = Scratch::new("origin")?;
+    let config = CoreConfig::new(scratch.0.join("state"), scratch.0.join("downloads"));
+    let key = KeyFile::new(scratch.0.join("storage.key"));
+    let (events, _) = broadcast::channel(16);
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let state = super::running::State::open(config, &key, events)?;
+            let record = match forged {
+                Forged::CodeRequest => {
+                    assert!(matches!(
+                        state.handle(Request::PairShowCode).await,
+                        Response::Code { .. }
+                    ));
+                    let token = state.stranger_token().ok_or("no stranger token")?;
+                    let request = todoke_proto::pairing::CodeOfferRequest::new(token)?;
+                    todoke_proto::session::encode_prelude_record(
+                        todoke_proto::session::PreludeKind::CodeOfferRequest,
+                        &request.encode(),
+                    )?
+                }
+                Forged::QrHello => {
+                    let Response::Qr { text, .. } = state.handle(Request::PairShowQr).await else {
+                        return Err("no QR offer".into());
+                    };
+                    let payload = todoke_crypto::pairing::QrPayload::from_text(
+                        &text,
+                        super::running::wall(),
+                    )?;
+                    let hello = todoke_proto::session::Hello::client(
+                        todoke_proto::session::SessionMode::Qr,
+                        0,
+                        *payload.pairing_id(),
+                        [0x5e; 16],
+                    )?;
+                    todoke_proto::session::encode_prelude_record(
+                        todoke_proto::session::PreludeKind::ClientHello,
+                        &hello.encode(),
+                    )?
+                }
+            };
+            let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+            let link = Pipe(
+                ours,
+                todoke_transport::LinkInfo::new(todoke_transport::LinkKind::Relay),
+            );
+            tokio::io::AsyncWriteExt::write_all(&mut theirs, &record).await?;
+            let running = tokio::task::spawn_local({
+                let state = std::rc::Rc::clone(&state);
+                async move { state.incoming(link, origin).await }
+            });
+            let mut chunk = [0_u8; 4096];
+            // What the displayer sends back within a moment, if anything.
+            let read = tokio::time::timeout(Duration::from_secs(2), theirs.read(&mut chunk)).await;
+            running.abort();
+            Ok::<_, Box<dyn std::error::Error>>(matches!(read, Ok(Ok(read)) if read > 0))
+        })
+        .await
+}
+
+/// §10, §16 O8: a relay tunnel is accepted only for what it was opened
+/// for. A shown code is never reachable through a relay, a contact's
+/// tunnel never carries pairing, and a QR tunnel carries QR pairing only.
+#[tokio::test(flavor = "current_thread")]
+async fn a_tunnel_carries_only_what_it_was_opened_for() -> AnyResult<()> {
+    use super::running::Origin::{Lan, RelayContact, RelayQr};
+    // Any contact key: the tunnel's purpose is what matters.
+    let mut base = [0x66; 32];
+    base[0] = 0x58;
+    let contact = todoke_crypto::identity::Ed25519PublicKey::from_bytes(&base)?;
+    assert!(answered(Forged::CodeRequest, Lan).await?);
+    assert!(!answered(Forged::CodeRequest, RelayContact(contact)).await?);
+    assert!(!answered(Forged::CodeRequest, RelayQr).await?);
+    assert!(answered(Forged::QrHello, Lan).await?);
+    assert!(answered(Forged::QrHello, RelayQr).await?);
+    assert!(!answered(Forged::QrHello, RelayContact(contact)).await?);
     Ok(())
 }

@@ -553,7 +553,7 @@ criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (dependency of unicode-normalization, the PROTOCOL §7.1 NFC check on manifest names); imported audits cover only 1.9.0; replace with an audit or imported audit."
 
 [[exemptions.tokio]]
-version = "1.53.2"
+version = "1.53.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-transport (LAN TCP and timers; features net, time, rt); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
 

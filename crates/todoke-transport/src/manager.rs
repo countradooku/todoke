@@ -716,6 +716,13 @@ impl<L: Link> fmt::Debug for ClaimedIncoming<L> {
 }
 
 impl<L: Link> ClaimedIncoming<L> {
+    /// The contact the Hello's locator named: unauthenticated until the
+    /// handshake, which must prove it.
+    #[must_use]
+    pub const fn peer(&self) -> &Ed25519PublicKey {
+        &self.peer
+    }
+
     /// Runs the contact handshake as responder. `table` must be the one the
     /// claim used, still current for the store's pair generation.
     ///

@@ -40,7 +40,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -W clippy::pedantic
       - name: Test, including documentation
-        run: cargo test --workspace --locked
+        # Every crate's results, even after one fails.
+        run: cargo test --workspace --locked --no-fail-fast
       # The workspace's tests enable the development gates; built alone,
       # the core and the shipped binary must refuse to start sessions.
       - name: Check that release builds keep sessions disabled
@@ -148,6 +149,70 @@ jobs:
         run: rustup show
       - name: Run the 2 GiB acceptance test
         run: cargo test --release --locked -p todoke-cli --test e2e -- --ignored
+
+  # PROTOCOL §10: two daemons in Linux network namespaces behind NATs of
+  # each type, a relay on the "public" network; they pair by QR and send a
+  # file through it, driven by the CLI. They never reach each other
+  # directly (no hole punching, §16 O7).
+  nat:
+    name: Relay behind ${{ matrix.nat }} NATs
+    strategy:
+      fail-fast: false
+      matrix:
+        nat: [full-cone, port-restricted, symmetric]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Build the daemon (development gates) and the relay
+        run: cargo build --release --locked -p todoke-cli --features todoke-cli/unaudited-dev -p todoke-relay
+      - name: Pair and send through the relay
+        env:
+          NAT: ${{ matrix.nat }}
+        run: sudo scripts/ci/nat-relay.sh "$NAT" target/release/todoke target/release/todoke-relay
+
+  # 10000 concurrent rendezvous on one relay node (20000 QUIC connections),
+  # every tunnel open together.
+  relay-load:
+    name: Relay, 10000 concurrent rendezvous
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Run the load test
+        run: cargo test --release --locked -p todoke-relay --test load -- --ignored --nocapture
+
+  # The self-hosting image builds, starts, and prints its key pin.
+  relay-image:
+    name: Relay container image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: docker build -f crates/todoke-relay/Dockerfile -t todoke-relay:ci .
+      - name: Start it and read its pin
+        run: |
+          docker run -d --name relay --read-only --cap-drop ALL todoke-relay:ci --name relay.test
+          for _ in $(seq 50); do
+            if docker logs relay 2>&1 | grep -q '^pin spki-sha256:[0-9a-f]\{64\}$'; then
+              docker rm -f relay > /dev/null
+              exit 0
+            fi
+            sleep 0.2
+          done
+          docker logs relay
+          exit 1
 
   # Kani proof harnesses for the receiver's consent gate (todoke-transfer's
   # gate_proofs module; docs/adr/0005-consent-api.md). Installed as Kani's

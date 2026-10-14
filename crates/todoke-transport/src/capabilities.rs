@@ -63,12 +63,20 @@ pub const fn availability(transport: Transport) -> Availability {
                 Availability::Available
             }
         }
+        Transport::Relay => {
+            if cfg!(target_family = "wasm") {
+                Availability::Unsupported
+            } else if cfg!(feature = "relay") {
+                Availability::Available
+            } else {
+                Availability::NotImplemented
+            }
+        }
         Transport::DirectQuic
         | Transport::Ble
         | Transport::WifiP2p
         | Transport::Awdl
         | Transport::Usb => Availability::SpecGated,
-        Transport::Relay => Availability::NotImplemented,
     }
 }
 
@@ -86,9 +94,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_lan_tcp_is_available_and_o7_transports_stay_gated() {
+    fn lan_and_relay_are_available_and_o7_transports_stay_gated() {
         let expected = if cfg!(target_family = "wasm") {
             Vec::new()
+        } else if cfg!(feature = "relay") {
+            vec![Transport::LanTcp, Transport::Relay]
         } else {
             vec![Transport::LanTcp]
         };
@@ -102,6 +112,5 @@ mod tests {
         ] {
             assert_eq!(availability(transport), Availability::SpecGated);
         }
-        assert_eq!(availability(Transport::Relay), Availability::NotImplemented);
     }
 }

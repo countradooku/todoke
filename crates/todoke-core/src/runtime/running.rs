@@ -18,12 +18,13 @@ use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::TransferId;
 use todoke_transfer::OutgoingOffer;
 use todoke_transport::{
-    Candidate, ConnectError, Incoming, LanListener, LanPolicy, LinkKind, TcpConnector, TcpLink,
-    TokioTimer, TransportManager,
+    Candidate, ConnectError, Connected, Incoming, LanListener, LanPolicy, Link, LinkKind,
+    TcpConnector, TokioTimer, TransportManager,
 };
 use tokio::sync::{broadcast, mpsc, oneshot};
 use zeroize::Zeroizing;
 
+use super::relay::Role;
 use super::session::{self, SessionCommand};
 use super::{Envelope, StartError};
 use crate::api::{
@@ -174,8 +175,19 @@ pub(super) struct TransferRecord {
     pub(super) total: u64,
 }
 
+/// Where an accepted link came from, and so what it may carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Origin {
+    /// The LAN listener: contacts and every kind of pairing.
+    Lan,
+    /// A relay tunnel opened for this contact: its session only.
+    RelayContact(Ed25519PublicKey),
+    /// A relay tunnel opened for a shown QR offer: QR pairing only.
+    RelayQr,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Pairing {
+pub(super) enum Pairing {
     Qr,
     Code,
 }
@@ -190,11 +202,14 @@ pub(super) struct State {
     connector: TcpConnector,
     listener: Option<LanListener>,
     pub(super) sink: Sink,
+    /// Meeting contacts and QR scanners through relays (§10), if any are
+    /// configured.
+    pub(super) relay: Option<super::relay::Relays>,
     /// Hashes files for new offers on the blocking pool.
     preparer: Preparer,
     pub(super) events: broadcast::Sender<Event>,
     pub(super) table: RefCell<DiscoveryTable>,
-    directory: RefCell<Directory>,
+    pub(super) directory: RefCell<Directory>,
     advertiser: RefCell<Advertiser>,
     backend: RefCell<Backend>,
     pub(super) sessions: RefCell<BTreeMap<Ed25519PublicKey, mpsc::Sender<SessionCommand>>>,
@@ -207,7 +222,7 @@ pub(super) struct State {
     /// Addresses each contact was last reached at (its own listener's).
     pub(super) last_known: RefCell<BTreeMap<Ed25519PublicKey, Vec<SocketAddr>>>,
     retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
-    pairing: Cell<Option<Pairing>>,
+    pub(super) pairing: Cell<Option<Pairing>>,
     strangers_until: Cell<Duration>,
 }
 
@@ -240,6 +255,7 @@ impl State {
         .map_err(|error| StartError::Quarantine(error.to_string()))?;
         let preparer = Preparer::new(&config.state_dir.join("prepared"))
             .map_err(|error| StartError::Io(error.kind()))?;
+        let relay = super::relay::Relays::new(&config.relays, config.relay_presence_seconds)?;
         let mut policy = LanPolicy::new();
         if config.lan.allow_loopback {
             policy = policy.with_loopback();
@@ -276,6 +292,7 @@ impl State {
             connector: TcpConnector::new(policy),
             listener,
             sink: SharedSink::new(sink),
+            relay,
             preparer,
             events,
             table: RefCell::new(table),
@@ -343,6 +360,7 @@ impl State {
             directory.expire(&table, mono);
         }
         self.reconnect(mono);
+        self.relay_tick(now);
     }
 
     /// Starts a session with every contact that has offers waiting, is
@@ -417,6 +435,17 @@ impl State {
             .claim_outgoing(peer)?
             .connect(&self.connector, &candidates)
             .await?;
+        self.initiate_on(peer, connected).await
+    }
+
+    /// Runs the initiator's handshake on `connected` and then the session
+    /// (§4: the side that opened the link, or the smaller device key on a
+    /// relay tunnel).
+    pub(super) async fn initiate_on<L: Link>(
+        self: &Rc<Self>,
+        peer: Ed25519PublicKey,
+        connected: Connected<'_, L>,
+    ) -> Result<(), ConnectError> {
         let table = self.table.borrow().clone();
         let now = wall();
         let local = self
@@ -431,7 +460,9 @@ impl State {
         };
         self.refresh_table().await;
         // Its listener's address, for reconnecting without discovery.
-        if let Some(remote) = established.link().remote() {
+        if established.link().kind() == LinkKind::Lan
+            && let Some(remote) = established.link().remote()
+        {
             self.last_known.borrow_mut().insert(peer, vec![remote]);
         }
         let started = self.mono();
@@ -444,47 +475,67 @@ impl State {
         Ok(())
     }
 
-    /// Handles one accepted link.
-    async fn incoming(self: &Rc<Self>, link: TcpLink) {
+    /// Handles one accepted link: only what `origin` allows (a relay
+    /// tunnel is accepted only for what it was opened for, and human-code
+    /// pairing only on the LAN, §10 and §16 O8). Returns whether a session
+    /// ran or a pairing committed.
+    pub(super) async fn incoming<L: Link>(self: &Rc<Self>, link: L, origin: Origin) -> bool {
         let Ok(incoming) = self.manager.accept(link).await else {
-            return;
+            return false;
         };
         let now = wall();
         match incoming {
-            Incoming::Contact(contact) => {
+            Incoming::Contact(contact) if origin != Origin::RelayQr => {
                 let table = self.table.borrow().clone();
                 let Ok(claimed) = contact.claim(&table, now).await else {
-                    return;
+                    return false;
                 };
+                // A tunnel opened for one contact carries no other's
+                // session (whoever registered on its token).
+                if let Origin::RelayContact(expected) = origin
+                    && *claimed.peer() != expected
+                {
+                    return false;
+                }
                 let Ok(local) = self.identity.local(now) else {
-                    return;
+                    return false;
                 };
                 let established = {
                     let mut contacts = self.contacts.lock().await;
                     claimed.respond(&table, &mut contacts, &local, now).await
                 };
-                if let Ok(established) = established {
-                    self.refresh_table().await;
-                    session::run(Rc::clone(self), established).await;
-                }
+                let Ok(established) = established else {
+                    return false;
+                };
+                self.refresh_table().await;
+                session::run(Rc::clone(self), established).await;
+                true
             }
-            Incoming::Pairing(incoming) => self.pairing_responder(incoming).await,
-            Incoming::CodeOfferRequest(request) => {
+            Incoming::Pairing(incoming) if !matches!(origin, Origin::RelayContact(_)) => {
+                let mode = incoming.client_hello().mode();
+                if origin == Origin::RelayQr && mode != SessionMode::Qr {
+                    return false;
+                }
+                self.pairing_responder(incoming).await
+            }
+            Incoming::CodeOfferRequest(request) if origin == Origin::Lan => {
                 let Some(token) = self.stranger_token() else {
-                    return;
+                    return false;
                 };
                 if self.pairing.get() != Some(Pairing::Code) {
-                    return;
+                    return false;
                 }
-                if let Ok(incoming) = request.answer(CODE_GATE, &self.offers, &token, now).await {
-                    self.pairing_responder(incoming).await;
+                match request.answer(CODE_GATE, &self.offers, &token, now).await {
+                    Ok(incoming) => self.pairing_responder(incoming).await,
+                    Err(_) => false,
                 }
             }
+            _ => false,
         }
     }
 
     /// The stranger token this device advertises now.
-    fn stranger_token(&self) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
+    pub(super) fn stranger_token(&self) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
         let table = self.table.borrow();
         let plan =
             self.advertiser
@@ -495,35 +546,35 @@ impl State {
     }
 
     /// The displayer's side of QR or code pairing.
-    async fn pairing_responder(
+    async fn pairing_responder<L: Link>(
         self: &Rc<Self>,
-        mut incoming: todoke_crypto::session::IncomingSession<TcpLink, TokioTimer>,
-    ) {
+        mut incoming: todoke_crypto::session::IncomingSession<L, TokioTimer>,
+    ) -> bool {
         let now = wall();
         let mode = incoming.client_hello().mode();
         let shown = match mode {
             SessionMode::Qr => Pairing::Qr,
             SessionMode::Code => Pairing::Code,
-            SessionMode::Contact => return,
+            SessionMode::Contact => return false,
         };
         if self.pairing.get() != Some(shown) {
-            return;
+            return false;
         }
         let Ok(reservation) = incoming.reserve_offer(&self.offers, now) else {
-            return;
+            return false;
         };
         let Ok(local) = self.identity.local(now) else {
-            return;
+            return false;
         };
         let paired = {
             let mut contacts = self.contacts.lock().await;
             let planned = match mode {
                 SessionMode::Qr => reservation.into_qr_responder(&mut contacts),
                 SessionMode::Code => reservation.into_code_responder(CODE_GATE, &mut contacts),
-                SessionMode::Contact => return,
+                SessionMode::Contact => return false,
             };
             let Ok((plan, mut authority)) = planned else {
-                return;
+                return false;
             };
             incoming
                 .respond(&local, now, plan, &mut authority)
@@ -532,7 +583,9 @@ impl State {
         };
         if let Ok(peer) = paired {
             self.paired(peer).await;
+            return true;
         }
+        false
     }
 
     /// A pairing committed: stop showing the offer and tell the user.
@@ -548,12 +601,13 @@ impl State {
     /// code or code seen before can no longer pair.
     fn stop_pairing(&self) {
         self.offers.cancel_all();
+        self.stop_qr_relay();
         self.pairing.set(None);
         self.advertiser.borrow_mut().disable_stranger();
     }
 
     /// Handles a request.
-    async fn handle(self: &Rc<Self>, request: Request) -> Response {
+    pub(super) async fn handle(self: &Rc<Self>, request: Request) -> Response {
         match request {
             Request::Status => Response::Status(self.status()),
             Request::Contacts => Response::Contacts(self.contact_list().await),
@@ -708,7 +762,7 @@ impl State {
         }))
     }
 
-    fn show_qr(&self) -> Response {
+    fn show_qr(self: &Rc<Self>) -> Response {
         // One offer at a time: a new one replaces any shown before.
         self.stop_pairing();
         let now = wall();
@@ -726,6 +780,7 @@ impl State {
             return Response::error(ErrorCode::Internal, "OS randomness is unavailable");
         }
         self.pairing.set(Some(Pairing::Qr));
+        self.display_qr_relay(&payload);
         Response::Qr {
             text: payload.to_text().to_string(),
             expires_at: payload.expires_at().seconds(),
@@ -752,14 +807,20 @@ impl State {
         }
     }
 
-    /// The scanner's side of QR pairing: tries the nearby strangers.
+    /// The scanner's side of QR pairing: tries the nearby strangers, then
+    /// the relay (§10: the offer's rendezvous capability).
     async fn scan_qr(self: &Rc<Self>, text: &str) -> Response {
         let now = wall();
         let Ok(payload) = QrPayload::from_text(text, now) else {
             return Response::error(ErrorCode::Pairing, "not a valid, unexpired pairing code");
         };
         self.strangers_until.set(self.mono() + STRANGER_BROWSING);
-        let targets = self.wait_for_strangers().await;
+        // Without the LAN there is nobody nearby to wait for.
+        let targets = if self.listener.is_some() {
+            self.wait_for_strangers().await
+        } else {
+            Vec::new()
+        };
         for (_, candidates) in targets.into_iter().take(MAX_QR_TARGETS) {
             let Ok(link) = todoke_transport::race::race(
                 &self.connector,
@@ -770,34 +831,57 @@ impl State {
             else {
                 continue;
             };
-            let Ok(local) = self.identity.local(now) else {
-                break;
-            };
-            let paired = {
-                let mut contacts = self.contacts.lock().await;
-                let Ok((plan, mut authority)) = contacts.begin_qr_pairing(&payload, now) else {
-                    return Response::error(ErrorCode::Pairing, "this offer cannot be used");
-                };
-                Session::initiate(
-                    link,
-                    self.manager.timer(),
-                    GATE,
-                    &local,
-                    now,
-                    plan,
-                    &mut authority,
-                )
-                .await
-                .map(|session| *session.peer_binding().device_public())
-            };
-            if let Ok(peer) = paired {
-                self.paired(peer).await;
-                return Response::Paired {
-                    contact: hex(peer.as_bytes()),
-                };
+            match self.scan_on(link, &payload).await {
+                Ok(peer) => return self.paired_with(peer).await,
+                Err(Some(response)) => return response,
+                Err(None) => {}
             }
         }
-        Response::error(ErrorCode::Pairing, "no nearby device accepted the offer")
+        if let Some(link) = self.relay_for_qr(&payload, Role::Scanner).await {
+            match self.scan_on(link, &payload).await {
+                Ok(peer) => return self.paired_with(peer).await,
+                Err(Some(response)) => return response,
+                Err(None) => {}
+            }
+        }
+        Response::error(ErrorCode::Pairing, "no device accepted the offer")
+    }
+
+    /// QR pairing as the scanner (the initiator, §4) on `link`: the new
+    /// contact, or `Some` response for an offer that cannot be used.
+    async fn scan_on<L: Link>(
+        &self,
+        link: L,
+        payload: &QrPayload,
+    ) -> Result<Ed25519PublicKey, Option<Response>> {
+        let now = wall();
+        let local = self.identity.local(now).map_err(|_| None)?;
+        let mut contacts = self.contacts.lock().await;
+        let Ok((plan, mut authority)) = contacts.begin_qr_pairing(payload, now) else {
+            return Err(Some(Response::error(
+                ErrorCode::Pairing,
+                "this offer cannot be used",
+            )));
+        };
+        Session::initiate(
+            link,
+            self.manager.timer(),
+            GATE,
+            &local,
+            now,
+            plan,
+            &mut authority,
+        )
+        .await
+        .map(|session| *session.peer_binding().device_public())
+        .map_err(|_| None)
+    }
+
+    async fn paired_with(&self, peer: Ed25519PublicKey) -> Response {
+        self.paired(peer).await;
+        Response::Paired {
+            contact: hex(peer.as_bytes()),
+        }
     }
 
     /// The entrant's side of code pairing.
@@ -1153,7 +1237,9 @@ pub(super) async fn run(
             accepted = accept => {
                 if let Ok(link) = accepted {
                     let state = Rc::clone(&state);
-                    tokio::task::spawn_local(async move { state.incoming(link).await });
+                    tokio::task::spawn_local(async move {
+                        state.incoming(link, Origin::Lan).await;
+                    });
                 } else {
                     // Out of descriptors, say: never spin on it.
                     tokio::time::sleep(ACCEPT_PAUSE).await;

@@ -10,7 +10,7 @@ use todoke_proto::transfer::{CancelReason, RejectReason, TransferId};
 use todoke_transfer::{
     Clock, Direction, EngineConfig, OutgoingOffer, TransferEngine, TransferEvent, pump,
 };
-use todoke_transport::{Established, TcpLink};
+use todoke_transport::{Established, Link};
 use tokio::sync::{mpsc, oneshot};
 
 use super::running::{PeerQueue, State, TransferRecord, wall};
@@ -45,7 +45,7 @@ type Engine<'k> =
     TransferEngine<'k, crate::profile::Keys, todoke_fs::FsSource, super::running::Sink>;
 
 /// Runs `established` until it ends.
-pub(super) async fn run(state: Rc<State>, mut established: Established<TcpLink>) {
+pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<L>) {
     let peer = *established.peer();
     let Ok(queue) = state.take_queue(&peer) else {
         return;

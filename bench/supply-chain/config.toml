@@ -473,7 +473,7 @@ criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (dependency of unicode-normalization, the PROTOCOL §7.1 NFC check on manifest names); imported audits cover only 1.9.0; replace with an audit or imported audit."
 
 [[exemptions.tokio]]
-version = "1.53.2"
+version = "1.53.3"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the LAN benchmark (todoke-transport's TCP and timers), a development dependency only; replace with an audit or imported audit."
 

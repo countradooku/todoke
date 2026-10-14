@@ -37,10 +37,45 @@ version = "0.7.8"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.asn1-rs]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.asn1-rs-derive]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.asn1-rs-impl]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
 [[exemptions.autocfg]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.aws-lc-rs]]
+version = "1.18.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): rustls's and quinn's crypto provider (TLS 1.3, X25519MLKEM768); used by quinn-proto, rcgen, rustls and others; replace with an audit or imported audit."
+
+[[exemptions.aws-lc-sys]]
+version = "0.46.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): the AWS-LC library under aws-lc-rs; used by aws-lc-rs; replace with an audit or imported audit."
+
+[[exemptions.axum]]
+version = "0.8.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): the relay's operator metrics endpoint; used by todoke-relay; replace with an audit or imported audit."
+
+[[exemptions.axum-core]]
+version = "0.5.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum; replace with an audit or imported audit."
 
 [[exemptions.bao]]
 version = "0.13.1"
@@ -51,6 +86,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for the content layer (Bao 0.1
 version = "3.2.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.base64]]
+version = "0.23.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by pem; replace with an audit or imported audit."
 
 [[exemptions.bitflags]]
 version = "2.13.2"
@@ -117,10 +157,20 @@ version = "1.1.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for clap_builder (splitting raw arguments); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.cmake]]
+version = "0.1.58"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by aws-lc-sys; replace with an audit or imported audit."
+
 [[exemptions.cmov]]
 version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.combine]]
+version = "4.6.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
 
 [[exemptions.const-oid]]
 version = "0.10.2"
@@ -131,6 +181,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace 
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.core-foundation]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-platform-verifier, security-framework; replace with an audit or imported audit."
 
 [[exemptions.core-models]]
 version = "0.0.7"
@@ -167,10 +222,30 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.data-encoding]]
+version = "2.11.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.der-parser]]
+version = "10.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.deranged]]
+version = "0.5.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by time; replace with an audit or imported audit."
+
 [[exemptions.digest]]
 version = "0.11.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.displaydoc]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
 [[exemptions.ed25519]]
 version = "3.0.0"
@@ -202,6 +277,11 @@ version = "0.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (channels to its daemon thread); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by aws-lc-sys; replace with an audit or imported audit."
+
 [[exemptions.futures-io]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
@@ -216,6 +296,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.3.21"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.getrandom]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through ring (see its exemption) on wasm32-unknown-unknown. Replace with an audit or imported audit when upstream changes."
 
 [[exemptions.getrandom]]
 version = "0.4.3"
@@ -267,10 +352,40 @@ version = "0.13.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; raised from safe-to-run to safe-to-deploy on 2026-10-13 because pakery-crypto (code pairing, non-default unaudited-code-pairing feature) uses it at runtime; since 2026-10-14 todoke-crypto also uses it at runtime for HMAC-BLAKE3 discovery tokens (PROTOCOL §9); replace with an audit or imported audit."
 
+[[exemptions.http]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum/hyper; used by axum, axum-core, http-body and others; replace with an audit or imported audit."
+
+[[exemptions.http-body]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): hyper; used by axum, axum-core, http-body-util and others; replace with an audit or imported audit."
+
+[[exemptions.http-body-util]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum, axum-core; replace with an audit or imported audit."
+
+[[exemptions.httparse]]
+version = "1.10.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): hyper; used by hyper; replace with an audit or imported audit."
+
 [[exemptions.hybrid-array]]
 version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.hyper]]
+version = "1.12.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum (HTTP/1.1); used by axum, hyper-util; replace with an audit or imported audit."
+
+[[exemptions.hyper-util]]
+version = "0.1.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum; replace with an audit or imported audit."
 
 [[exemptions.if-addrs]]
 version = "0.15.0"
@@ -287,10 +402,40 @@ version = "1.0.18"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.jni]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-platform-verifier; replace with an audit or imported audit."
+
+[[exemptions.jni-macros]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
+
+[[exemptions.jni-sys]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
+
+[[exemptions.jni-sys-macros]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni-sys; replace with an audit or imported audit."
+
+[[exemptions.jobserver]]
+version = "0.1.35"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by cc; replace with an audit or imported audit."
+
 [[exemptions.js-sys]]
 version = "0.3.106"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.lazy_static]]
+version = "1.5.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
 [[exemptions.libc]]
 version = "0.2.189"
@@ -397,6 +542,16 @@ version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.lru-slab]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by quinn-proto; replace with an audit or imported audit."
+
+[[exemptions.matchit]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum's router; used by axum; replace with an audit or imported audit."
+
 [[exemptions.mdns-sd]]
 version = "0.21.5"
 criteria = "safe-to-deploy"
@@ -406,6 +561,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-discovery (mDNS res
 version = "2.8.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.mime]]
+version = "0.3.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
 
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
@@ -427,10 +587,20 @@ version = "0.1.47"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.oid-registry]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
 [[exemptions.once_cell]]
 version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.openssl-probe]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-native-certs; replace with an audit or imported audit."
 
 [[exemptions.pakery-core]]
 version = "0.6.0"
@@ -447,10 +617,20 @@ version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
+[[exemptions.pem]]
+version = "4.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rcgen; replace with an audit or imported audit."
+
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.powerfmt]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by time; replace with an audit or imported audit."
 
 [[exemptions.prettyplease]]
 version = "0.2.37"
@@ -472,6 +652,21 @@ version = "0.14.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the todoke CLI (drawing pairing QR codes as text; default features off, no image dependency); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
+[[exemptions.quinn]]
+version = "0.11.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): QUIC v1 to relays (§10), client and server; used by todoke-relay, todoke-transport; replace with an audit or imported audit."
+
+[[exemptions.quinn-proto]]
+version = "0.11.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): quinn's protocol state machine; used by quinn; replace with an audit or imported audit."
+
+[[exemptions.quinn-udp]]
+version = "0.5.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): quinn's UDP socket layer; used by quinn; replace with an audit or imported audit."
+
 [[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
@@ -487,10 +682,20 @@ version = "0.10.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.rand_pcg]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by quinn-proto; replace with an audit or imported audit."
+
 [[exemptions.rand_xorshift]]
 version = "0.5.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.rcgen]]
+version = "0.14.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): the relay's self-signed certificate; used by todoke-relay; replace with an audit or imported audit."
 
 [[exemptions.regex]]
 version = "1.13.1"
@@ -507,25 +712,85 @@ version = "0.8.11"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.ring]]
+version = "0.17.14"
+criteria = "safe-to-deploy"
+notes = "Never compiled: quinn-proto depends on ring only on wasm32-unknown-unknown, where todoke builds no QUIC. Replace with an audit or imported audit when upstream changes."
+
 [[exemptions.rustc-hash]]
 version = "2.1.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.rusticata-macros]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
 [[exemptions.rustix]]
 version = "1.1.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-fs (openat-family calls: O_NOFOLLOW, O_EXCL, renameat2/renameatx_np without replacement, linkat, unlinkat, fsync; docs/adr/0006-filesystem.md); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
 
+[[exemptions.rustls]]
+version = "0.23.46"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): TLS 1.3 for relay connections (§10); used by quinn, quinn-proto, rustls-platform-verifier and others; replace with an audit or imported audit."
+
+[[exemptions.rustls-native-certs]]
+version = "0.8.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): platform roots for rustls-platform-verifier on Linux; used by rustls-platform-verifier; replace with an audit or imported audit."
+
+[[exemptions.rustls-pki-types]]
+version = "1.15.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): rustls's certificate and key types; used by quinn-proto, rcgen, rustls and others; replace with an audit or imported audit."
+
+[[exemptions.rustls-platform-verifier]]
+version = "0.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): platform certificate validation of relays without a pin (§10); used by todoke-transport; replace with an audit or imported audit."
+
+[[exemptions.rustls-platform-verifier-android]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): the Android half of rustls-platform-verifier; used by rustls-platform-verifier; replace with an audit or imported audit."
+
+[[exemptions.rustls-webpki]]
+version = "0.103.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): rustls's certificate verifier; relay key pins; used by the relay stack; replace with an audit or imported audit."
+
 [[exemptions.rustversion]]
 version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.same-file]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by walkdir; replace with an audit or imported audit."
+
+[[exemptions.schannel]]
+version = "0.1.29"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-native-certs; replace with an audit or imported audit."
+
 [[exemptions.scopeguard]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for lock_api (flume); isrg, mozilla, and bytecode-alliance trust its publisher (Amanieu) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.security-framework]]
+version = "3.7.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-native-certs, rustls-platform-verifier; replace with an audit or imported audit."
+
+[[exemptions.security-framework-sys]]
+version = "2.17.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-platform-verifier, security-framework; replace with an audit or imported audit."
 
 [[exemptions.serde]]
 version = "1.0.229"
@@ -562,10 +827,20 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.simd_cesu8]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni, jni-macros; replace with an audit or imported audit."
+
 [[exemptions.slab]]
 version = "0.4.12"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.smallvec]]
+version = "1.16.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by hyper; replace with an audit or imported audit."
 
 [[exemptions.snow]]
 version = "0.10.0"
@@ -597,20 +872,65 @@ version = "3.0.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.sync_wrapper]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.thiserror]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni, quinn, quinn-proto; replace with an audit or imported audit."
+
+[[exemptions.thiserror-impl]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by thiserror; replace with an audit or imported audit."
+
+[[exemptions.time]]
+version = "0.3.55"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rcgen, yasna; replace with an audit or imported audit."
+
+[[exemptions.time-macros]]
+version = "0.2.32"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
 [[exemptions.tinyvec]]
 version = "1.13.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (dependency of unicode-normalization, the PROTOCOL §7.1 NFC check on manifest names); imported audits cover only 1.9.0; replace with an audit or imported audit."
 
 [[exemptions.tokio]]
-version = "1.53.2"
+version = "1.53.3"
 criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport (LAN TCP and timers; features net, time, rt); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+notes = "Not yet reviewed. Exempted on 2026-10-14 (1.53.3) for todoke-transport, todoke-core, todoke-daemon, and todoke-relay (async runtime); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.tokio-macros]]
 version = "2.7.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport tests (#[tokio::test], development builds only); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.tower]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum; replace with an audit or imported audit."
+
+[[exemptions.tower-layer]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.tower-service]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.tracing]]
+version = "0.1.44"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): quinn (no subscriber is installed: nothing is logged); used by quinn, quinn-proto, quinn-udp; replace with an audit or imported audit."
 
 [[exemptions.typenum]]
 version = "1.20.1"
@@ -622,10 +942,20 @@ version = "1.0.27"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.untrusted]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by ring, rustls-webpki; replace with an audit or imported audit."
+
 [[exemptions.uuid]]
 version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.walkdir]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
 
 [[exemptions.wasi]]
 version = "0.11.1+wasi-snapshot-preview1"
@@ -652,10 +982,85 @@ version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.web-time]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by quinn, quinn-proto, rustls-pki-types; replace with an audit or imported audit."
+
+[[exemptions.webpki-root-certs]]
+version = "1.0.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): fallback roots for rustls-platform-verifier; used by rustls-platform-verifier; replace with an audit or imported audit."
+
+[[exemptions.winapi-util]]
+version = "0.1.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
+version = "0.52.0"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through ring (see its exemption), never built for Windows. Replace with an audit or imported audit when upstream changes."
+
 [[exemptions.windows-sys]]
 version = "0.61.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-fs (Windows bindings that rustix and errno declare; todoke-fs itself uses only the standard library on Windows); imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.windows-targets]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.x509-parser]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.yasna]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rcgen; replace with an audit or imported audit."
 
 [[exemptions.zeroize]]
 version = "1.9.1"

@@ -26,7 +26,7 @@ todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
 todoke-fs = { path = "../crates/todoke-fs", version = "0.1.0" }
 # The mDNS sighting check (no gate feature; no socket is opened).
 todoke-discovery = { path = "../crates/todoke-discovery", version = "0.1.0" }
-todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0" }
+todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0", default-features = false }
 
 [[bin]]
 name = "proto_device_binding"
@@ -227,6 +227,13 @@ bench = false
 [[bin]]
 name = "fs_content_type"
 path = "fuzz_targets/fs_content_type.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_relay_control"
+path = "fuzz_targets/proto_relay_control.rs"
 test = false
 doc = false
 bench = false
