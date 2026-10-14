@@ -10,7 +10,10 @@ use super::*;
 type Table = Rooms<&'static str>;
 
 fn table() -> Table {
-    Rooms::new(Limits { max_rooms: 4 })
+    Rooms::new(Limits {
+        max_rooms: 4,
+        wait: Duration::from_secs(30),
+    })
 }
 
 fn token(byte: u8) -> RendezvousToken {

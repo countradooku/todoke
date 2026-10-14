@@ -18,7 +18,7 @@ use std::time::Instant;
 use quinn::{RecvStream, SendStream, VarInt};
 use todoke_proto::relay::{
     CloseCode, Control, MAX_ROOMS_PER_ENDPOINT, MAX_TUNNEL_BUFFER, MAX_TUNNEL_BYTES,
-    MAX_TUNNEL_SECONDS, RoomId,
+    MAX_TUNNEL_SECONDS, MAX_WAIT_SECONDS, RoomId,
 };
 use tokio::sync::{Notify, mpsc};
 
@@ -68,6 +68,12 @@ pub struct Config {
     pub connections_per_source_per_second: u32,
     /// Registers a second from one source (bursts of twice that).
     pub registers_per_source_per_second: u32,
+    /// How long a new stream has to send `Register`.
+    pub register_deadline: Duration,
+    /// How long a connection may hold no room before it is closed.
+    pub roomless: Duration,
+    /// How long a lone member waits for the other endpoint (§10: 30 s).
+    pub peer_wait: Duration,
 }
 
 impl Config {
@@ -85,6 +91,9 @@ impl Config {
             tunnel_lifetime: Duration::from_secs(MAX_TUNNEL_SECONDS),
             connections_per_source_per_second: 20,
             registers_per_source_per_second: 10,
+            register_deadline: REGISTER_DEADLINE,
+            roomless: ROOMLESS,
+            peer_wait: Duration::from_secs(MAX_WAIT_SECONDS as u64),
         }
     }
 }
@@ -273,6 +282,7 @@ impl Relay {
         let endpoint = quinn::Endpoint::server(server, config.listen)?;
         let limits = Limits {
             max_rooms: config.max_rooms,
+            wait: config.peer_wait,
         };
         Ok(Self {
             endpoint,
@@ -436,7 +446,7 @@ async fn serve_connection(shared: &Arc<Shared>, connection: quinn::Connection, s
     loop {
         let accepted = tokio::select! {
             accepted = connection.accept_bi() => accepted,
-            () = tokio::time::sleep(ROOMLESS) => {
+            () = tokio::time::sleep(shared.config.roomless) => {
                 if open.load(Ordering::Relaxed) == 0 {
                     connection.close(CLOSED, b"");
                     return;
@@ -507,7 +517,7 @@ async fn serve_room(
 ) {
     let metrics = &shared.metrics;
     let mut reader = Reader { buffer: Vec::new() };
-    let first = tokio::time::timeout(REGISTER_DEADLINE, reader.next(&mut rx)).await;
+    let first = tokio::time::timeout(shared.config.register_deadline, reader.next(&mut rx)).await;
     let Ok(Ok(Some(Control::Register {
         token,
         client_nonce,
@@ -728,6 +738,16 @@ fn server_config(identity: &Identity) -> std::io::Result<quinn::ServerConfig> {
     let crypto =
         quinn::crypto::rustls::QuicServerConfig::try_from(tls).map_err(|error| invalid(&error))?;
     let mut server = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+    server.transport_config(Arc::new(transport_config()?));
+    Ok(server)
+}
+
+/// The QUIC limits: two rooms a connection, nothing unasked, and flow
+/// control that bounds what a tunnel direction holds.
+fn transport_config() -> std::io::Result<quinn::TransportConfig> {
+    let invalid = |error: &dyn core::fmt::Display| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+    };
     let mut transport = quinn::TransportConfig::default();
     let rooms = VarInt::from_u32(u32::try_from(MAX_ROOMS_PER_ENDPOINT).unwrap_or(2));
     transport
@@ -740,6 +760,86 @@ fn server_config(identity: &Identity) -> std::io::Result<quinn::ServerConfig> {
         .max_idle_timeout(Some(
             quinn::IdleTimeout::try_from(IDLE).map_err(|error| invalid(&error))?,
         ));
-    server.transport_config(Arc::new(transport));
-    Ok(server)
+    Ok(transport)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_source_is_an_ipv4_address_or_an_ipv6_64() {
+        let ip = |text: &str| -> IpAddr { text.parse().unwrap_or(IpAddr::from([0, 0, 0, 0])) };
+        // IPv4-mapped IPv6 is the IPv4 address (a dual-stack socket).
+        assert_eq!(source_of(ip("::ffff:192.0.2.9")), ip("192.0.2.9"));
+        assert_eq!(source_of(ip("192.0.2.9")), ip("192.0.2.9"));
+        // One /64 is one source; another /64 is another.
+        assert_eq!(
+            source_of(ip("2001:db8:1:2:aaaa:bbbb:cccc:dddd")),
+            source_of(ip("2001:db8:1:2::1"))
+        );
+        assert_ne!(
+            source_of(ip("2001:db8:1:2::1")),
+            source_of(ip("2001:db8:1:3::1"))
+        );
+    }
+
+    /// What a tunnel direction can hold, the rooms per connection, and what
+    /// the relay never accepts unasked: the transport's own debug output.
+    #[test]
+    fn the_transport_limits_are_the_documented_ones() -> std::io::Result<()> {
+        let shown = format!("{:?}", transport_config()?);
+        for expected in [
+            "max_concurrent_bidi_streams: 2",
+            "max_concurrent_uni_streams: 0",
+            "stream_receive_window: 458752",
+            "receive_window: 917504",
+            "send_window: 524288",
+            "datagram_receive_buffer_size: None",
+        ] {
+            assert!(shown.contains(expected), "{expected} not in {shown}");
+        }
+        Ok(())
+    }
+
+    /// A source is remembered only while it has connections or its rate
+    /// limits have not recovered: nothing about it outlives that.
+    #[tokio::test]
+    async fn sources_are_forgotten_once_they_recover() -> std::io::Result<()> {
+        let (identity, _, _) = Identity::self_signed(vec!["relay.test".into()])?;
+        let mut config = Config::new(([127, 0, 0, 1], 0).into());
+        config.max_connections_per_source = 2;
+        let relay = Relay::bind(config, &identity)?;
+        let shared = &relay.shared;
+        let source: IpAddr = [192, 0, 2, 1].into();
+        assert!(admit(shared, source));
+        assert!(admit(shared, source));
+        // At the per-source limit.
+        assert!(!admit(shared, source));
+        assert_eq!(lock(&shared.sources).len(), 1);
+        let later = Instant::now() + Duration::from_secs(60);
+        // Still has connections: kept.
+        forget_sources(shared, later);
+        assert_eq!(lock(&shared.sources).len(), 1);
+        release(shared, source);
+        release(shared, source);
+        forget_sources(shared, Instant::now());
+        // Rate state has not recovered yet: kept.
+        assert_eq!(lock(&shared.sources).len(), 1);
+        forget_sources(shared, later);
+        assert!(lock(&shared.sources).is_empty());
+        assert_eq!(shared.metrics.connections.load(Ordering::Relaxed), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn the_defaults_are_the_documented_ones() {
+        let config = Config::new(([127, 0, 0, 1], 0).into());
+        assert_eq!(config.register_deadline, Duration::from_secs(10));
+        assert_eq!(config.roomless, Duration::from_secs(30));
+        assert_eq!(config.peer_wait, Duration::from_secs(30));
+        assert_eq!(config.max_connections_per_source, 64);
+        assert_eq!(config.tunnel_lifetime, Duration::from_hours(24));
+        assert_eq!(config.tunnel_bytes, 16 << 40);
+    }
 }

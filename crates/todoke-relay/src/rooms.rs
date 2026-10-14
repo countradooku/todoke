@@ -14,8 +14,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use todoke_proto::relay::{
-    Candidate, CloseCode, MAX_ROOM_SECONDS, MAX_WAIT_SECONDS, Nonce, Random16, RendezvousToken,
-    RoomId,
+    Candidate, CloseCode, MAX_ROOM_SECONDS, Nonce, Random16, RendezvousToken, RoomId,
 };
 use tokio::sync::mpsc;
 
@@ -122,6 +121,8 @@ struct Room<S> {
 pub(crate) struct Limits {
     /// Rooms open at once on this node.
     pub(crate) max_rooms: usize,
+    /// How long a lone member waits for the other.
+    pub(crate) wait: Duration,
 }
 
 /// The rooms of one relay node, keyed by room ID and by token. `S` is a
@@ -225,7 +226,7 @@ impl<S> Rooms<S> {
         let id = fresh_room().ok_or(CloseCode::Unavailable)?;
         let ttl = ttl_seconds.clamp(1, MAX_ROOM_SECONDS);
         let expires = now + Duration::from_secs(u64::from(ttl));
-        let wait_until = (now + Duration::from_secs(u64::from(MAX_WAIT_SECONDS))).min(expires);
+        let wait_until = (now + self.limits.wait).min(expires);
         self.open.insert(
             id,
             Room {
