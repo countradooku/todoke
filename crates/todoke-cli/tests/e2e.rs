@@ -17,7 +17,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use todoke_core::api::{Event, OfferInfo, Request, Response};
-use todoke_core::config::{CoreConfig, LanSettings};
+use todoke_core::config::{CoreConfig, LanSettings, RelayConfig};
 use todoke_daemon::Paths;
 use todoke_daemon::ipc::{Client, Events};
 
@@ -67,6 +67,22 @@ impl Device {
             relays: Vec::new(),
             relay_presence_seconds: 300,
         };
+        std::fs::write(&paths.config_file, serde_json::to_vec_pretty(&config)?)?;
+        Ok(Self {
+            home,
+            process: None,
+        })
+    }
+
+    /// A device with no LAN, only `relay` (§10).
+    fn remote(root: &Path, name: &str, relay: &RelayConfig) -> AnyResult<Self> {
+        let home = root.join(name);
+        let paths = Paths::under(&home);
+        std::fs::create_dir_all(&home)?;
+        let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+        config.lan.enabled = false;
+        config.relays = vec![relay.clone()];
+        config.relay_presence_seconds = 10;
         std::fs::write(&paths.config_file, serde_json::to_vec_pretty(&config)?)?;
         Ok(Self {
             home,
@@ -498,5 +514,74 @@ async fn the_cli_reports_with_exit_codes_and_json() -> AnyResult<()> {
     let human = todoke(&["status"])?;
     assert!(String::from_utf8(human.stdout)?.contains("sessions  enabled"));
     alice.stop().await?;
+    Ok(())
+}
+
+/// A relay on this test's runtime with a self-signed certificate, as the
+/// daemons configure it (pinned).
+fn relay() -> AnyResult<RelayConfig> {
+    let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+    let node = todoke_relay::Relay::bind(
+        todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+        &identity,
+    )?;
+    let config = RelayConfig {
+        name: "test".into(),
+        address: node.local_addr()?.to_string(),
+        server_name: "relay.test".into(),
+        pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+    };
+    tokio::spawn(node.run(std::sync::Arc::new(tokio::sync::Notify::new())));
+    Ok(config)
+}
+
+/// Two daemons that cannot see each other (no LAN) pair by QR through a
+/// relay and send a folder through it; every file and the receipt are
+/// checked.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_daemons_pair_and_send_through_a_relay() -> AnyResult<()> {
+    let scratch = Scratch::new("relayed")?;
+    let relay = relay()?;
+    let mut alice = Device::remote(&scratch.0, "alice", &relay)?;
+    let mut bob = Device::remote(&scratch.0, "bob", &relay)?;
+    alice.start().await?;
+    bob.start().await?;
+    let alice_device = alice.device().await?;
+    let mut alice_events = alice.events().await?;
+    let mut bob_events = bob.events().await?;
+    let Response::Qr { text, .. } = alice.request(Request::PairShowQr).await? else {
+        return Err("no QR offer".into());
+    };
+    let paired = bob.request(Request::PairScanQr { text }).await?;
+    assert!(matches!(paired, Response::Paired { .. }), "{paired:?}");
+    let files = make_folder(&scratch.0.join("outbox"), 6 * MIB)?;
+    let Response::Offered { transfer, .. } = bob
+        .request(Request::Send {
+            contact: alice_device,
+            paths: vec![scratch.0.join("outbox").join("photos")],
+        })
+        .await?
+    else {
+        return Err("not offered".into());
+    };
+    let limit = Duration::from_mins(2);
+    wait_for_offer(&alice, &mut alice_events, &transfer, limit).await?;
+    assert_eq!(
+        alice
+            .request(Request::Accept {
+                transfer: transfer.clone(),
+                files: None,
+            })
+            .await?,
+        Response::Done
+    );
+    wait_for(&mut bob_events, &transfer, limit, |event| match event {
+        Event::Delivered { transfer: done } if *done == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    check_downloads(&alice.paths().downloads_dir, &files, |_| true)?;
+    alice.stop().await?;
+    bob.stop().await?;
     Ok(())
 }

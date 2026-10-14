@@ -42,3 +42,5 @@ todoke-daemon = { workspace = true, features = ["unaudited-dev"] }
 blake3.workspace = true
 getrandom.workspace = true
 proptest.workspace = true
+# A relay node for the remote end-to-end test.
+todoke-relay.workspace = true
