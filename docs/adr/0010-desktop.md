@@ -260,13 +260,14 @@ retention is local policy (§7.7).
 - **Real platforms:** the UI tests run in GPUI's test platform. Native
   drag and drop, the file and folder pickers, the clipboard's file lists,
   and focus behaviour on each OS are manual (`docs/qa/desktop.md`).
-- **Hosting and attaching** are tested in the daemon (`host` serves,
-  refuses a second host, notices a stop, frees the endpoint); the app's
-  switch between them on Apply and the attached pool's freshness rule are
-  not exercised end to end. Fix: a test that hosts a daemon, attaches the
-  app's backend to it, applies a setting, and checks the restart.
-- **Settings Apply** is tested up to the staged draft and Discard; writing
-  the file and restarting run only by hand.
+- **Applying settings while attached** (stop the daemon, then host
+  anew) runs only by hand: a test process would still hold the first
+  core's profile. Hosting, attaching, stopping, the pool's freshness rule,
+  and Apply while hosting are tested. Fix: a test that runs the daemon as a
+  separate process.
+- **Hidden mode and urgent relay registrations:** hiding suppresses presence
+  (tested); registrations for waiting offers continue by design, untested
+  while hidden.
 
 ## Not here
 

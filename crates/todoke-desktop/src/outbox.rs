@@ -143,4 +143,40 @@ mod tests {
         std::fs::remove_dir_all(&state)?;
         Ok(())
     }
+
+    /// A week-old file goes at the next start; a newer one, and anything
+    /// outside the outbox, stays; a missing outbox is nothing to sweep.
+    #[test]
+    fn sweep_removes_only_files_older_than_a_week() -> std::io::Result<()> {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        let state = std::env::temp_dir().join(format!("todoke-outbox-sweep-{nanos}"));
+        // No outbox yet: nothing happens.
+        sweep(&state);
+        let age = |path: &Path, by: Duration| -> std::io::Result<()> {
+            let when = std::time::SystemTime::now()
+                .checked_sub(by)
+                .ok_or(std::io::ErrorKind::InvalidInput)?;
+            std::fs::File::options()
+                .write(true)
+                .open(path)?
+                .set_modified(when)
+        };
+        let old = write(&state, "old", 1_791_970_200)?;
+        let nearly = write(&state, "nearly", 1_791_970_201)?;
+        let recent = write(&state, "recent", 1_791_970_202)?;
+        age(&old, KEEP + Duration::from_hours(1))?;
+        age(&nearly, Duration::from_hours(6 * 24))?;
+        let outside = state.join("old.txt");
+        std::fs::write(&outside, "x")?;
+        age(&outside, KEEP + Duration::from_hours(1))?;
+        sweep(&state);
+        assert!(!old.exists());
+        assert!(nearly.exists());
+        assert!(recent.exists());
+        assert!(outside.exists(), "only the outbox is swept");
+        std::fs::remove_dir_all(&state)?;
+        Ok(())
+    }
 }

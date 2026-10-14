@@ -598,6 +598,71 @@ mod tests {
         assert_eq!(model.notices.back().map(|n| n.level), Some(Level::Success));
     }
 
+    /// An interrupted transfer is not finished: it keeps its progress and
+    /// stays listed as active, says why quietly, and moves again when it
+    /// resumes. A failure is an error; an end for a transfer never seen
+    /// still says something.
+    #[test]
+    fn an_interrupted_transfer_pauses_and_resumes() {
+        let mut model = Model::new();
+        model.apply(Event::OfferReceived(offer("t1")));
+        let progress = |done| Event::Progress {
+            transfer: "t1".into(),
+            way: Way::Incoming,
+            done,
+            total: 10,
+            bytes_per_second: 5,
+        };
+        model.apply(progress(4));
+        let fetch = model.apply(Event::Ended {
+            transfer: "t1".into(),
+            reason: TransferState::Interrupted,
+            message: "the connection dropped".into(),
+        });
+        assert_eq!(fetch, [Fetch::History, Fetch::Transfers]);
+        assert_eq!(model.speed("t1"), 0);
+        let paused = model.transfers.get("t1");
+        assert_eq!(paused.map(|t| t.state), Some(TransferState::Interrupted));
+        assert_eq!(paused.map(|t| t.bytes_done), Some(4), "progress is kept");
+        assert_eq!(
+            paused.and_then(|t| t.detail.as_deref()),
+            Some("the connection dropped")
+        );
+        assert_eq!(model.active().len(), 1, "a paused transfer resumes");
+        let notice = model.notices.back();
+        assert_eq!(notice.map(|n| n.level), Some(Level::Info));
+        assert!(
+            notice.is_some_and(|n| n.text.contains("paused")),
+            "{notice:?}"
+        );
+        model.apply(progress(6));
+        assert_eq!(
+            model.transfers.get("t1").map(|t| (t.state, t.bytes_done)),
+            Some((TransferState::Transferring, 6))
+        );
+        assert_eq!(model.speed("t1"), 5);
+        // A failure is an error, and its transfer leaves the active list.
+        model.apply(Event::Ended {
+            transfer: "t1".into(),
+            reason: TransferState::Failed,
+            message: "hash mismatch".into(),
+        });
+        assert_eq!(model.notices.back().map(|n| n.level), Some(Level::Error));
+        assert_eq!(model.active().len(), 0);
+        assert_eq!(model.speed("t1"), 0);
+        // Never seen here: still reported, without inventing a transfer.
+        model.apply(Event::Ended {
+            transfer: "other".into(),
+            reason: TransferState::Cancelled,
+            message: String::new(),
+        });
+        assert_eq!(
+            model.notices.back().map(|n| n.text.as_str()),
+            Some("The transfer with a contact was cancelled")
+        );
+        assert!(!model.transfers.contains_key("other"));
+    }
+
     #[test]
     fn missed_events_refetch_everything_and_notices_are_bounded() {
         let mut model = Model::new();
@@ -674,6 +739,10 @@ mod tests {
         }];
         for query in ["holiday", "C0FF EE", "dead", "received", "aabb", "", "202e"] {
             assert_eq!(model.search(query).len(), 1, "{query}");
+        }
+        // Blank queries show everything; a partial state name matches.
+        for query in ["   ", "\t", "rece"] {
+            assert_eq!(model.search(query).len(), 1, "{query:?}");
         }
         for query in ["nothing", "delivered", "\u{202e}"] {
             assert_eq!(model.search(query).len(), 0, "{query}");

@@ -57,3 +57,7 @@ image = { version = "=0.25.10", default-features = false, features = ["png"], op
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
 # Headless windows, simulated input, and the accessibility tree in tests.
 gpui-kit = { workspace = true, features = ["test-support"] }
+# A daemon to host and attach to in the backend tests: sessions run only in
+# a development build (PROTOCOL §16), and a development dependency may
+# enable that (as the todoke command's tests do).
+todoke-daemon = { workspace = true, features = ["unaudited-dev"] }

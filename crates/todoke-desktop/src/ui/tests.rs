@@ -11,13 +11,15 @@ use gpui_kit::test::TestWindowExt as _;
 use gpui_kit::{
     ClipboardItem, Entity, ExternalPaths, FileDropEvent, TestAppContext, VisualTestContext,
 };
-use todoke_core::api::{Event, Request, TransferInfo, TransferState, Way};
+use todoke_core::api::{Event, Request, Response, StatusInfo, TransferInfo, TransferState, Way};
+use todoke_core::config::{CoreConfig, RelayConfig};
 use todoke_daemon::Paths;
 
 use super::fixtures::{AWAY, LAN, NEAR, RELAYED, offer, script};
 use super::{Page, PairTab, Todoke, bindings};
 use crate::backend::mock::Mock;
 use crate::model::{Connection, Pairing};
+use crate::prefs;
 use crate::tokens;
 
 /// A scratch home, removed afterwards.
@@ -948,4 +950,310 @@ fn a_stopped_core_is_let_go(cx: &mut TestAppContext) {
     let banner =
         cx.update(|window, _| window.find("banner").label().unwrap_or_default().to_owned());
     assert!(banner.contains("stopped"), "{banner}");
+}
+
+/// Writes `config.json` under `home` (LAN off, so no test opens a
+/// listener), as `edit` leaves it.
+fn write_config(home: &Home, edit: impl FnOnce(&mut CoreConfig)) -> Paths {
+    let paths = Paths::under(&home.0);
+    let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+    config.lan.enabled = false;
+    edit(&mut config);
+    if std::fs::create_dir_all(&home.0).is_err()
+        || std::fs::write(
+            &paths.config_file,
+            serde_json::to_vec(&config).unwrap_or_default(),
+        )
+        .is_err()
+    {
+        unreachable!("the scratch home is writable");
+    }
+    paths
+}
+
+fn relay(name: &str, address: &str) -> RelayConfig {
+    RelayConfig {
+        name: name.into(),
+        address: address.into(),
+        server_name: "relay.example".into(),
+        pin: None,
+    }
+}
+
+/// The names of the relays in the draft.
+fn draft_relays(view: &Entity<Todoke>, cx: &mut VisualTestContext) -> Vec<String> {
+    view.read_with(cx, |app, _| {
+        app.draft
+            .as_ref()
+            .map(|draft| draft.relays.iter().map(|r| r.name.clone()).collect())
+            .unwrap_or_default()
+    })
+}
+
+/// Local network, retention, the presence period, and the relay list are
+/// edited as a draft: the apply bar shows while it differs from the saved
+/// configuration, goes when an edit is undone or discarded, and nothing is
+/// sent to the core or written to disk meanwhile.
+#[gpui_kit::test]
+fn settings_stage_connection_and_retention_edits(cx: &mut TestAppContext) {
+    let home = Home::new("staging");
+    let paths = write_config(&home, |config| {
+        config.lan.enabled = true;
+        config.relays = vec![
+            relay("eu", "eu.example:4433"),
+            relay("us", "us.example:4433"),
+        ];
+    });
+    let on_disk = std::fs::read(&paths.config_file).unwrap_or_default();
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    show(&view, cx, Page::Settings);
+    let bar =
+        |cx: &mut VisualTestContext| cx.update(|window, _| window.try_find("apply-bar").is_some());
+    assert!(!bar(cx));
+    // Switch the local network off, and back on: no difference remains.
+    click(cx, "lan");
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.draft.as_ref().map(|c| c.lan.enabled), Some(false));
+        assert_eq!(app.saved.as_ref().map(|c| c.lan.enabled), Some(true));
+    });
+    assert!(bar(cx));
+    click(cx, "lan");
+    assert!(!bar(cx), "undoing the edit leaves nothing to apply");
+    // Presence (the 3600-second choice is the fourth) and retention (Off).
+    click_in(cx, "presence", 3);
+    click_in(cx, "retention", 0);
+    view.read_with(cx, |app, _| {
+        let draft = app.draft.as_ref();
+        assert_eq!(draft.map(|c| c.relay_presence_seconds), Some(3600));
+        assert_eq!(draft.map(|c| c.history_days), Some(0));
+        assert_eq!(
+            app.saved.as_ref().map(|c| c.relay_presence_seconds),
+            Some(300)
+        );
+    });
+    assert!(bar(cx));
+    // A relay removed from the draft goes from the list.
+    // Rows are test elements; the list itself is not.
+    let rows = |cx: &mut VisualTestContext| {
+        cx.update(|window, _| {
+            ["relay-0", "relay-1", "relay-2"]
+                .iter()
+                .filter(|id| window.try_find(**id).is_some())
+                .count()
+        })
+    };
+    assert_eq!(rows(cx), 2);
+    click(cx, "remove-relay-0");
+    assert_eq!(draft_relays(&view, cx), ["us"]);
+    assert_eq!(rows(cx), 1);
+    // Discard returns to what is stored; nothing was sent or written.
+    click(cx, "discard");
+    assert!(!bar(cx));
+    view.read_with(cx, |app, _| assert_eq!(app.draft, app.saved));
+    assert_eq!(draft_relays(&view, cx), ["eu", "us"]);
+    assert_eq!(rows(cx), 2);
+    assert_eq!(actions(&mock), []);
+    assert_eq!(
+        std::fs::read(&paths.config_file).unwrap_or_default(),
+        on_disk
+    );
+}
+
+/// An imported relay list lands in the draft (a relay of the same name is
+/// replaced, others are kept), and a list that does not parse changes
+/// nothing and says why.
+#[gpui_kit::test]
+fn an_imported_relay_list_joins_the_draft(cx: &mut TestAppContext) {
+    let home = Home::new("import");
+    let paths = write_config(&home, |config| {
+        config.relays = vec![relay("eu", "old.example:4433")];
+    });
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    show(&view, cx, Page::Settings);
+    let list = home.0.join("relays.json");
+    let choose = |cx: &mut VisualTestContext, file: &std::path::Path| {
+        click(cx, "import-relays");
+        assert!(cx.did_prompt_for_paths(), "the file picker opened");
+        let file = file.to_owned();
+        cx.simulate_path_prompt_response(move |_| Some(vec![file]));
+        cx.run_until_parked();
+    };
+    let write_list = |text: &str| {
+        if std::fs::write(&list, text).is_err() {
+            unreachable!("the scratch home is writable");
+        }
+    };
+    write_list(
+        r#"{"version":1,"relays":[
+            {"name":"eu","address":"new.example:4433","server_name":"relay.example"},
+            {"name":"ap","address":"ap.example:4433","server_name":"relay.example"}]}"#,
+    );
+    choose(cx, &list);
+    assert_eq!(draft_relays(&view, cx), ["eu", "ap"]);
+    view.read_with(cx, |app, _| {
+        let draft = app.draft.as_ref();
+        let eu = draft.and_then(|c| c.relays.iter().find(|r| r.name == "eu"));
+        assert_eq!(eu.map(|r| r.address.as_str()), Some("new.example:4433"));
+        assert_eq!(app.saved.as_ref().map(|c| c.relays.len()), Some(1));
+        assert!(app.model.notices.is_empty());
+    });
+    assert!(cx.update(|window, _| window.try_find("apply-bar").is_some()));
+    // Nothing is written until Apply.
+    assert_eq!(
+        paths.config().map(|c| c.relays.len()).unwrap_or_default(),
+        1
+    );
+    // A bad list leaves the draft alone and tells the user.
+    write_list(r#"{"version":2,"relays":[]}"#);
+    choose(cx, &list);
+    assert_eq!(draft_relays(&view, cx), ["eu", "ap"]);
+    view.read_with(cx, |app, _| {
+        assert!(
+            app.model
+                .notices
+                .iter()
+                .any(|n| n.text.contains("relay list was not imported")),
+            "{:?}",
+            app.model.notices
+        );
+    });
+    // A cancelled picker changes nothing.
+    click(cx, "import-relays");
+    cx.simulate_path_prompt_response(|_| None);
+    cx.run_until_parked();
+    assert_eq!(draft_relays(&view, cx), ["eu", "ap"]);
+}
+
+/// The folder picker sets the downloads folder in the draft.
+#[gpui_kit::test]
+fn the_chosen_downloads_folder_is_staged(cx: &mut TestAppContext) {
+    let home = Home::new("downloads");
+    write_config(&home, |_| {});
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    show(&view, cx, Page::Settings);
+    click(cx, "downloads");
+    let chosen = home.0.join("elsewhere");
+    let answer = chosen.clone();
+    cx.simulate_path_prompt_response(move |options| {
+        assert!(options.directories && !options.files);
+        Some(vec![answer])
+    });
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert_eq!(
+            app.draft.as_ref().map(|c| c.downloads_dir.clone()),
+            Some(chosen)
+        );
+        assert_ne!(app.draft, app.saved);
+    });
+    assert!(cx.update(|window, _| window.try_find("apply-bar").is_some()));
+}
+
+/// Hiding is stored for the next start as well, over the file as it is
+/// now (not over a stale copy), and keeps the edits staged meanwhile.
+#[gpui_kit::test]
+fn hiding_is_kept_for_the_next_start_beside_staged_edits(cx: &mut TestAppContext) {
+    let home = Home::new("keep-hidden");
+    let paths = write_config(&home, |_| {});
+    // A core that remembers whether it is hidden, as the real one does.
+    let hidden = std::sync::atomic::AtomicBool::new(false);
+    let scripted = script();
+    let mock = Arc::new(Mock::new(move |request| match request {
+        Request::SetHidden { hidden: now } => {
+            hidden.store(*now, Ordering::Relaxed);
+            Response::Done
+        }
+        Request::Status => match scripted(request) {
+            Response::Status(status) => Response::Status(StatusInfo {
+                hidden: hidden.load(Ordering::Relaxed),
+                ..status
+            }),
+            other => other,
+        },
+        _ => scripted(request),
+    }));
+    let (view, cx) = open(cx, &mock, &home);
+    show(&view, cx, Page::Settings);
+    click_in(cx, "retention", 1);
+    // Changed behind the app's back (the CLI, say).
+    let mut elsewhere = paths
+        .config()
+        .unwrap_or_else(|_| unreachable!("config reads"));
+    elsewhere.relay_presence_seconds = 900;
+    if prefs::save_config(&paths, &elsewhere).is_err() {
+        unreachable!("the config writes");
+    }
+    click_in(cx, "visibility-choice", 2);
+    assert_eq!(actions(&mock), [Request::SetHidden { hidden: true }]);
+    let stored = paths
+        .config()
+        .unwrap_or_else(|_| unreachable!("config reads"));
+    assert!(stored.hidden);
+    assert_eq!(
+        stored.relay_presence_seconds, 900,
+        "the other change is kept"
+    );
+    assert_eq!(stored.history_days, 30, "the staged edit is not written");
+    view.read_with(cx, |app, _| {
+        let draft = app.draft.as_ref();
+        assert_eq!(
+            draft.map(|c| c.history_days),
+            Some(7),
+            "the staged edit stays"
+        );
+        assert_eq!(draft.map(|c| c.hidden), Some(true));
+        assert_eq!(app.saved.as_ref().map(|c| c.hidden), Some(true));
+    });
+    // Visible again is stored too.
+    click_in(cx, "visibility-choice", 0);
+    assert!(paths.config().is_ok_and(|c| !c.hidden));
+}
+
+/// Apply writes the file, drops the old core, and starts a real one that
+/// runs with the new configuration; the draft and the saved copy agree
+/// afterwards.
+#[gpui_kit::test]
+fn apply_restarts_the_core_with_the_new_configuration(cx: &mut TestAppContext) {
+    let home = Home::new("apply");
+    let paths = write_config(&home, |_| {});
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    show(&view, cx, Page::Settings);
+    click_in(cx, "retention", 1);
+    // The real core runs on its own threads: let the test executor wait.
+    cx.executor().allow_parking();
+    click(cx, "apply");
+    let mut restarted = false;
+    for _ in 0..500 {
+        cx.run_until_parked();
+        let ready = view.read_with(cx, |app, _| {
+            app.model.connection == Connection::Hosted
+                && app.model.status.as_ref().map(|s| s.history_days) == Some(7)
+        });
+        if ready {
+            restarted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(restarted, "the core did not restart with the new retention");
+    assert_eq!(paths.config().map(|c| c.history_days).ok(), Some(7));
+    view.read_with(cx, |app, _| {
+        assert_eq!(app.draft, app.saved);
+        assert_eq!(app.saved.as_ref().map(|c| c.history_days), Some(7));
+        // The old (mock) core was dropped, not asked to do anything.
+        assert!(app.model.notices.is_empty(), "{:?}", app.model.notices);
+    });
+    assert_eq!(Arc::strong_count(&mock), 1);
+    assert_eq!(actions(&mock), []);
+    assert!(cx.update(|window, _| window.try_find("apply-bar").is_none()));
+    // Drop the app's core off the test's thread of control.
+    view.update(cx, |app, _| {
+        if let Some(core) = app.backend.take() {
+            std::thread::spawn(move || drop(core));
+        }
+    });
 }

@@ -648,6 +648,72 @@ async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()>
     Ok(())
 }
 
+/// A hidden device registers no presence at the relay (§10): two paired
+/// devices that start hidden never meet over several presence windows,
+/// and meet within one more period once both are visible.
+#[tokio::test(flavor = "multi_thread")]
+async fn hidden_devices_register_no_relay_presence() -> AnyResult<()> {
+    let scratch = Scratch::new("remote-hidden")?;
+    let relay = relay()?;
+    let device = |name: &str| -> AnyResult<Core> {
+        let mut config = CoreConfig::new(
+            scratch.0.join(name).join("state"),
+            scratch.0.join(name).join("downloads"),
+        );
+        config.lan.enabled = false;
+        config.relays = vec![relay.clone()];
+        // The shortest period: a window of 5 seconds every 10.
+        config.relay_presence_seconds = 10;
+        config.hidden = true;
+        std::fs::create_dir_all(scratch.0.join(name))?;
+        let key = KeyFile::new(scratch.0.join(name).join("storage.key"));
+        Ok(Core::start(config, Box::new(key))?)
+    };
+    let alice = device("alice")?;
+    let bob = device("bob")?;
+    let mut alice_events = alice.subscribe();
+    let Response::Qr { text, .. } = alice.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    let paired = bob.request(Request::PairScanQr { text }).await;
+    assert!(matches!(paired, Response::Paired { .. }), "{paired:?}");
+    wait_for(&mut alice_events, |event| match event {
+        Event::Paired { .. } => Some(()),
+        _ => None,
+    })
+    .await?;
+    let route = |core: &Core| {
+        let core = core.clone();
+        async move {
+            match core.request(Request::Contacts).await {
+                Response::Contacts(contacts) => Ok(contacts.first().and_then(|c| c.route)),
+                other => Err(format!("{other:?}")),
+            }
+        }
+    };
+    // More than one full period, so every pair's window has come twice.
+    tokio::time::sleep(Duration::from_secs(25)).await;
+    assert_eq!(route(&alice).await?, None);
+    assert_eq!(route(&bob).await?, None);
+    for core in [&alice, &bob] {
+        assert_eq!(
+            core.request(Request::SetHidden { hidden: false }).await,
+            Response::Done
+        );
+    }
+    let met = tokio::time::timeout(Duration::from_secs(40), async {
+        loop {
+            if route(&alice).await? == Some(crate::api::Route::Relay) {
+                return Ok::<_, String>(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await;
+    assert!(matches!(met, Ok(Ok(()))), "{met:?}");
+    Ok(())
+}
+
 /// An in-memory link that claims to be `kind`.
 struct Pipe(tokio::io::DuplexStream, todoke_transport::LinkInfo);
 

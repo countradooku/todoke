@@ -360,3 +360,234 @@ pub mod mock {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    //! The backend against real daemons: hosting, attaching, stopping, and
+    //! the pool's freshness rule. Every call here blocks, so none runs on
+    //! a GPUI executor.
+
+    use core::time::Duration;
+    use std::path::{Path, PathBuf};
+
+    use todoke_core::config::CoreConfig;
+
+    use super::*;
+
+    type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+    /// A scratch home, removed afterwards.
+    struct Home(PathBuf);
+
+    impl Home {
+        fn new(name: &str) -> AnyResult<Self> {
+            let mut random = [0; 8];
+            getrandom::fill(&mut random)?;
+            Ok(Self(std::env::temp_dir().join(format!(
+                "todoke-backend-{name}-{}",
+                u64::from_le_bytes(random)
+            ))))
+        }
+    }
+
+    impl Drop for Home {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Paths under `home` with a configuration that opens no network
+    /// listener.
+    fn profile(home: &Home) -> AnyResult<Paths> {
+        let paths = Paths::under(&home.0);
+        std::fs::create_dir_all(&home.0)?;
+        let mut config = CoreConfig::new(paths.state_dir.clone(), paths.downloads_dir.clone());
+        config.lan.enabled = false;
+        std::fs::write(&paths.config_file, serde_json::to_vec(&config)?)?;
+        Ok(paths)
+    }
+
+    fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+    }
+
+    /// Waits (up to two seconds) until `done` holds.
+    fn eventually(mut done: impl FnMut() -> bool) -> bool {
+        for _ in 0..100 {
+            if done() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        done()
+    }
+
+    fn status(
+        runtime: &tokio::runtime::Runtime,
+        backend: &dyn Backend,
+    ) -> AnyResult<todoke_core::api::StatusInfo> {
+        match runtime.block_on(backend.request(Request::Status)) {
+            Response::Status(status) => Ok(status),
+            other => Err(format!("{other:?}").into()),
+        }
+    }
+
+    /// The first app hosts the core; a second attaches to it and sees the
+    /// same device and the same changes; stopping the daemon ends both,
+    /// and the endpoint is free to host again.
+    #[test]
+    fn a_second_app_attaches_to_the_hosted_core_and_both_see_it_stop() -> AnyResult<()> {
+        let home = Home::new("attach")?;
+        let paths = profile(&home)?;
+        let runtime = runtime()?;
+        let first = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        assert_eq!(first.connection, Connection::Hosted);
+        assert!(first.backend.alive());
+        let second = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        assert_eq!(second.connection, Connection::Attached);
+        assert!(second.backend.alive());
+        let hosted = status(&runtime, &*first.backend)?;
+        let attached = status(&runtime, &*second.backend)?;
+        assert_eq!(hosted.device, attached.device);
+        assert!(!attached.hidden);
+        // A change made through one is seen through the other.
+        assert_eq!(
+            runtime.block_on(second.backend.request(Request::SetHidden { hidden: true })),
+            Response::Done
+        );
+        assert!(status(&runtime, &*first.backend)?.hidden);
+        assert!(status(&runtime, &*second.backend)?.hidden);
+        stop_daemon(&paths)?;
+        assert!(
+            eventually(|| !first.backend.alive()),
+            "the hosting app notices the stop"
+        );
+        assert!(
+            eventually(|| !second.backend.alive()),
+            "the attached app notices the stream ended"
+        );
+        // Requests to a gone daemon answer with an error, never hang.
+        let Response::Error { .. } = runtime.block_on(second.backend.request(Request::Status))
+        else {
+            return Err("a request to a stopped daemon was answered".into());
+        };
+        // The hosted core still answers its own app, then goes with it.
+        assert!(matches!(
+            runtime.block_on(first.backend.request(Request::Status)),
+            Response::Status(_)
+        ));
+        drop(second);
+        drop(first);
+        assert!(
+            runtime
+                .block_on(Client::connect(&paths.endpoint()))
+                .is_err()
+        );
+        let again = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        assert_eq!(again.connection, Connection::Hosted);
+        Ok(())
+    }
+
+    /// With no daemon, stopping one is an error and attaching fails.
+    #[test]
+    fn stopping_or_attaching_to_nothing_fails() -> AnyResult<()> {
+        let home = Home::new("nothing")?;
+        let paths = profile(&home)?;
+        assert!(stop_daemon(&paths).is_err());
+        assert!(AttachedBackend::connect(&paths.endpoint()).is_err());
+        Ok(())
+    }
+
+    /// A configuration written before the start is what the core runs
+    /// with: retention shows in its status, and a restart picks up a new
+    /// one (what Apply does).
+    #[test]
+    fn a_restart_runs_with_the_configuration_written_meanwhile() -> AnyResult<()> {
+        let home = Home::new("restart")?;
+        let paths = profile(&home)?;
+        let runtime = runtime()?;
+        let first = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        assert_eq!(status(&runtime, &*first.backend)?.history_days, 30);
+        let mut config = paths.config()?;
+        config.history_days = 7;
+        crate::prefs::save_config(&paths, &config)?;
+        // The running core is unchanged until it restarts.
+        assert_eq!(status(&runtime, &*first.backend)?.history_days, 30);
+        drop(first);
+        let second = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        assert_eq!(second.connection, Connection::Hosted);
+        assert_eq!(status(&runtime, &*second.backend)?.history_days, 7);
+        Ok(())
+    }
+
+    /// The pool never sends a request on a connection idle past `FRESH`
+    /// (the daemon closes idle ones, and a request must never be sent
+    /// twice), and sends on a fresh idle one.
+    #[test]
+    fn the_pool_skips_connections_idle_too_long() -> AnyResult<()> {
+        let old = Home::new("pool-old")?;
+        let new = Home::new("pool-new")?;
+        let (old_paths, new_paths) = (profile(&old)?, profile(&new)?);
+        let runtime = runtime()?;
+        let doomed = start(&old_paths).map_err(|connection| format!("{connection:?}"))?;
+        let live = start(&new_paths).map_err(|connection| format!("{connection:?}"))?;
+        let dead = |paths: &Paths| runtime.block_on(Client::connect(&paths.endpoint()));
+        let (fresh_dead, stale_dead) = (dead(&old_paths)?, dead(&old_paths)?);
+        // The connections' daemon goes away; only the stale mark differs.
+        drop(doomed);
+        assert!(eventually(|| dead(&old_paths).is_err()));
+        let long_ago = std::time::Instant::now()
+            .checked_sub(Pool::FRESH + Duration::from_secs(1))
+            .ok_or("the clock has not run that long")?;
+        // A fresh idle connection is used, so a dead one fails the request.
+        let pool = Pool::new(fresh_dead);
+        assert!(
+            runtime
+                .block_on(pool.request(&new_paths.endpoint(), Request::Status))
+                .is_none()
+        );
+        // The same dead connection, idle too long, is dropped unused: the
+        // request goes out on a new connection and is answered.
+        let pool = Pool::new(stale_dead);
+        pool.idle
+            .lock()
+            .map_err(|_| "poisoned")?
+            .iter_mut()
+            .for_each(|(_, since)| *since = long_ago);
+        let response = runtime.block_on(pool.request(&new_paths.endpoint(), Request::Status));
+        assert!(
+            matches!(response, Some(Response::Status(_))),
+            "{response:?}"
+        );
+        // The connection that answered is kept for the next request.
+        assert_eq!(pool.idle.lock().map_err(|_| "poisoned")?.len(), 1);
+        drop(live);
+        Ok(())
+    }
+
+    /// A pool keeps at most `KEEP` idle connections.
+    #[test]
+    fn the_pool_keeps_a_bounded_number_of_idle_connections() -> AnyResult<()> {
+        let home = Home::new("pool-keep")?;
+        let paths = profile(&home)?;
+        let runtime = runtime()?;
+        let hosted = start(&paths).map_err(|connection| format!("{connection:?}"))?;
+        let endpoint: &Path = &paths.endpoint();
+        let pool = Pool::new(runtime.block_on(Client::connect(endpoint))?);
+        runtime
+            .block_on(async {
+                let mut answers = Vec::new();
+                for _ in 0..Pool::KEEP + 3 {
+                    answers.push(pool.request(endpoint, Request::Status).await);
+                }
+                answers
+            })
+            .into_iter()
+            .for_each(|answer| assert!(matches!(answer, Some(Response::Status(_)))));
+        assert!(pool.idle.lock().map_err(|_| "poisoned")?.len() <= Pool::KEEP);
+        drop(hosted);
+        Ok(())
+    }
+}
