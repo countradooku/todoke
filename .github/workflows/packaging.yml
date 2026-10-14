@@ -250,7 +250,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            dbus flatpak flatpak-builder python3-aiohttp python3-tomlkit python3-yaml
+            dbus elfutils flatpak flatpak-builder python3-aiohttp python3-tomlkit python3-yaml
           # Ubuntu 24.04 confines unprivileged user namespaces, which
           # bubblewrap needs on this runner.
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -442,8 +442,9 @@ jobs:
       # Runner only: the test certificates go to the machine's TrustedPeople
       # store, which needs admin. Users install packages signed by a trusted
       # CA, per user, without admin.
+      # Windows PowerShell: PowerShell 7 cannot load the Appx module.
       - name: Install, upgrade, and uninstall the MSIX
-        shell: pwsh
+        shell: powershell
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           foreach ($cer in 'dist\todoke-test-signing.cer', 'dist\upgrade\todoke-test-signing.cer') {

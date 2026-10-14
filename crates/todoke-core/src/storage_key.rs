@@ -492,6 +492,10 @@ fn temporary(path: &Path) -> io::Result<PathBuf> {
 /// Makes a rename or removal in `path`'s directory durable (Unix: the
 /// directory is synced; Windows has no such call, and the file system
 /// journals metadata).
+#[cfg_attr(
+    not(unix),
+    expect(clippy::unnecessary_wraps, reason = "fallible on Unix")
+)]
 fn sync_parent(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     if let Some(dir) = path.parent() {

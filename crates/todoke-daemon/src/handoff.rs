@@ -445,10 +445,16 @@ mod tests {
             .enable_all()
             .build()?;
         let endpoint = paths.handoff_endpoint();
+        // Connections beyond the cap are closed at once, and may fail to
+        // connect at all (macOS cannot read a closed socket's peer): only
+        // those within it must hold.
         let mut silent = Vec::new();
         for _ in 0..MAX_CONNECTIONS * 2 {
-            silent.push(runtime.block_on(endpoint::connect(&endpoint))?);
+            if let Ok(connection) = runtime.block_on(endpoint::connect(&endpoint)) {
+                silent.push(connection);
+            }
         }
+        assert!(silent.len() >= MAX_CONNECTIONS, "{} connected", silent.len());
         let started = std::time::Instant::now();
         let limit = HELLO_DEADLINE + Duration::from_secs(3);
         // While the silent clients hold every slot a request is closed
