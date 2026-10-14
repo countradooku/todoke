@@ -79,6 +79,7 @@ forbidden_features=(
     "todoke-crypto:unaudited-code-pairing"
     "todoke-crypto:insecure-content-without-accept"
     "snow:risky-raw-split"
+    "todoke-core:unaudited-dev"
 )
 
 # Features the root workspace may not enable even through dev-dependencies.

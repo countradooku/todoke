@@ -1212,6 +1212,22 @@ version = "0.1.0"
 [[package]]
 name = "todoke-core"
 version = "0.1.0"
+dependencies = [
+ "getrandom",
+ "libcrux-ml-kem",
+ "proptest",
+ "rustix",
+ "serde",
+ "serde_json",
+ "todoke-crypto",
+ "todoke-discovery",
+ "todoke-fs",
+ "todoke-proto",
+ "todoke-transfer",
+ "todoke-transport",
+ "tokio",
+ "zeroize",
+]
 
 [[package]]
 name = "todoke-crypto"

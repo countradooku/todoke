@@ -144,7 +144,7 @@ expect_manifest() {
 
 # A shipped crate enabling the unaudited suite gate.
 workspace_copy "$scratch/gate"
-cat >> "$scratch/gate/crates/todoke-core/Cargo.toml" <<'TOML'
+cat >> "$scratch/gate/crates/todoke-preview/Cargo.toml" <<'TOML'
 
 [dependencies]
 todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["unaudited-suite-0001"] }
@@ -156,7 +156,7 @@ expect_manifest "unaudited suite feature in a shipped graph" "$scratch/gate/Carg
 
 # A shipped crate enabling the unaudited code-pairing gate (PROTOCOL §16, O2).
 workspace_copy "$scratch/code-gate"
-cat >> "$scratch/code-gate/crates/todoke-core/Cargo.toml" <<'TOML'
+cat >> "$scratch/code-gate/crates/todoke-preview/Cargo.toml" <<'TOML'
 
 [dependencies]
 todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["unaudited-code-pairing"] }
@@ -167,7 +167,7 @@ expect_manifest "unaudited code-pairing feature in a shipped graph" "$scratch/co
 
 # A shipped crate enabling the content consent bypass (PROTOCOL §7.2).
 workspace_copy "$scratch/consent"
-cat >> "$scratch/consent/crates/todoke-core/Cargo.toml" <<'TOML'
+cat >> "$scratch/consent/crates/todoke-preview/Cargo.toml" <<'TOML'
 
 [dependencies]
 todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
@@ -179,7 +179,7 @@ expect_manifest "content consent bypass in a shipped graph" "$scratch/consent/Ca
 # A workspace member enabling the content consent bypass for its own tests:
 # feature unification would compile every shipped crate's tests against it.
 workspace_copy "$scratch/consent-dev"
-cat >> "$scratch/consent-dev/crates/todoke-core/Cargo.toml" <<'TOML'
+cat >> "$scratch/consent-dev/crates/todoke-preview/Cargo.toml" <<'TOML'
 
 [dev-dependencies]
 todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept"] }
@@ -187,6 +187,18 @@ TOML
 cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent-dev/Cargo.toml" > /dev/null
 expect_manifest "content consent bypass in the root development graph" "$scratch/consent-dev/Cargo.toml" \
     "todoke-crypto feature insecure-content-without-accept is enabled in the root workspace's development graph"
+
+# A shipped crate enabling the core's development gate (sessions and code
+# pairing for the daemon and CLI, PROTOCOL §16).
+workspace_copy "$scratch/core-gate"
+cat >> "$scratch/core-gate/crates/todoke-preview/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-core = { path = "../todoke-core", version = "0.1.0", features = ["unaudited-dev"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/core-gate/Cargo.toml" > /dev/null
+expect_manifest "core development gate in a shipped graph" "$scratch/core-gate/Cargo.toml" \
+    'todoke-core feature unaudited-dev is enabled outside dev-dependencies'
 
 # The runtime Noise engine with Snow's raw traffic-key export.
 workspace_copy "$scratch/raw-split"

@@ -17,6 +17,8 @@ publish = false
 # Path dependencies shared by several members (cargo-deny workspace-duplicate).
 todoke-crypto = { path = "crates/todoke-crypto", version = "0.1.0" }
 todoke-proto = { path = "crates/todoke-proto", version = "0.1.0" }
+todoke-discovery = { path = "crates/todoke-discovery", version = "0.1.0" }
+todoke-fs = { path = "crates/todoke-fs", version = "0.1.0" }
 todoke-transfer = { path = "crates/todoke-transfer", version = "0.1.0" }
 todoke-transport = { path = "crates/todoke-transport", version = "0.1.0" }
 # RFC 9285 reference: QR fixture generator and Base45 cross-check tests only.
@@ -52,6 +54,8 @@ serde_json = "=1.0.154"
 unicode-normalization = { version = "=0.1.25", default-features = false }
 # Runtime Noise engine (todoke-crypto) and the offline fixture generator
 # (todoke-proto). Only `hfs` here; see docs/adr/0001-noise-crate.md.
+# Unix filesystem calls without unsafe code (todoke-fs, todoke-core).
+rustix = { version = "=1.1.5", default-features = false, features = ["std", "fs"] }
 # The LAN transport's async runtime (todoke-transport); features are chosen
 # by each user.
 tokio = { version = "=1.53.2", default-features = false }
