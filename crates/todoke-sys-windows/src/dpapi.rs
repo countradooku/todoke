@@ -388,8 +388,13 @@ impl Dpapi {
         // Written aside, then linked into place: a crash never leaves a
         // torn blob under the real name, and a blob there is never
         // replaced.
-        let partial = self.path.with_extension("dpapi.tmp");
-        let _ = std::fs::remove_file(&partial);
+        // Unique per writer: concurrent stores never share or delete it.
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.as_nanos());
+        let partial = self
+            .path
+            .with_extension(format!("dpapi.{}.{nanos}.tmp", std::process::id()));
         let mut file = std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

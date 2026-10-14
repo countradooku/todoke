@@ -242,8 +242,7 @@ impl PlatformKeyStore for SealedFile {
             .seal(&self.context, key)
             .map_err(|_| io::Error::other("sealing the key failed"))?;
         // Written aside, then linked into place: never torn, never replaced.
-        let partial = self.path.with_extension("sealed.tmp");
-        let _ = std::fs::remove_file(&partial);
+        let partial = temporary(&self.path)?;
         let mut file = open_private(&partial, true)?;
         let written = file.write_all(&sealed).and_then(|()| file.sync_all());
         drop(file);
@@ -327,8 +326,7 @@ impl Selected {
             Backend::File => b"file\n",
             Backend::Platform => b"platform\n",
         };
-        let partial = self.marker.with_extension("backend.tmp");
-        let _ = std::fs::remove_file(&partial);
+        let partial = temporary(&self.marker)?;
         let mut file = open_private(&partial, true)?;
         file.write_all(text)?;
         file.sync_all()?;
@@ -481,6 +479,16 @@ impl StorageKeySource for Selected {
     }
 }
 
+/// A fresh name beside `path` for a file written before it moves into
+/// place: random, so concurrent writers never share (or delete) one.
+fn temporary(path: &Path) -> io::Result<PathBuf> {
+    let mut random = [0_u8; 8];
+    getrandom::fill(&mut random).map_err(|_| io::Error::other("randomness"))?;
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{:016x}.tmp", u64::from_le_bytes(random)));
+    Ok(path.with_file_name(name))
+}
+
 /// Makes a rename or removal in `path`'s directory durable (Unix: the
 /// directory is synced; Windows has no such call, and the file system
 /// journals metadata).
@@ -531,8 +539,7 @@ pub fn profile_id(state_dir: &Path) -> io::Result<String> {
                     let _ = write!(id, "{byte:02x}");
                     id
                 });
-            let partial = state_dir.join("storage.id.tmp");
-            let _ = std::fs::remove_file(&partial);
+            let partial = state_dir.join(format!("storage.id.{id}.tmp"));
             let mut file = open_private(&partial, true)?;
             file.write_all(id.as_bytes())?;
             file.sync_all()?;
@@ -825,6 +832,84 @@ mod tests {
         Ok(())
     }
 
+    /// Under `Platform`, a different key already in the store fails the
+    /// start and changes nothing: the file, the store, and the record stay
+    /// as they were.
+    #[test]
+    fn the_platform_policy_refuses_a_conflicting_key_and_changes_nothing() -> TestResult {
+        use crate::config::KeyStorage;
+        let scratch = Scratch::new("selected-conflict-platform")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let file = KeyFile::new(scratch.0.join("storage.key"));
+        let key = file.storage_key()?;
+        let before = std::fs::read(file.path())?;
+        let memory = Memory::default();
+        memory.store(&[7; 32])?;
+        for _ in 0..2 {
+            assert_eq!(
+                selected(&scratch.0, &memory, KeyStorage::Platform)
+                    .storage_key()
+                    .map(|_| ())
+                    .map_err(|e| e.kind()),
+                Err(io::ErrorKind::AlreadyExists)
+            );
+        }
+        assert_eq!(memory.key(), Some([7; 32]));
+        assert_eq!(std::fs::read(file.path())?, before);
+        assert_eq!(file.storage_key()?, key);
+        assert!(!scratch.0.join("storage.backend").exists());
+        assert!(!scratch.0.join("storage.key.retired").exists());
+        Ok(())
+    }
+
+    /// A crash after the key went into the store but before the record was
+    /// written (the store holds the file's key, no record exists): the next
+    /// start completes the migration and nothing is lost.
+    #[test]
+    fn a_crash_between_the_store_and_the_record_migrates_cleanly() -> TestResult {
+        use crate::config::KeyStorage;
+        let scratch = Scratch::new("selected-crash-before-record")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let file = KeyFile::new(scratch.0.join("storage.key"));
+        let key = file.storage_key()?;
+        let memory = Memory::default();
+        memory.store(&key)?;
+        assert!(!scratch.0.join("storage.backend").exists());
+        let source = selected(&scratch.0, &memory, KeyStorage::Auto);
+        assert_eq!(source.storage_key()?, key);
+        assert_eq!(memory.key(), Some(*key));
+        assert!(!file.exists());
+        assert!(!scratch.0.join("storage.key.retired").exists());
+        assert_eq!(
+            std::fs::read(scratch.0.join("storage.backend"))?,
+            b"platform\n"
+        );
+        assert_eq!(source.protection(), crate::api::KeyProtection::Keychain);
+        // And it stays: the next start reads the store.
+        assert_eq!(
+            selected(&scratch.0, &memory, KeyStorage::Auto).storage_key()?,
+            key
+        );
+        Ok(())
+    }
+
+    /// Removing the key file twice (or when there never was one) is fine.
+    #[test]
+    fn removing_the_key_file_twice_is_fine() -> TestResult {
+        let scratch = Scratch::new("key-file-remove-twice")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let file = KeyFile::new(scratch.0.join("storage.key"));
+        file.remove()?;
+        file.storage_key()?;
+        assert!(file.exists());
+        file.remove()?;
+        assert!(!file.exists());
+        file.remove()?;
+        assert!(!file.exists());
+        assert!(!scratch.0.join("storage.key.retired").exists());
+        Ok(())
+    }
+
     /// A wiped (all-zero) key file is refused, never used as a key; a
     /// retired file left behind is cleaned up.
     #[test]
@@ -900,6 +985,37 @@ mod tests {
         assert_ne!(profile_id(&other.0)?, id);
         std::fs::write(scratch.0.join("storage.id"), b"not an id")?;
         assert!(profile_id(&scratch.0).is_err());
+        Ok(())
+    }
+
+    /// Two first starts at once agree on one profile ID.
+    ///
+    /// Fails today: both start with the same partial file name
+    /// (`storage.id.tmp`, `create_new`), so the loser gets `AlreadyExists`
+    /// (or could link the winner's half-written file into place) instead
+    /// of reading the first ID. A per-call temporary name fixes it.
+    #[test]
+    fn concurrent_first_starts_get_one_profile_id() -> TestResult {
+        for round in 0..20 {
+            let scratch = Scratch::new(&format!("profile-id-race-{round}"))?;
+            let barrier = std::sync::Barrier::new(2);
+            let ids = std::thread::scope(|scope| {
+                let start = || {
+                    barrier.wait();
+                    profile_id(&scratch.0)
+                };
+                let first = scope.spawn(start);
+                let second = scope.spawn(start);
+                let join = |handle: std::thread::ScopedJoinHandle<'_, io::Result<String>>| {
+                    handle
+                        .join()
+                        .map_err(|_| io::Error::other("a thread panicked"))?
+                };
+                Ok::<_, io::Error>((join(first)?, join(second)?))
+            })?;
+            assert_eq!(ids.0, ids.1, "round {round}");
+            assert_eq!(profile_id(&scratch.0)?, ids.0);
+        }
         Ok(())
     }
 

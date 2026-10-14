@@ -226,6 +226,59 @@ mod tests {
         Ok(())
     }
 
+    /// Pins that bare paths after an option are sends, and that the
+    /// options before them still apply.
+    #[test]
+    fn bare_paths_mix_with_options() -> Result<(), String> {
+        let cwd = Path::new("/home/me");
+        let launch = parse(args(&["--background", "a", "b"]), cwd)?;
+        assert!(launch.background);
+        assert_eq!(
+            launch.handoff,
+            Handoff::Send {
+                paths: vec!["/home/me/a".into(), "/home/me/b".into()]
+            }
+        );
+        Ok(())
+    }
+
+    /// Pins that after `--send` an argument that starts with `-` is a
+    /// path, not an option (a file named `-rf` or `--version`).
+    #[test]
+    fn a_dashed_path_after_send_is_a_path() -> Result<(), String> {
+        let cwd = Path::new("/home/me");
+        let launch = parse(args(&["--send", "-rf", "--version", "--background"]), cwd)?;
+        assert!(!launch.version);
+        assert!(!launch.background);
+        assert_eq!(
+            launch.handoff,
+            Handoff::Send {
+                paths: vec![
+                    "/home/me/-rf".into(),
+                    "/home/me/--version".into(),
+                    "/home/me/--background".into()
+                ]
+            }
+        );
+        Ok(())
+    }
+
+    /// Pins the Windows repair of Explorer's quoting of a drive root:
+    /// `"%1"` for `C:\` arrives as `C:"`, which is the path `C:\`.
+    #[cfg(windows)]
+    #[test]
+    fn a_trailing_quote_is_the_backslash_it_replaced() -> Result<(), String> {
+        let cwd = Path::new("C:\\Users\\me");
+        let launch = parse(args(&["--send", "C:\"", "D:\\dir"]), cwd)?;
+        assert_eq!(
+            launch.handoff,
+            Handoff::Send {
+                paths: vec![PathBuf::from("C:\\"), PathBuf::from("D:\\dir")]
+            }
+        );
+        Ok(())
+    }
+
     #[test]
     fn paths_come_from_standard_input() {
         let root = if cfg!(windows) { "C:\\" } else { "/" };

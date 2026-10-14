@@ -1445,3 +1445,175 @@ fn handed_over_paths_gather_in_one_picker(cx: &mut TestAppContext) {
         )]
     );
 }
+
+fn send_paths_to_pick() -> todoke_daemon::handoff::Handoff {
+    todoke_daemon::handoff::Handoff::Send {
+        paths: vec![PathBuf::from("/tmp/a.txt")],
+    }
+}
+
+/// A picker cancelled just before its delay ends leaves the next picker
+/// disarmed: the first picker's timer fires into nothing.
+#[gpui_kit::test]
+fn a_cancelled_pickers_timer_never_arms_the_next_picker(cx: &mut TestAppContext) {
+    let home = Home::new("picker-stale");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    view.update_in(cx, |app, window, cx| {
+        app.handoff(send_paths_to_pick(), window, cx);
+    });
+    cx.run_until_parked();
+    let early = tokens::DECISION_DELAY.saturating_sub(core::time::Duration::from_millis(50));
+    cx.executor().advance_clock(early);
+    cx.run_until_parked();
+    click(cx, "picker-cancel");
+    view.read_with(cx, |app, _| assert!(app.picker.open.is_none()));
+    view.update_in(cx, |app, window, cx| {
+        app.handoff(send_paths_to_pick(), window, cx);
+    });
+    cx.run_until_parked();
+    pick(cx, NEAR);
+    // The first picker's timer fires now; the second must stay disarmed.
+    cx.executor()
+        .advance_clock(core::time::Duration::from_millis(100));
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert!(app.picker.open.as_ref().is_some_and(|picker| !picker.armed));
+    });
+    click(cx, "picker-send");
+    assert_eq!(sends(&mock), []);
+    // The second picker's own delay arms it.
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert!(app.picker.open.as_ref().is_some_and(|picker| picker.armed));
+    });
+    click(cx, "picker-send");
+    assert_eq!(
+        sends(&mock),
+        [(NEAR.to_owned(), vec![PathBuf::from("/tmp/a.txt")])]
+    );
+}
+
+/// A receive sheet armed while the window was away is disarmed again when
+/// the window comes forward: a click aimed at what was there before does
+/// nothing until the delay passes.
+#[gpui_kit::test]
+fn the_window_coming_forward_disarms_the_receive_sheet(cx: &mut TestAppContext) {
+    let home = Home::new("sheet-forward");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    mock.emit(Event::OfferReceived(offer("tw", &[("a", "text/plain", 1)])));
+    cx.run_until_parked();
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.sheet.armed));
+    view.update(cx, |app, _| app.closed());
+    view.update_in(cx, super::Todoke::reopened);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert!(!app.sheet.armed);
+        assert_eq!(app.sheet.transfer.as_deref(), Some("tw"));
+    });
+    click(cx, "accept");
+    cx.dispatch_action(super::AcceptAll);
+    assert_eq!(actions(&mock).len(), 0);
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.sheet.armed));
+    click(cx, "accept");
+    assert_eq!(
+        actions(&mock),
+        [Request::Accept {
+            transfer: "tw".into(),
+            files: None,
+        }]
+    );
+}
+
+/// Closing the window drops an open picker and the clipboard text it
+/// held; the window that comes back has none.
+#[gpui_kit::test]
+fn closing_the_window_drops_an_open_picker(cx: &mut TestAppContext) {
+    let home = Home::new("picker-closed");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    cx.write_to_clipboard(ClipboardItem::new_string("a password".into()));
+    cx.dispatch_action(super::SendClipboard);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| {
+        assert!(matches!(
+            app.picker.open.as_ref().map(|picker| &picker.offered),
+            Some(super::picker::Offered::Text(text)) if text.as_str() == "a password"
+        ));
+    });
+    pick(cx, NEAR);
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.update(cx, |app, _| app.closed());
+    view.read_with(cx, |app, _| assert!(app.picker.open.is_none()));
+    view.update_in(cx, super::Todoke::reopened);
+    cx.run_until_parked();
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    view.read_with(cx, |app, _| assert!(app.picker.open.is_none()));
+    assert_eq!(sends(&mock), []);
+}
+
+/// A window started in the background notifies offers, like a closed one.
+#[gpui_kit::test]
+fn a_background_start_notifies_offers(cx: &mut TestAppContext) {
+    let home = Home::new("notify-background");
+    let mock = Arc::new(Mock::new(script()));
+    cx.update(|cx| cx.set_app_identity("org.todoke.todoke", "todoke"));
+    let (view, vcx) = open(cx, &mock, &home);
+    view.update(vcx, |app, _| app.in_background());
+    mock.emit(Event::OfferReceived(offer(
+        "tb",
+        &[("plan.pdf", "application/pdf", 9)],
+    )));
+    vcx.run_until_parked();
+    let shown = vcx.cx.shown_system_notifications();
+    assert_eq!(shown.len(), 1, "{shown:?}");
+    assert_eq!(shown[0].tag.as_ref(), "offer-tb");
+    assert!(!shown[0].body.contains("plan"));
+}
+
+/// Clipboard text over the outbox limit opens no picker and sends nothing:
+/// a notice says why, with or without a contact selected.
+#[gpui_kit::test]
+fn oversized_clipboard_text_is_refused_before_a_picker(cx: &mut TestAppContext) {
+    let home = Home::new("clipboard-large");
+    let mock = Arc::new(Mock::new(script()));
+    let (view, cx) = open(cx, &mock, &home);
+    cx.write_to_clipboard(ClipboardItem::new_string(
+        "x".repeat(crate::outbox::MAX_TEXT + 1),
+    ));
+    let refused = |view: &Entity<Todoke>, cx: &mut VisualTestContext| {
+        view.read_with(cx, |app, _| {
+            assert!(app.picker.open.is_none(), "no picker");
+            assert!(
+                app.model.notices.iter().any(|n| {
+                    n.level == crate::model::Level::Error && n.text.contains("larger than 16 MiB")
+                }),
+                "{:?}",
+                app.model.notices
+            );
+        });
+        assert_eq!(sends(&mock), []);
+        assert!(!crate::outbox::dir(&home.0).exists(), "nothing was written");
+    };
+    // No contact selected among several: it would ask who.
+    cx.dispatch_action(super::SendClipboard);
+    cx.run_until_parked();
+    refused(&view, cx);
+    // A contact selected: it would send at once.
+    view.update(cx, |app, _| {
+        app.model.selected.insert(LAN.to_owned());
+    });
+    cx.dispatch_action(super::SendClipboard);
+    cx.run_until_parked();
+    cx.executor().advance_clock(tokens::DECISION_DELAY);
+    cx.run_until_parked();
+    refused(&view, cx);
+}

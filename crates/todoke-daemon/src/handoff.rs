@@ -430,4 +430,59 @@ mod tests {
         assert!(started.elapsed() < HELLO_DEADLINE);
         Ok(())
     }
+
+    /// More silent clients than the cap, all at once: the extra ones are
+    /// closed, the silent ones time out, and a real request gets through
+    /// within a few seconds.
+    #[test]
+    fn silent_clients_beyond_the_cap_do_not_lock_out_a_real_send() -> AnyResult<()> {
+        let (_home, paths) = scratch("flood")?;
+        let (sender, received) = std::sync::mpsc::channel();
+        let _listening = listen(&paths, move |handoff| {
+            let _ = sender.send(handoff);
+        })?;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        let endpoint = paths.handoff_endpoint();
+        let mut silent = Vec::new();
+        for _ in 0..MAX_CONNECTIONS * 2 {
+            silent.push(runtime.block_on(endpoint::connect(&endpoint))?);
+        }
+        let started = std::time::Instant::now();
+        let limit = HELLO_DEADLINE + Duration::from_secs(3);
+        // While the silent clients hold every slot a request is closed
+        // unanswered; once they time out, it is served.
+        loop {
+            match send(&paths, &Handoff::Show) {
+                Ok(()) => break,
+                Err(_) if started.elapsed() < limit => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        assert_eq!(received.recv_timeout(DEADLINE)?, Handoff::Show);
+        assert!(started.elapsed() < limit);
+        drop(silent);
+        Ok(())
+    }
+
+    /// A send with no paths is refused by the window: nothing is delivered,
+    /// and the endpoint serves the next request.
+    #[test]
+    fn a_send_without_paths_delivers_nothing() -> AnyResult<()> {
+        let (_home, paths) = scratch("empty-send")?;
+        let (sender, received) = std::sync::mpsc::channel();
+        let _listening = listen(&paths, move |handoff| {
+            let _ = sender.send(handoff);
+        })?;
+        // The window may answer or close the connection; either way it
+        // delivers nothing.
+        let _answer = send(&paths, &Handoff::Send { paths: Vec::new() });
+        assert!(received.recv_timeout(Duration::from_millis(300)).is_err());
+        send(&paths, &Handoff::Show)?;
+        assert_eq!(received.recv_timeout(DEADLINE)?, Handoff::Show);
+        Ok(())
+    }
 }
