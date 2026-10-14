@@ -1290,9 +1290,11 @@ dependencies = [
  "getrandom",
  "proptest",
  "qrcode",
+ "serde",
  "serde_json",
  "todoke-core",
  "todoke-daemon",
+ "todoke-fs",
  "tokio",
  "zeroize",
 ]

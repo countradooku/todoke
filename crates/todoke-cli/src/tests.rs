@@ -17,6 +17,13 @@ fn hostile_names_are_escaped() {
         ("back\\slash", "back\\\\slash"),
         ("bom\u{feff}", "bom\\u{feff}"),
         ("caf\u{e9} \u{1f600}", "caf\u{e9} \u{1f600}"),
+        // Tags spelling hidden text, a Hangul filler, a variation selector,
+        // a soft hyphen, DEL.
+        ("a\u{e0041}\u{e0042}b", "a\\u{e0041}\\u{e0042}b"),
+        ("x\u{3164}y", "x\\u{3164}y"),
+        ("o\u{fe0f}k", "o\\u{fe0f}k"),
+        ("soft\u{ad}hyphen", "soft\\u{ad}hyphen"),
+        ("del\u{7f}", "del\\u{7f}"),
     ];
     for (raw, shown) in cases {
         assert_eq!(escape(raw), shown, "{raw:?}");
@@ -96,6 +103,26 @@ proptest! {
     #[test]
     fn escaped_text_is_inert(text in "\\PC*|[\\x00-\\x1f\\x7f-\\x9f\\u{200b}-\\u{200f}\\u{202a}-\\u{202e}]*") {
         let shown = escape(&text);
-        prop_assert!(!shown.chars().any(|c| c.is_control() || is_hidden(c)));
+        prop_assert!(!shown.chars().any(|c| c.is_control() || todoke_fs::is_invisible(c)));
     }
+}
+
+/// `--json` output carries no raw control or invisible character a peer
+/// chose, and still means the same.
+#[test]
+fn json_output_escapes_what_a_terminal_would_act_on() -> Result<(), serde_json::Error> {
+    let name = "c1\u{9b}2J osc\u{9d}0;t\u{7} del\u{7f} rlo\u{202e} tag\u{e0041} fill\u{3164}";
+    let event = Event::Ended {
+        transfer: "aa".into(),
+        reason: todoke_core::api::TransferState::Failed,
+        message: name.into(),
+    };
+    let line = json(&event);
+    assert!(line.is_ascii(), "{line}");
+    assert!(
+        line.contains("\\u009b") && line.contains("\\udb40\\udc41"),
+        "{line}"
+    );
+    assert_eq!(serde_json::from_str::<Event>(&line)?, event);
+    Ok(())
 }

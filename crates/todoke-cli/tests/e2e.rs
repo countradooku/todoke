@@ -290,7 +290,7 @@ async fn resume_after_crash(large: u64, limit: Duration) -> AnyResult<()> {
     let files = make_folder(&scratch.0.join("outbox"), large)?;
     let mut alice_events = alice.events().await?;
     let mut bob_events = bob.events().await?;
-    let Response::Offered { transfer } = bob
+    let Response::Offered { transfer, .. } = bob
         .request(Request::Send {
             contact: alice_device.clone(),
             paths: vec![scratch.0.join("outbox").join("photos")],
@@ -378,4 +378,40 @@ async fn two_daemons_resume_a_folder_after_a_crash() -> AnyResult<()> {
 #[ignore = "2 GiB: CI runs it in release mode"]
 async fn two_gigabytes() -> AnyResult<()> {
     resume_after_crash(2048 * MIB, Duration::from_mins(30)).await
+}
+
+/// A second daemon for the same home stops at the endpoint, before it
+/// opens the identity or the quarantine; so does one whose configuration
+/// names another state directory.
+#[tokio::test]
+async fn a_second_daemon_is_refused() -> AnyResult<()> {
+    let scratch = Scratch::new("second")?;
+    let discovery = scratch.0.join("discovery");
+    let mut alice = Device::new(&scratch.0, "alice", &discovery)?;
+    alice.start().await?;
+    let second = Command::new(env!("CARGO_BIN_EXE_todoke"))
+        .args(["daemon", "run"])
+        .env("TODOKE_HOME", &alice.home)
+        .stdout(Stdio::null())
+        .output()?;
+    assert!(!second.status.success());
+    let said = String::from_utf8_lossy(&second.stderr);
+    assert!(said.contains("another daemon"), "{said}");
+    alice.device().await?;
+    alice.stop().await?;
+
+    let elsewhere = Device::new(&scratch.0, "elsewhere", &discovery)?;
+    let paths = elsewhere.paths();
+    let mut config: CoreConfig = serde_json::from_slice(&std::fs::read(&paths.config_file)?)?;
+    config.state_dir = scratch.0.join("other-state");
+    std::fs::write(&paths.config_file, serde_json::to_vec(&config)?)?;
+    let refused = Command::new(env!("CARGO_BIN_EXE_todoke"))
+        .args(["daemon", "run"])
+        .env("TODOKE_HOME", &elsewhere.home)
+        .stdout(Stdio::null())
+        .output()?;
+    assert!(!refused.status.success());
+    assert!(String::from_utf8_lossy(&refused.stderr).contains("state_dir must be"));
+    assert!(!scratch.0.join("other-state").exists());
+    Ok(())
 }

@@ -15,16 +15,18 @@ use core::fmt::Write as _;
 
 use todoke_core::api::{ContactInfo, EntryInfo, Event, OfferInfo, StatusInfo, TransferInfo};
 
-/// Escapes untrusted text for a terminal: every control character,
-/// bidirectional control, and invisible formatting character becomes
-/// `\u{…}`; a backslash becomes `\\`.
+/// Escapes untrusted text for a terminal: every control character and
+/// every character that hides or reorders text ([`todoke_fs::is_invisible`]:
+/// bidi controls, tags, fillers, joiners, variation selectors, and the
+/// rest of the default-ignorable code points) becomes `\u{…}`; a backslash
+/// becomes `\\`.
 #[must_use]
 pub fn escape(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars() {
         if c == '\\' {
             out.push_str("\\\\");
-        } else if c.is_control() || is_hidden(c) {
+        } else if c.is_control() || todoke_fs::is_invisible(c) {
             let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
         } else {
             out.push(c);
@@ -33,19 +35,26 @@ pub fn escape(text: &str) -> String {
     out
 }
 
-/// Characters that change or hide what is displayed without being control
-/// characters: bidirectional embeddings, overrides, isolates, and marks;
-/// zero-width characters; line and paragraph separators; the BOM.
-fn is_hidden(c: char) -> bool {
-    matches!(
-        c,
-        '\u{061c}'
-            | '\u{200b}'..='\u{200f}'
-            | '\u{2028}'..='\u{202e}'
-            | '\u{2060}'..='\u{2069}'
-            | '\u{feff}'
-            | '\u{fff9}'..='\u{fffb}'
-    )
+/// `value` as one line of JSON for a terminal or a pipe: JSON escapes
+/// only U+0000–U+001F, so every other control character and every
+/// character [`escape`] escapes is written as a `\u` escape too. The JSON
+/// means the same; a terminal shows nothing a peer smuggled in.
+#[must_use]
+pub fn json(value: &impl serde::Serialize) -> String {
+    let text = serde_json::to_string(value).unwrap_or_default();
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        // Outside strings JSON is ASCII, so these occur only in strings.
+        if c.is_control() || todoke_fs::is_invisible(c) {
+            let mut units = [0_u16; 2];
+            for unit in c.encode_utf16(&mut units) {
+                let _ = write!(out, "\\u{unit:04x}");
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 /// Bytes in human units.
@@ -212,6 +221,9 @@ pub fn event(event: &Event) -> String {
         ),
         Event::Completed { transfer } => format!("{} received", short(transfer)),
         Event::Delivered { transfer } => format!("{} delivered (signed receipt)", short(transfer)),
+        Event::Missed { events } => {
+            format!("{events} events were missed; offers and transfers are re-read")
+        }
         Event::Ended {
             transfer,
             reason,
@@ -239,5 +251,5 @@ pub fn qr(text: &str) -> Result<String, qrcode::types::QrError> {
         .build())
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_family = "wasm")))]
 mod tests;

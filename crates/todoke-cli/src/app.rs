@@ -6,7 +6,7 @@ use std::process::ExitCode;
 
 use clap::{CommandFactory as _, Parser, Subcommand, ValueEnum};
 use todoke_cli::{bytes, contacts, entries, escape, event, qr, short, status, transfers};
-use todoke_core::api::{ErrorCode, Event, OfferInfo, Request, Response};
+use todoke_core::api::{ErrorCode, Event, OfferInfo, Request, Response, TransferState};
 use todoke_daemon::Paths;
 use todoke_daemon::ipc::Client;
 use todoke_daemon::service::{self, Kind};
@@ -96,10 +96,11 @@ enum Pair {
         /// The text, starting `TODOKE:`.
         text: Option<String>,
     },
-    /// Enter the code another device shows.
+    /// Enter the code another device shows (asked for on the terminal, so
+    /// it stays out of the process list and shell history).
     Code {
-        /// The ten digits.
-        code: String,
+        /// The ten digits; `-` or nothing asks for them.
+        code: Option<String>,
         /// Which nearby device (from `todoke strangers`); needed only if
         /// several are waiting.
         #[arg(long)]
@@ -154,6 +155,10 @@ impl From<std::io::Error> for Failure {
             std::io::ErrorKind::PermissionDenied => {
                 Self::new("the daemon refused this client (another user's daemon?)", 3)
             }
+            std::io::ErrorKind::ResourceBusy => Self::new(
+                "the daemon is serving too many clients; close some and try again",
+                3,
+            ),
             _ => Self::new(format!("talking to the daemon failed: {error}"), 3),
         }
     }
@@ -219,12 +224,12 @@ fn show(
             _ => 1,
         };
         if json {
-            println!("{}", serde_json::to_string(response).unwrap_or_default());
+            println!("{}", todoke_cli::json(response));
         }
         return Err(Failure::new(escape(message), exit));
     }
     if json {
-        println!("{}", serde_json::to_string(response).unwrap_or_default());
+        println!("{}", todoke_cli::json(response));
     } else if let Some(text) = human(response) {
         print!("{text}");
     }
@@ -329,13 +334,21 @@ async fn send(
     };
     let response = daemon.request(Request::Send { contact, paths }).await?;
     let transfer = match &response {
-        Response::Offered { transfer } => Some(transfer.clone()),
+        Response::Offered { transfer, .. } => Some(transfer.clone()),
         _ => None,
     };
     show(json, &response, |r| match r {
-        Response::Offered { transfer } => Some(format!(
-            "offered as {}; it is sent when the contact accepts\n",
-            short(transfer)
+        Response::Offered { transfer, skipped } => Some(format!(
+            "offered as {}; it is sent when the contact accepts\n{}",
+            short(transfer),
+            if *skipped > 0 {
+                format!(
+                    "{skipped} entries left out (links, special files, unreadable \
+                     entries, names other systems cannot use, or duplicate names)\n"
+                )
+            } else {
+                String::new()
+            }
         )),
         _ => None,
     })?;
@@ -347,7 +360,7 @@ async fn send(
 
 fn print_event(json: bool, next: &Event) {
     if json {
-        println!("{}", serde_json::to_string(next).unwrap_or_default());
+        println!("{}", todoke_cli::json(next));
     } else {
         println!("{}", event(next));
     }
@@ -372,25 +385,23 @@ async fn pairing(json: bool, mut daemon: Client, pair: Pair) -> Result<(), Failu
                     ))
                 }
                 Response::Code { code, .. } => Some(format!(
-                    "Code: {} {}\nOn the other device run `todoke pair code {code}`.\nIt expires in 5 minutes. Waiting...\n",
+                    "Code: {} {}\nOn the other device run `todoke pair code` and enter it.\nIt expires in 5 minutes. Waiting...\n",
                     &code[..5.min(code.len())],
                     code.get(5..).unwrap_or_default()
                 )),
                 _ => None,
             })?;
             let _ = std::io::stdout().flush();
-            wait_for_pairing(json, events).await
+            let waited = wait_for_pairing(json, events).await;
+            // However the wait ended (paired, expired, Ctrl-C), the offer
+            // shown can no longer be used.
+            if let Ok(mut daemon) = connect().await {
+                let _ = daemon.request(Request::StopPairing).await;
+            }
+            waited
         }
         Pair::Scan { text } => {
-            let text = if let Some(text) = text.filter(|text| text != "-") {
-                zeroize::Zeroizing::new(text)
-            } else {
-                let mut line = zeroize::Zeroizing::new(String::new());
-                std::io::stdin()
-                    .read_line(&mut line)
-                    .map_err(|error| Failure::new(error.to_string(), 2))?;
-                line
-            };
+            let text = secret(text, "pairing text: ")?;
             let request = Request::PairScanQr {
                 text: text.trim().to_owned(),
             };
@@ -401,6 +412,7 @@ async fn pairing(json: bool, mut daemon: Client, pair: Pair) -> Result<(), Failu
                 Some(stranger) => stranger,
                 None => only_stranger(&mut daemon).await?,
             };
+            let code = secret(code, "code: ")?;
             let request = Request::PairEnterCode {
                 code: code.chars().filter(char::is_ascii_digit).collect(),
                 stranger,
@@ -409,6 +421,20 @@ async fn pairing(json: bool, mut daemon: Client, pair: Pair) -> Result<(), Failu
         }
         Pair::Stop => show(json, &daemon.request(Request::StopPairing).await?, |_| None),
     }
+}
+
+/// A pairing secret: from the argument, or (`-` or none) read from
+/// standard input after `prompt` on standard error.
+fn secret(given: Option<String>, prompt: &str) -> Result<zeroize::Zeroizing<String>, Failure> {
+    if let Some(given) = given.filter(|given| given != "-") {
+        return Ok(zeroize::Zeroizing::new(given));
+    }
+    eprint!("{prompt}");
+    let mut line = zeroize::Zeroizing::new(String::new());
+    std::io::stdin()
+        .read_line(&mut line)
+        .map_err(|error| Failure::new(error.to_string(), 2))?;
+    Ok(line)
 }
 
 fn paired(response: &Response) -> Option<String> {
@@ -442,7 +468,7 @@ async fn wait_for_pairing(
     json: bool,
     mut events: todoke_daemon::ipc::Events,
 ) -> Result<(), Failure> {
-    let wait = tokio::time::timeout(std::time::Duration::from_secs(300), async {
+    let wait = tokio::time::timeout(std::time::Duration::from_mins(5), async {
         while let Some(next) = events.next().await? {
             if let Event::Paired { .. } = next {
                 print_event(json, &next);
@@ -451,9 +477,9 @@ async fn wait_for_pairing(
         }
         Err(Failure::new("the daemon stopped", 1))
     });
-    match wait.await {
-        Ok(result) => result,
-        Err(_) => Err(Failure::new("the offer expired unused", 1)),
+    tokio::select! {
+        waited = wait => waited.unwrap_or_else(|_| Err(Failure::new("the offer expired unused", 1))),
+        _ = tokio::signal::ctrl_c() => Err(Failure::new("stopped; the offer was withdrawn", 130)),
     }
 }
 
@@ -484,6 +510,24 @@ async fn wait_for_delivery(
             } if moving == transfer => {
                 print_event(json, &next);
             }
+            Event::Missed { .. } => {
+                // What was missed may have been the outcome: ask.
+                let response = connect().await?.request(Request::Transfers).await?;
+                if let Response::Transfers(list) = response
+                    && let Some(found) = list.iter().find(|info| info.transfer == transfer)
+                {
+                    match found.state {
+                        TransferState::Delivered => return Ok(()),
+                        state if state.is_finished() => {
+                            return Err(Failure::new(
+                                format!("the transfer did not complete: {}", state.as_str()),
+                                1,
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -493,20 +537,12 @@ async fn wait_for_delivery(
 async fn receive(json: bool, yes: bool) -> Result<(), Failure> {
     // Subscribe, then list what already waits: no offer falls between.
     let mut events = connect().await?.subscribe().await?;
-    let response = connect().await?.request(Request::Offers).await?;
-    let Response::Offers(waiting) = response else {
-        return show(json, &response, |_| None);
-    };
     if !json {
         println!("waiting for offers (Ctrl-C to stop)");
     }
     // Listed offers whose event may still be on its way.
     let mut listed: Vec<String> = Vec::new();
-    for offer in waiting {
-        print_event(json, &Event::OfferReceived(offer.clone()));
-        decide(json, yes, &offer).await?;
-        listed.push(offer.transfer);
-    }
+    decide_waiting(json, yes, &mut listed).await?;
     while let Some(next) = events.next().await? {
         match &next {
             Event::OfferReceived(offer) => {
@@ -515,12 +551,16 @@ async fn receive(json: bool, yes: bool) -> Result<(), Failure> {
                     continue;
                 }
                 print_event(json, &next);
-                decide(json, yes, offer).await?;
+                decide(json, yes, offer).await;
             }
             Event::Ended { transfer, .. } => {
                 // A later offer of it is a new decision (§7.5).
                 listed.retain(|id| id != transfer);
                 print_event(json, &next);
+            }
+            Event::Missed { .. } => {
+                print_event(json, &next);
+                decide_waiting(json, yes, &mut listed).await?;
             }
             _ => print_event(json, &next),
         }
@@ -528,8 +568,39 @@ async fn receive(json: bool, yes: bool) -> Result<(), Failure> {
     Ok(())
 }
 
-/// Shows an offer's entries and accepts or declines it.
-async fn decide(json: bool, yes: bool, offer: &OfferInfo) -> Result<(), Failure> {
+/// Decides every offer waiting now, noting each in `listed`; asks again
+/// until no new one is listed (one answer lists a bounded number).
+async fn decide_waiting(json: bool, yes: bool, listed: &mut Vec<String>) -> Result<(), Failure> {
+    loop {
+        let response = connect().await?.request(Request::Offers).await?;
+        let Response::Offers(waiting) = response else {
+            return show(json, &response, |_| None);
+        };
+        let mut new = false;
+        for offer in waiting {
+            if listed.contains(&offer.transfer) {
+                continue;
+            }
+            new = true;
+            print_event(json, &Event::OfferReceived(offer.clone()));
+            decide(json, yes, &offer).await;
+            listed.push(offer.transfer);
+        }
+        if !new {
+            return Ok(());
+        }
+    }
+}
+
+/// Shows an offer's entries and accepts or declines it. A failure (the
+/// sender cancelled meanwhile, say) is reported and receiving goes on.
+async fn decide(json: bool, yes: bool, offer: &OfferInfo) {
+    if let Err(failure) = try_decide(json, yes, offer).await {
+        eprintln!("todoke: {}", failure.message);
+    }
+}
+
+async fn try_decide(json: bool, yes: bool, offer: &OfferInfo) -> Result<(), Failure> {
     if !json {
         print!("{}", entries(&offer.entries));
     }
@@ -556,10 +627,11 @@ async fn decide(json: bool, yes: bool, offer: &OfferInfo) -> Result<(), Failure>
     })
 }
 
-/// Asks a yes/no question on the terminal; anything but y or yes is no.
+/// Asks a yes/no question on the terminal (on standard error, so `--json`
+/// output stays JSON); anything but y or yes is no.
 async fn ask(question: &str) -> bool {
-    print!("{question}");
-    let _ = std::io::stdout().flush();
+    eprint!("{question}");
+    let _ = std::io::stderr().flush();
     let answer = tokio::task::spawn_blocking(|| {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line).map(|_| line)
