@@ -31,6 +31,16 @@ case "$nat_type" in
 esac
 
 work="$(mktemp -d)"
+failed() {
+    echo "failed at line $1: $2" >&2
+    for log in relay.out relay.err alice.err bob.err pair.err qr.json receive.out; do
+        if [[ -s "$work/$log" ]]; then
+            echo "--- $log" >&2
+            tail -20 "$work/$log" >&2
+        fi
+    done
+}
+trap 'failed "$LINENO" "$BASH_COMMAND"' ERR
 namespaces=(wan relay nat-a nat-b client-a client-b)
 pids=()
 cleanup() {

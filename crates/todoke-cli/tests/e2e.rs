@@ -565,7 +565,15 @@ async fn two_daemons_pair_and_send_through_a_relay() -> AnyResult<()> {
         return Err("not offered".into());
     };
     let limit = Duration::from_mins(2);
-    wait_for_offer(&alice, &mut alice_events, &transfer, limit).await?;
+    if let Err(error) = wait_for_offer(&alice, &mut alice_events, &transfer, limit).await {
+        // Where each side stood, for a failure on a CI runner.
+        eprintln!(
+            "alice: {:?}\nbob: {:?}",
+            alice.request(Request::Transfers).await,
+            bob.request(Request::Transfers).await
+        );
+        return Err(error);
+    }
     assert_eq!(
         alice
             .request(Request::Accept {

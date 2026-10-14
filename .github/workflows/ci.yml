@@ -40,7 +40,8 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -W clippy::pedantic
       - name: Test, including documentation
-        run: cargo test --workspace --locked
+        # Every crate's results, even after one fails.
+        run: cargo test --workspace --locked --no-fail-fast
       # The workspace's tests enable the development gates; built alone,
       # the core and the shipped binary must refuse to start sessions.
       - name: Check that release builds keep sessions disabled

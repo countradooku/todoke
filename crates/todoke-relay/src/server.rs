@@ -247,6 +247,10 @@ impl Source {
     /// Whether one more event fits `rate`, whose allowance is full again at
     /// `full`; if it does, `full` moves on.
     fn allow(full: &mut Instant, rate: Rate, now: Instant) -> bool {
+        // A rate too high to measure is no limit.
+        if rate.interval.is_zero() {
+            return true;
+        }
         let start = (*full).max(now);
         let limit = now + rate.interval * rate.burst;
         if start + rate.interval > limit {
@@ -389,8 +393,9 @@ fn admit(shared: &Shared, source: IpAddr) -> bool {
     if metrics.connections.load(Ordering::Relaxed) >= shared.config.max_connections {
         return false;
     }
-    let now = Instant::now();
     let mut sources = lock(&shared.sources);
+    // Read under the lock: an allowance never moves past a later `now`.
+    let now = Instant::now();
     let entry = sources.entry(source).or_insert(Source {
         connections: 0,
         connect_full: now,
@@ -420,8 +425,9 @@ fn release(shared: &Shared, source: IpAddr) {
 
 /// Whether `source` may register one more room now.
 fn may_register(shared: &Shared, source: IpAddr) -> bool {
+    let mut sources = lock(&shared.sources);
     let now = Instant::now();
-    lock(&shared.sources).get_mut(&source).is_some_and(|entry| {
+    sources.get_mut(&source).is_some_and(|entry| {
         Source::allow(
             &mut entry.register_full,
             Rate::per_second(shared.config.registers_per_source_per_second),
