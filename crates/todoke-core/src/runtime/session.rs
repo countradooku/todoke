@@ -55,6 +55,12 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
     let queue_source = queue.source;
     let (commands, mut inbox) = mpsc::channel(32);
     state.sessions.borrow_mut().insert(peer, commands);
+    let route = if established.link().kind() == todoke_transport::LinkKind::Relay {
+        crate::api::Route::Relay
+    } else {
+        crate::api::Route::Lan
+    };
+    state.routes.borrow_mut().insert(peer, route);
     let identity = &state.identity;
     let session = established.session();
     let mono = session.now();
@@ -74,6 +80,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
     );
     let Ok(mut engine) = engine else {
         state.sessions.borrow_mut().remove(&peer);
+        state.routes.borrow_mut().remove(&peer);
         return;
     };
     let mut waiting = queue_offers;
@@ -160,6 +167,7 @@ fn finish(
     offers.extend(waiting);
     let (source, _) = engine.into_parts();
     state.sessions.borrow_mut().remove(&peer);
+    state.routes.borrow_mut().remove(&peer);
     state.queues.borrow_mut().insert(
         peer,
         PeerQueue {
@@ -279,10 +287,11 @@ fn selectable(state: &State, id: &TransferId) -> Vec<u32> {
 
 /// Ends `id` for good with `reason`, telling the user.
 pub(super) fn end(state: &State, id: &TransferId, reason: TransferState, message: &str) {
-    state.set_state(id, reason);
+    // The detail first: the history entry `set_state` writes keeps it.
     if let Some(record) = state.transfers.borrow_mut().get_mut(id) {
         record.detail = Some(message.to_owned());
     }
+    state.set_state(id, reason);
     state.emit(Event::Ended {
         transfer: hex(id),
         reason,
@@ -307,6 +316,16 @@ fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer:
             detail: None,
             done: 0,
             total: view.total_bytes,
+            files: view.file_count,
+            names: view
+                .entries
+                .iter()
+                .filter(|entry| entry.parent == 0)
+                .take(crate::api::HISTORY_NAMES)
+                .map(|entry| entry.name.clone())
+                .collect(),
+            manifest_hash: Some(view.manifest_hash),
+            receipt: None,
         },
     );
     let offer = OfferInfo {
@@ -320,6 +339,7 @@ fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer:
                 parent: entry.parent,
                 directory: entry.kind == todoke_proto::transfer::EntryKind::Directory,
                 name: entry.name.clone(),
+                mime: entry.mime.clone(),
                 size: entry.size,
             })
             .collect(),
@@ -333,16 +353,52 @@ fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer:
     state.emit(Event::OfferReceived(offer));
 }
 
+/// Keeps the signed receipt of a transfer for its history entry.
+fn keep_receipt(
+    state: &State,
+    id: &TransferId,
+    receipt_id: [u8; 16],
+    completed_at: todoke_proto::time::UnixTime,
+) {
+    if let Some(record) = state.transfers.borrow_mut().get_mut(id) {
+        record.receipt = Some((receipt_id, completed_at));
+    }
+}
+
+/// Why a receiver rejected, for people.
+const fn rejection(reason: RejectReason) -> &'static str {
+    match reason {
+        RejectReason::Declined => "declined",
+        RejectReason::Quota => "the receiver's storage quota would be exceeded",
+        RejectReason::UnsupportedDestination => {
+            "the receiver's destination cannot hold these files"
+        }
+        RejectReason::Expired => "no decision was made in time",
+    }
+}
+
 /// Mirrors an engine event into the core's records and events.
 fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
     match event {
         TransferEvent::OfferReceived(view) => offer_received(state, peer, &view),
+        TransferEvent::OfferSent {
+            transfer_id,
+            manifest_hash,
+        } => {
+            if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
+                record.manifest_hash = Some(manifest_hash);
+            }
+        }
         TransferEvent::Accepted {
-            transfer_id, bytes, ..
+            transfer_id,
+            files,
+            bytes,
+            ..
         } => {
             state.set_state(&transfer_id, TransferState::Accepted);
             if let Some(record) = state.transfers.borrow_mut().get_mut(&transfer_id) {
                 record.total = bytes;
+                record.files = files;
             }
         }
         TransferEvent::Progress(progress) => {
@@ -359,14 +415,31 @@ fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
                 bytes_per_second: progress.bytes_per_second,
             });
         }
-        TransferEvent::Completed { transfer_id } => {
-            state.set_state(&transfer_id, TransferState::Received);
+        other => report_end(state, &other),
+    }
+}
+
+/// Mirrors an engine event that ends (or interrupts) a transfer.
+fn report_end(state: &State, event: &TransferEvent) {
+    match event {
+        TransferEvent::Completed {
+            transfer_id,
+            completed_at,
+            receipt_id,
+        } => {
+            keep_receipt(state, transfer_id, *receipt_id, *completed_at);
+            state.set_state(transfer_id, TransferState::Received);
             state.emit(Event::Completed {
                 transfer: hex(transfer_id),
             });
         }
-        TransferEvent::DeliveryConfirmed { transfer_id, .. } => {
-            state.set_state(&transfer_id, TransferState::Delivered);
+        TransferEvent::DeliveryConfirmed {
+            transfer_id,
+            completed_at,
+            receipt_id,
+        } => {
+            keep_receipt(state, transfer_id, *receipt_id, *completed_at);
+            state.set_state(transfer_id, TransferState::Delivered);
             state.emit(Event::Delivered {
                 transfer: hex(transfer_id),
             });
@@ -374,7 +447,7 @@ fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
         TransferEvent::DeliveryUnconfirmed { transfer_id, .. } => {
             end(
                 state,
-                &transfer_id,
+                transfer_id,
                 TransferState::Unconfirmed,
                 "no signed receipt arrived",
             );
@@ -384,18 +457,11 @@ fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
             reason,
             ..
         } => {
-            let why = match reason {
-                RejectReason::Declined => "declined",
-                RejectReason::Quota => "the receiver's storage quota would be exceeded",
-                RejectReason::UnsupportedDestination => {
-                    "the receiver's destination cannot hold these files"
-                }
-                RejectReason::Expired => "no decision was made in time",
-            };
-            end(state, &transfer_id, TransferState::Rejected, why);
+            let why = rejection(*reason);
+            end(state, transfer_id, TransferState::Rejected, why);
         }
         TransferEvent::Expired { transfer_id, .. } => {
-            state.set_state(&transfer_id, TransferState::Interrupted);
+            state.set_state(transfer_id, TransferState::Interrupted);
             state.emit(Event::Ended {
                 transfer: hex(transfer_id),
                 reason: TransferState::Interrupted,
@@ -406,7 +472,7 @@ fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
         TransferEvent::Cancelled { transfer_id, .. } => {
             end(
                 state,
-                &transfer_id,
+                transfer_id,
                 TransferState::Cancelled,
                 "the transfer was cancelled",
             );
@@ -418,13 +484,13 @@ fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
         } => {
             end(
                 state,
-                &transfer_id,
+                transfer_id,
                 TransferState::Failed,
                 &failure.code.to_string(),
             );
         }
         TransferEvent::Interrupted { transfer_id, .. } => {
-            state.set_state(&transfer_id, TransferState::Interrupted);
+            state.set_state(transfer_id, TransferState::Interrupted);
             state.emit(Event::Ended {
                 transfer: hex(transfer_id),
                 reason: TransferState::Interrupted,

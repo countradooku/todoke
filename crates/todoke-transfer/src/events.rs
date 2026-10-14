@@ -257,6 +257,8 @@ pub struct OfferView {
     pub created_at: UnixTime,
     /// When the manifest expires.
     pub expires_at: UnixTime,
+    /// The manifest's hash (§7.1): what the Accept and the receipt bind.
+    pub manifest_hash: [u8; 32],
     /// Regular files.
     pub file_count: u32,
     /// Sum of all file sizes.
@@ -324,6 +326,8 @@ pub enum TransferEvent {
     OfferSent {
         /// The transfer.
         transfer_id: TransferId,
+        /// The manifest's hash (§7.1).
+        manifest_hash: [u8; 32],
     },
     /// A verified Accept exists: the receiver signed it, or the sender
     /// verified it.
@@ -364,6 +368,11 @@ pub enum TransferEvent {
     Completed {
         /// The transfer.
         transfer_id: TransferId,
+        /// When this device finished, on its clock (the receipt's
+        /// `completed_at`).
+        completed_at: UnixTime,
+        /// The ID of the receipt this device signed.
+        receipt_id: [u8; 16],
     },
     /// The sender verified the receiver's signed delivery receipt (§7.7).
     DeliveryConfirmed {

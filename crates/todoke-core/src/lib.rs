@@ -16,6 +16,8 @@ pub mod api;
 pub mod config;
 #[cfg(all(not(target_family = "wasm"), feature = "unaudited-dev"))]
 mod discovery;
+#[cfg(not(target_family = "wasm"))]
+pub mod history;
 pub mod profile;
 #[cfg(not(target_family = "wasm"))]
 pub mod runtime;

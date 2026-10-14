@@ -41,6 +41,13 @@ workflow=.github/workflows/ci.yml
 
 expect pass "current configuration" "$deny" "$workflow"
 
+# deny.toml leaves the desktop app out (deny-desktop.toml covers it); without
+# that exclusion its GUI toolkit compiles getrandom 0.2 on Linux, which
+# deny.toml says is never compiled, and the guard must see it.
+mutate "$deny" "$scratch/no-exclude.toml" 'exclude = ["todoke-desktop"]' ''
+expect fail "desktop graph checked against deny.toml when not excluded" "$scratch/no-exclude.toml" "$workflow" \
+    'getrandom@0.2.17 is compiled outside dev-dependencies'
+
 # A cross target missing from the guard's list.
 mutate "$workflow" "$scratch/extra-target.yml" '- target: wasm32-unknown-unknown' \
     '          - target: wasm32-unknown-unknown
@@ -187,6 +194,17 @@ TOML
 cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent-dev/Cargo.toml" > /dev/null
 expect_manifest "content consent bypass in the root development graph" "$scratch/consent-dev/Cargo.toml" \
     "todoke-crypto feature insecure-content-without-accept is enabled in the root workspace's development graph"
+
+# A shipped crate enabling the desktop's mock core (screenshots only).
+workspace_copy "$scratch/desktop-mock"
+cat >> "$scratch/desktop-mock/crates/todoke-preview/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-desktop = { path = "../todoke-desktop", version = "0.1.0", features = ["mock"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/desktop-mock/Cargo.toml" > /dev/null
+expect_manifest "desktop mock core in a shipped graph" "$scratch/desktop-mock/Cargo.toml" \
+    "todoke-desktop feature mock is enabled outside dev-dependencies"
 
 # A shipped crate enabling the core's development gate (sessions and code
 # pairing for the daemon and CLI, PROTOCOL §16).

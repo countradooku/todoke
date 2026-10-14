@@ -18,7 +18,8 @@
 #   pairing) and `insecure-content-without-accept` (seals and opens content
 #   without a signed Accept, bypassing the PROTOCOL §7.2 consent gate; used
 #   only by benchmarks), or Snow's `risky-raw-split` (traffic-key export, used
-#   only by the offline fixture generator). Under resolver 2/3, dev-dependency features are only
+#   only by the offline fixture generator), and todoke-desktop's `mock` (a
+#   scripted core and GPUI test support, for screenshots). Under resolver 2/3, dev-dependency features are only
 #   unified into builds of targets that need them (Cargo book, "Feature
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
@@ -34,6 +35,11 @@
 #   portable implementation while libcrux-platform still reports the CPU
 #   features, so todoke would advertise AES (§6) and run bit-sliced AES
 #   (docs/adr/0004-content-aead.md).
+#
+# Crates in deny.toml's [graph] exclude (the desktop app, which has its own
+# policy in deny-desktop.toml) are left out of the exception checks, as
+# cargo-deny leaves them out, but never out of the forbidden-feature checks:
+# no shipped graph, the desktop's included, may enable a gate.
 #
 # The graph is resolved per real target triple rather than with --target all:
 # libcrux declares some crates only under cfg(hax) or cfg(valgrind_ct_test), which
@@ -80,12 +86,28 @@ forbidden_features=(
     "todoke-crypto:insecure-content-without-accept"
     "snow:risky-raw-split"
     "todoke-core:unaudited-dev"
+    "todoke-desktop:mock"
 )
 
 # Features the root workspace may not enable even through dev-dependencies.
 forbidden_dev_features=(
     "todoke-crypto:insecure-content-without-accept"
 )
+
+# Workspace members excluded from deny.toml's graph, as cargo tree arguments.
+excluded=()
+while IFS= read -r member; do
+    [[ -n "$member" ]] && excluded+=(--exclude "$member")
+done < <(awk '
+    /^\[graph\]/ { section = 1; next }
+    /^\[/ { section = 0 }
+    section && /^exclude[[:space:]]*=/ {
+        while (match($0, /"[^"]+"/)) {
+            print substr($0, RSTART + 1, RLENGTH - 2)
+            $0 = substr($0, RSTART + RLENGTH)
+        }
+    }
+' "$deny_config")
 
 # Skipped duplicate versions, read from deny.toml as name@version.
 # A read loop rather than mapfile keeps this runnable on macOS's bash 3.2.
@@ -219,15 +241,15 @@ contains() {
 
 for target in "${targets[@]}"; do
     # Everything compiled for a non-dev build: normal, build, and proc-macro edges.
-    compiled="$(cargo tree --manifest-path "$manifest" --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}')"
+    compiled="$(cargo tree --manifest-path "$manifest" --workspace ${excluded[@]+"${excluded[@]}"} --locked -e no-dev --target "$target" --prefix none --format '{p}')"
     # Everything compiled at all, including tests, examples, and benches.
-    compiled_any="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}')"
+    compiled_any="$(cargo tree --manifest-path "$manifest" --workspace ${excluded[@]+"${excluded[@]}"} --locked -e normal,build,dev --target "$target" --prefix none --format '{p}')"
     # Enabled features of every non-dev package, as "name vX (source)|f1,f2".
     features="$(cargo tree --manifest-path "$manifest" --workspace --locked -e no-dev --target "$target" --prefix none --format '{p}|{f}')"
     # The same for everything compiled at all, dev-dependencies included.
     features_any="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,build,dev --target "$target" --prefix none --format '{p}|{f}')"
     # Only what is linked into target artifacts.
-    linked="$(cargo tree --manifest-path "$manifest" --workspace --locked -e normal,no-proc-macro --target "$target" --prefix none --format '{p}')"
+    linked="$(cargo tree --manifest-path "$manifest" --workspace ${excluded[@]+"${excluded[@]}"} --locked -e normal,no-proc-macro --target "$target" --prefix none --format '{p}')"
     for package in "${exempt[@]}"; do
         if is_build_time_only "$package"; then
             if contains "$linked" "$package"; then

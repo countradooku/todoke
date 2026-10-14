@@ -13,27 +13,11 @@
 
 use core::fmt::Write as _;
 
-use todoke_core::api::{ContactInfo, EntryInfo, Event, OfferInfo, StatusInfo, TransferInfo};
+use todoke_core::api::{
+    ContactInfo, EntryInfo, Event, HistoryEntry, OfferInfo, Route, StatusInfo, TransferInfo,
+};
 
-/// Escapes untrusted text for a terminal: every control character and
-/// every character that hides or reorders text ([`todoke_fs::is_invisible`]:
-/// bidi controls, tags, fillers, joiners, variation selectors, and the
-/// rest of the default-ignorable code points) becomes `\u{…}`; a backslash
-/// becomes `\\`.
-#[must_use]
-pub fn escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        if c == '\\' {
-            out.push_str("\\\\");
-        } else if c.is_control() || todoke_fs::is_invisible(c) {
-            let _ = write!(out, "\\u{{{:x}}}", u32::from(c));
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
+pub use todoke_core::api::escape;
 
 /// `value` as one line of JSON for a terminal or a pipe: JSON escapes
 /// only U+0000–U+001F, so every other control character and every
@@ -86,7 +70,7 @@ pub fn short(hex: &str) -> &str {
 #[must_use]
 pub fn status(status: &StatusInfo) -> String {
     format!(
-        "device    {}\nsessions  {}\nlistening {}\ncontacts  {}\nopen      {}\npairing   {}\n",
+        "device    {}\nsessions  {}\nlistening {}\ncontacts  {}\nopen      {}\npairing   {}\nvisible   {}\nhistory   {}\n",
         status.device,
         if status.sessions_enabled {
             "enabled"
@@ -99,6 +83,16 @@ pub fn status(status: &StatusInfo) -> String {
         status.contacts,
         status.sessions,
         if status.pairing { "offer shown" } else { "no" },
+        if status.hidden {
+            "hidden from contacts"
+        } else {
+            "to contacts"
+        },
+        match status.history_days {
+            0 => "off".to_owned(),
+            1 => "1 day".to_owned(),
+            days => format!("{days} days"),
+        },
     )
 }
 
@@ -120,7 +114,12 @@ pub fn contacts(contacts: &[ContactInfo]) -> String {
                 "blocked"
             },
             if contact.nearby { ", nearby" } else { "" },
-            if contact.connected { ", connected" } else { "" },
+            match contact.route {
+                Some(Route::Lan) => ", connected on the LAN",
+                Some(Route::Relay) => ", connected through a relay",
+                None if contact.connected => ", connected",
+                None => "",
+            },
         );
     }
     out
@@ -144,6 +143,36 @@ pub fn transfers(transfers: &[TransferInfo]) -> String {
             bytes(transfer.bytes_total),
             short(&transfer.peer),
         );
+    }
+    out
+}
+
+/// The history, for people: names escaped.
+#[must_use]
+pub fn history(entries: &[HistoryEntry]) -> String {
+    if entries.is_empty() {
+        return "no finished transfers in the history\n".to_owned();
+    }
+    let mut out = String::new();
+    for entry in entries {
+        let names: Vec<String> = entry.names.iter().map(|name| escape(name)).collect();
+        let _ = writeln!(
+            out,
+            "{}  {:?}  {}  {} files, {}  peer {}  {}",
+            short(&entry.transfer),
+            entry.way,
+            entry.state.as_str(),
+            entry.files,
+            bytes(entry.bytes),
+            short(&entry.peer),
+            names.join(", "),
+        );
+        if let Some(hash) = &entry.manifest_hash {
+            let _ = writeln!(out, "    manifest {hash}");
+        }
+        if let Some(receipt) = &entry.receipt {
+            let _ = writeln!(out, "    receipt  {}", receipt.id);
+        }
     }
     out
 }

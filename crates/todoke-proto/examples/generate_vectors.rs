@@ -75,6 +75,29 @@ fn fixture_directory() -> PathBuf {
         .join("../../spec/test-vectors")
 }
 
+/// `value` with every object's keys in sorted order. The fixtures are
+/// compared byte for byte, and `serde_json` keeps insertion order instead
+/// when another crate in the build enables its `preserve_order` feature
+/// (GPUI does), so the order is fixed here rather than by a feature.
+fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
+}
+
 fn encoded_vectors() -> Result<Vec<(&'static str, Vec<u8>)>> {
     let sender_seed = Zeroizing::new([0x11; 32]);
     let receiver_seed = Zeroizing::new([0x22; 32]);
@@ -100,7 +123,7 @@ fn encoded_vectors() -> Result<Vec<(&'static str, Vec<u8>)>> {
     vectors
         .into_iter()
         .map(|(name, value)| {
-            let mut bytes = serde_json::to_vec_pretty(&value)?;
+            let mut bytes = serde_json::to_vec_pretty(&sorted(value))?;
             bytes.push(b'\n');
             Ok((name, bytes))
         })

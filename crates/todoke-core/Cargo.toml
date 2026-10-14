@@ -34,10 +34,12 @@ serde_json.workspace = true
 # NFC names in offers (§7.1).
 unicode-normalization.workspace = true
 zeroize.workspace = true
+# Files on desktop systems; on every target, the table of characters that
+# hide or reorder text, for `api::escape`.
+todoke-fs.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 todoke-discovery.workspace = true
-todoke-fs.workspace = true
 todoke-transport = { workspace = true, features = ["relay"] }
 tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros"] }
 

@@ -292,6 +292,24 @@ impl Prepared {
         }
     }
 
+    /// Regular files.
+    #[must_use]
+    pub fn files(&self) -> u32 {
+        let files = self.entries.iter().filter(|entry| entry.file.is_some());
+        u32::try_from(files.count()).unwrap_or(u32::MAX)
+    }
+
+    /// The first `max` top-level names.
+    #[must_use]
+    pub fn top_names(&self, max: usize) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.parent.is_none())
+            .take(max)
+            .map(|entry| entry.name.clone())
+            .collect()
+    }
+
     /// Bytes in all files.
     #[must_use]
     pub fn total_bytes(&self) -> u64 {

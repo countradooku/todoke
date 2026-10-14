@@ -66,6 +66,8 @@ impl Device {
             discovery_folder: Some(discovery.to_owned()),
             relays: Vec::new(),
             relay_presence_seconds: 300,
+            hidden: false,
+            history_days: 30,
         };
         std::fs::write(&paths.config_file, serde_json::to_vec_pretty(&config)?)?;
         Ok(Self {

@@ -30,7 +30,7 @@ Requirements for the runtime engine:
    documented (O6).
 4. Permissive license, pinned exact version published at least two weeks ago,
    no new duplicate or license exceptions in shipped code.
-5. Compiles on the MSRV (1.85 when written; 1.89 since 2026-10-12; 1.94 since 2026-10-13) and
+5. Compiles on the MSRV (1.85 when written; 1.89 since 2026-10-12; 1.94 since 2026-10-13; 1.95 since 2026-10-14, for the desktop toolkit) and
    every CI target, including `wasm32-unknown-unknown`.
 
 ## Candidates

@@ -34,8 +34,13 @@ jobs:
           rustup show
           rustup toolchain install "$MUTATION_TOOLCHAIN" --profile minimal
           cargo install cargo-mutants --version 27.1.0 --locked
+      - name: Install the desktop app's system libraries
+        run: bash scripts/ci/install-desktop-deps.sh
+      # The desktop's views are checked by its UI tests and by hand
+      # (docs/qa/desktop.md); its model, formatting, preferences, and outbox
+      # are mutated like everything else.
       - name: Test every viable mutation
-        run: rustup run "$MUTATION_TOOLCHAIN" cargo mutants --workspace --in-place --timeout 120 --cargo-arg=--locked
+        run: rustup run "$MUTATION_TOOLCHAIN" cargo mutants --workspace --in-place --timeout 120 --exclude 'crates/todoke-desktop/src/ui/**' --cargo-arg=--locked
       - name: Preserve mutation results
         if: ${{ always() && hashFiles('mutants.out/**') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

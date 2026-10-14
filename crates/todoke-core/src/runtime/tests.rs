@@ -6,7 +6,7 @@ use core::time::Duration;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use crate::api::{ErrorCode, Event, Request, Response};
+use crate::api::{ErrorCode, Event, Request, Response, TransferState};
 use crate::config::{CoreConfig, LanSettings};
 use crate::profile::tests::Scratch;
 use crate::storage_key::KeyFile;
@@ -26,6 +26,8 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
         discovery_folder: Some(discovery.to_owned()),
         relays: Vec::new(),
         relay_presence_seconds: 300,
+        hidden: false,
+        history_days: 30,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
@@ -267,6 +269,16 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         let received = std::fs::read(scratch.0.join("alice").join("downloads").join(path))?;
         assert_eq!(&received, bytes, "{}", path.display());
     }
+    // The session is on the LAN.
+    let Response::Contacts(contacts) = bob.request(Request::Contacts).await else {
+        return Err("contacts".into());
+    };
+    assert_eq!(
+        contacts.first().and_then(|c| c.route),
+        Some(crate::api::Route::Lan)
+    );
+    history_matches(&alice, &bob, &transfer).await?;
+    hiding_withdraws_the_advertisement(&bob, &discovery).await?;
     send_again_in_the_session(&scratch.0, &source, &alice, &bob, &alice_hex).await?;
     // A second request for the same transfer is refused: it is finished.
     assert!(matches!(
@@ -278,6 +290,65 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         Response::Error { .. }
     ));
     let _ = ErrorCode::State;
+    Ok(())
+}
+
+/// Both sides keep the finished transfer in their history, naming the
+/// same manifest and the same signed receipt; clearing forgets it.
+async fn history_matches(alice: &Core, bob: &Core, transfer: &str) -> AnyResult<()> {
+    let Response::History(received) = alice.request(Request::History).await else {
+        return Err("history".into());
+    };
+    let Response::History(sent) = bob.request(Request::History).await else {
+        return Err("history".into());
+    };
+    let received = received
+        .iter()
+        .find(|entry| entry.transfer == transfer)
+        .ok_or("no received entry")?;
+    let sent = sent
+        .iter()
+        .find(|entry| entry.transfer == transfer)
+        .ok_or("no sent entry")?;
+    assert_eq!(received.state, TransferState::Received);
+    assert_eq!(sent.state, TransferState::Delivered);
+    assert_eq!(received.names, ["album"]);
+    assert_eq!(sent.names, ["album"]);
+    assert_eq!(received.files, 3);
+    assert!(received.manifest_hash.is_some());
+    assert_eq!(received.manifest_hash, sent.manifest_hash);
+    assert!(received.receipt.is_some());
+    assert_eq!(received.receipt, sent.receipt);
+    assert_eq!(alice.request(Request::ClearHistory).await, Response::Done);
+    assert_eq!(
+        alice.request(Request::History).await,
+        Response::History(Vec::new())
+    );
+    Ok(())
+}
+
+/// A hidden device stops advertising to its contacts, and starts again.
+async fn hiding_withdraws_the_advertisement(bob: &Core, discovery: &Path) -> AnyResult<()> {
+    let records = || -> AnyResult<usize> {
+        Ok(std::fs::read_dir(discovery)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rec"))
+            .count())
+    };
+    let settle = || tokio::time::sleep(Duration::from_millis(1500));
+    assert_eq!(records()?, 2);
+    let hide = |hidden| bob.request(Request::SetHidden { hidden });
+    assert_eq!(hide(true).await, Response::Done);
+    let Response::Status(status) = bob.request(Request::Status).await else {
+        return Err("status".into());
+    };
+    assert!(status.hidden);
+    assert_eq!(status.history_days, 30);
+    settle().await;
+    assert_eq!(records()?, 1);
+    assert_eq!(hide(false).await, Response::Done);
+    settle().await;
+    assert_eq!(records()?, 2);
     Ok(())
 }
 
@@ -323,6 +394,7 @@ fn listed_offers_are_capped() {
                 directory: false,
                 // The longest name §7.1 allows, in four-byte characters.
                 name: "\u{1f600}".repeat(63),
+                mime: "application/octet-stream".into(),
                 size: u64::MAX,
             })
             .collect(),
@@ -547,6 +619,14 @@ async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()>
         _ => None,
     })
     .await?;
+    // The offer came through the session, which runs over the relay.
+    let Response::Contacts(contacts) = alice.request(Request::Contacts).await else {
+        return Err("contacts".into());
+    };
+    assert_eq!(
+        contacts.first().and_then(|c| c.route),
+        Some(crate::api::Route::Relay)
+    );
     assert_eq!(
         alice
             .request(Request::Accept {
@@ -565,6 +645,72 @@ async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()>
         std::fs::read(scratch.0.join("alice").join("downloads").join("far.txt"))?,
         b"through the relay"
     );
+    Ok(())
+}
+
+/// A hidden device registers no presence at the relay (§10): two paired
+/// devices that start hidden never meet over several presence windows,
+/// and meet within one more period once both are visible.
+#[tokio::test(flavor = "multi_thread")]
+async fn hidden_devices_register_no_relay_presence() -> AnyResult<()> {
+    let scratch = Scratch::new("remote-hidden")?;
+    let relay = relay()?;
+    let device = |name: &str| -> AnyResult<Core> {
+        let mut config = CoreConfig::new(
+            scratch.0.join(name).join("state"),
+            scratch.0.join(name).join("downloads"),
+        );
+        config.lan.enabled = false;
+        config.relays = vec![relay.clone()];
+        // The shortest period: a window of 5 seconds every 10.
+        config.relay_presence_seconds = 10;
+        config.hidden = true;
+        std::fs::create_dir_all(scratch.0.join(name))?;
+        let key = KeyFile::new(scratch.0.join(name).join("storage.key"));
+        Ok(Core::start(config, Box::new(key))?)
+    };
+    let alice = device("alice")?;
+    let bob = device("bob")?;
+    let mut alice_events = alice.subscribe();
+    let Response::Qr { text, .. } = alice.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    let paired = bob.request(Request::PairScanQr { text }).await;
+    assert!(matches!(paired, Response::Paired { .. }), "{paired:?}");
+    wait_for(&mut alice_events, |event| match event {
+        Event::Paired { .. } => Some(()),
+        _ => None,
+    })
+    .await?;
+    let route = |core: &Core| {
+        let core = core.clone();
+        async move {
+            match core.request(Request::Contacts).await {
+                Response::Contacts(contacts) => Ok(contacts.first().and_then(|c| c.route)),
+                other => Err(format!("{other:?}")),
+            }
+        }
+    };
+    // More than one full period, so every pair's window has come twice.
+    tokio::time::sleep(Duration::from_secs(25)).await;
+    assert_eq!(route(&alice).await?, None);
+    assert_eq!(route(&bob).await?, None);
+    for core in [&alice, &bob] {
+        assert_eq!(
+            core.request(Request::SetHidden { hidden: false }).await,
+            Response::Done
+        );
+    }
+    let met = tokio::time::timeout(Duration::from_secs(40), async {
+        loop {
+            if route(&alice).await? == Some(crate::api::Route::Relay) {
+                return Ok::<_, String>(());
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await;
+    assert!(matches!(met, Ok(Ok(()))), "{met:?}");
     Ok(())
 }
 

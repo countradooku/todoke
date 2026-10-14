@@ -265,7 +265,8 @@ impl State {
                     .is_some_and(|queue| !queue.offers.is_empty() || !queue.prepared.is_empty());
                 if waiting && directory.contact(peer, mono).is_none() {
                     urgent.push((*peer, token, WAIT, None));
-                } else if let Some((window, left)) = presence_window(&token, now, relays.period)
+                } else if !self.hidden.get()
+                    && let Some((window, left)) = presence_window(&token, now, relays.period)
                     && presence.get(peer) != Some(&window)
                 {
                     present.push((*peer, token, Duration::from_secs(left), Some(window)));

@@ -6,7 +6,7 @@ resolver = "3"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.95"
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/countradooku/todoke"
 publish = false
@@ -71,6 +71,12 @@ tokio = { version = "=1.53.3", default-features = false }
 # no 0-RTT, no logging.
 quinn = { version = "=0.11.12", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "prefer-post-quantum", "std"] }
+# Pairing QR codes: drawn in the terminal (todoke-cli) and the desktop app;
+# no image output.
+qrcode = { version = "=0.14.1", default-features = false }
+# The desktop app's UI toolkit (GPUI and its styled components); its tree is
+# held to deny-desktop.toml.
+gpui-kit = "=0.7.3"
 # Command lines: the todoke CLI and the relay server.
 clap = { version = "=4.6.7", default-features = false, features = ["std", "derive", "help", "usage", "error-context"] }
 # Certificate parsing for relay key pins (rustls's own verifier crate).

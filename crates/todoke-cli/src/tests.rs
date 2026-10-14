@@ -48,6 +48,7 @@ fn entries_are_shown_as_an_escaped_tree() {
             parent: 0,
             directory: true,
             name: "album".into(),
+            mime: "application/octet-stream".into(),
             size: 0,
         },
         EntryInfo {
@@ -55,6 +56,7 @@ fn entries_are_shown_as_an_escaped_tree() {
             parent: 1,
             directory: false,
             name: "evil\u{1b}]0;title\u{7}.jpg".into(),
+            mime: "application/octet-stream".into(),
             size: 2048,
         },
     ];
@@ -76,6 +78,7 @@ fn cyclic_parents_terminate() {
             parent: 2,
             directory: true,
             name: "a".into(),
+            mime: "application/octet-stream".into(),
             size: 0,
         },
         EntryInfo {
@@ -83,6 +86,7 @@ fn cyclic_parents_terminate() {
             parent: 1,
             directory: true,
             name: "b".into(),
+            mime: "application/octet-stream".into(),
             size: 0,
         },
     ];
@@ -141,4 +145,31 @@ fn event_lines_escape_peer_text() {
     );
     assert!(line.starts_with("abcdef012345 failed: "), "{line}");
     assert!(event(&Event::Missed { events: 3 }).contains("3 events were missed"));
+}
+
+/// History lines escape the names a peer chose and show the hashes.
+#[test]
+fn history_escapes_names_and_shows_receipts() {
+    use todoke_core::api::{HistoryEntry, ReceiptInfo, TransferState, Way};
+    let shown = history(&[HistoryEntry {
+        transfer: "00112233445566778899aabbccddeeff".into(),
+        peer: "ffeeddccbbaa99887766554433221100".into(),
+        way: Way::Incoming,
+        state: TransferState::Received,
+        detail: None,
+        finished_at: 1,
+        files: 2,
+        bytes: 2048,
+        names: vec!["invoice\u{202e}fdp.exe".into()],
+        manifest_hash: Some("ab".repeat(32)),
+        receipt: Some(ReceiptInfo {
+            id: "cd".repeat(16),
+            completed_at: 1,
+        }),
+    }]);
+    assert!(shown.contains("invoice\\u{202e}fdp.exe"), "{shown}");
+    assert!(!shown.contains('\u{202e}'));
+    assert!(shown.contains(&"ab".repeat(32)));
+    assert!(shown.contains(&"cd".repeat(16)));
+    assert_eq!(history(&[]), "no finished transfers in the history\n");
 }

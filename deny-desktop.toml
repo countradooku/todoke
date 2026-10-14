@@ -1,0 +1,261 @@
+# cargo-deny 0.20.2. Review policy changes alongside the dependency introducing them.
+# cargo-deny policy for the whole workspace, the desktop app included.
+# Unlike deny.toml's, the toolkit exceptions below are NOT checked by
+# scripts/ci/deny-exceptions-dev-only.sh (which reads deny.toml and leaves
+# the desktop out): most are runtime dependencies of the desktop app by
+# design, each with its reason here and in docs/adr/0010-desktop.md. The
+# comments inherited from deny.toml about "never compiled" hold outside the
+# desktop's graph only. CI
+# runs it beside deny.toml (which leaves todoke-desktop out). It is deny.toml
+# plus what the desktop's GUI toolkit (gpui-kit 0.7.3: GPUI, its platform
+# layers, fonts, SVG, and images) needs, each exception scoped to an exact
+# version and reviewed with docs/adr/0010-desktop.md. Keep the shared part
+# in step with deny.toml.
+[graph]
+# With no target filter, audit dependencies for every resolved platform.
+all-features = true
+exclude-dev = false
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+yanked = "deny"
+unmaintained = "all"
+unsound = "all"
+# Exceptions below are scoped to exact IDs/versions. They are never compiled,
+# except where a reason says "build-time only": runtime libcrux crates reach them
+# only through cfg(hax) / cfg(valgrind_ct_test) edges that appear in the
+# all-target graph but are never compiled for a real target. (Exceptions for
+# development tools alone are also permitted, but none is currently needed.)
+# cargo-deny cannot scope by dependency kind or cfg; scripts/ci/deny-exceptions-dev-only.sh
+# enforces both properties per real target. Remove each when upstream no longer
+# needs it; unused-ignored-advisory makes a stale ignore fail.
+ignore = [
+    { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2 2.0.1 is unmaintained with no fixed release. Path: libcrux-intrinsics 0.0.9 -> core-models 0.0.7 -> hax-lib 0.3.7 -> hax-lib-macros 0.3.7, a proc macro for libcrux's hax verification annotations. Never compiled: libcrux-intrinsics declares core-models only under cfg(hax), which no todoke build sets; the guard script checks every real target." },
+    # The desktop's GUI toolkit (gpui-kit 0.7.3). Unmaintained, with no
+    # known vulnerability; none parses data a peer sends (no previews, PROTOCOL
+    # §7.1): names reach the window as escaped text only.
+    { id = "RUSTSEC-2024-0384", reason = "instant 0.1.13 (time shim) through gpui-base; replace when gpui-kit drops it." },
+    { id = "RUSTSEC-2024-0436", reason = "paste 1.0.15, a proc macro (build time) of gpui-component and metal." },
+    { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 through gpui-kit-assets' reqwest, declared only for wasm targets; never compiled for the desktop." },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz 0.20.1: text shaping inside usvg for the bundled SVG icons; never fed peer data." },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1: parses system fonts (cosmic-text on Linux, usvg); never fed peer data." },
+]
+unused-ignored-advisory = "deny"
+
+[licenses]
+allow = ["Apache-2.0", "MIT"]
+confidence-threshold = 0.93
+# Exact-version, per-crate exceptions. All are OSI-approved permissive licenses;
+# BSD-3-Clause and ISC require retaining notices in binary distributions.
+exceptions = [
+    # PROTOCOL §1 requires strict dalek Ed25519 verification and a canonical
+    # point-encoding check; todoke-crypto uses these at runtime.
+    { crate = "ed25519-dalek@3.0.0", allow = ["BSD-3-Clause"] },
+    { crate = "curve25519-dalek@5.0.0", allow = ["BSD-3-Clause"] },
+    # Constant-time primitives used by curve25519-dalek.
+    { crate = "subtle@2.6.1", allow = ["BSD-3-Clause"] },
+    # Linked into wasm32-unknown-unknown artifacts through getrandom's wasm_js
+    # backend (wasm-bindgen -> wasm-bindgen-shared); on other targets it is only
+    # compiled at build time (proc-macro2 -> syn for curve25519-dalek-derive and
+    # serde_derive). Unicode-3.0 also requires retaining its notice.
+    { crate = "unicode-ident@1.0.27", allow = ["Unicode-3.0"] },
+    # Never compiled: libcrux-secrets -> crabgrind -> bindgen under cfg(valgrind_ct_test).
+    { crate = "bindgen@0.72.1", allow = ["BSD-3-Clause"] },
+    # The desktop on Linux loads Vulkan with it (ash, gpu-allocator; the
+    # toolkit's wgpu renderer); otherwise only reached through bindgen above.
+    # ISC requires retaining notices.
+    { crate = "libloading@0.8.9", allow = ["ISC"] },
+    # The relay transport (PROTOCOL §10): TLS 1.3 to relays through rustls
+    # with the AWS-LC provider, at runtime in todoke-transport and
+    # todoke-relay. ISC (rustls-webpki, untrusted, aws-lc-rs) and
+    # BSD-3-Clause and MIT-0 (parts of AWS-LC) require retaining notices.
+    { crate = "aws-lc-rs@1.18.2", allow = ["ISC"] },
+    { crate = "aws-lc-sys@0.46.0", allow = ["ISC", "BSD-3-Clause", "MIT-0"] },
+    { crate = "rustls-webpki@0.103.15", allow = ["ISC"] },
+    { crate = "untrusted@0.9.0", allow = ["ISC"] },
+    # Mozilla's root certificates, the fallback roots of
+    # rustls-platform-verifier; CDLA-Permissive-2.0 is a permissive data
+    # license.
+    { crate = "webpki-root-certs@1.0.9", allow = ["CDLA-Permissive-2.0"] },
+    # axum's router, in the relay's operator metrics endpoint.
+    { crate = "matchit@0.8.4", allow = ["BSD-3-Clause"] },
+    # Never compiled: quinn-proto depends on ring only on wasm32-unknown-unknown,
+    # where todoke builds no QUIC.
+    { crate = "ring@0.17.14", allow = ["ISC"] },
+    # The desktop's GUI toolkit (gpui-kit 0.7.3), at runtime in
+    # todoke-desktop only; see docs/adr/0010-desktop.md.
+    # ICU4X data and its zero-copy helpers (Unicode text handling in the toolkit). Unicode-3.0 requires retaining its notice.
+    { crate = "icu_collections@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_locale_core@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer_data@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties_data@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_provider@2.3.1", allow = ["Unicode-3.0"] },
+    { crate = "litemap@0.8.3", allow = ["Unicode-3.0"] },
+    { crate = "potential_utf@0.1.6", allow = ["Unicode-3.0"] },
+    { crate = "tinystr@0.8.4", allow = ["Unicode-3.0"] },
+    { crate = "writeable@0.6.4", allow = ["Unicode-3.0"] },
+    { crate = "yoke@0.8.3", allow = ["Unicode-3.0"] },
+    { crate = "yoke-derive@0.8.4", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom@0.1.8", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom-derive@0.1.8", allow = ["Unicode-3.0"] },
+    { crate = "zerotrie@0.2.5", allow = ["Unicode-3.0"] },
+    { crate = "zerovec@0.11.8", allow = ["Unicode-3.0"] },
+    { crate = "zerovec-derive@0.11.6", allow = ["Unicode-3.0"] },
+    # Image, font, and rendering helpers of the toolkit (tiny-skia, exr, lebe, sha1_smol, instant, encoding_rs's data). BSD-3-Clause requires retaining notices.
+    { crate = "encoding_rs@0.8.42", allow = ["BSD-3-Clause"] },
+    { crate = "exr@1.74.2", allow = ["BSD-3-Clause"] },
+    { crate = "instant@0.1.13", allow = ["BSD-3-Clause"] },
+    { crate = "lebe@0.5.3", allow = ["BSD-3-Clause"] },
+    { crate = "sha1_smol@1.0.1", allow = ["BSD-3-Clause"] },
+    { crate = "tiny-skia@0.11.4", allow = ["BSD-3-Clause"] },
+    { crate = "tiny-skia-path@0.11.4", allow = ["BSD-3-Clause"] },
+    # arrayref, under tiny-skia. BSD-2-Clause requires retaining notices.
+    { crate = "arrayref@0.3.9", allow = ["BSD-2-Clause"] },
+    # Hashing and slot maps inside GPUI. Zlib is permissive.
+    { crate = "foldhash@0.1.5", allow = ["Zlib"] },
+    { crate = "foldhash@0.2.0", allow = ["Zlib"] },
+    { crate = "slotmap@1.1.1", allow = ["Zlib"] },
+    # inotify (file watching on Linux, gpui-component). ISC requires retaining notices.
+    { crate = "inotify@0.11.5", allow = ["ISC"] },
+    { crate = "inotify-sys@0.1.8", allow = ["ISC"] },
+    # enum-iterator (gpui-component). 0BSD is permissive and needs no notice.
+    { crate = "enum-iterator@2.3.0", allow = ["0BSD"] },
+    { crate = "enum-iterator-derive@1.5.0", allow = ["0BSD"] },
+    # Public-domain dedications: notify, tiny-keccak, hexf-parse.
+    { crate = "hexf-parse@0.2.1", allow = ["CC0-1.0"] },
+    { crate = "notify@8.2.0", allow = ["CC0-1.0"] },
+    { crate = "tiny-keccak@2.0.2", allow = ["CC0-1.0"] },
+    # File-level copyleft, met by using the unmodified published sources: dwrote (Windows fonts), option-ext (dirs), cbindgen (a build-time tool of the toolkit's macOS layer).
+    { crate = "cbindgen@0.28.0", allow = ["MPL-2.0"] },
+    { crate = "dwrote@0.11.5", allow = ["MPL-2.0"] },
+    { crate = "option-ext@0.2.0", allow = ["MPL-2.0"] },
+    # Fuzz harness only (fuzz/ workspace): bundles LLVM libFuzzer. Never shipped.
+    { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
+]
+
+[bans]
+multiple-versions = "deny"
+multiple-versions-include-dev = true
+wildcards = "deny"
+allow-wildcard-paths = false
+deny = []
+# One older version per duplicate pair, reached only from never-compiled
+# cfg(hax) / cfg(valgrind_ct_test) edges or, for syn, from build-time proc
+# macros. See the advisories note above.
+skip = [
+    { crate = "hax-lib@0.3.7", reason = "Never compiled. libcrux-intrinsics 0.0.9 declares hax-lib 0.4.2 and core-models 0.0.7 (-> hax-lib 0.3.7) only under cfg(hax); upstream must converge." },
+    { crate = "hax-lib-macros@0.3.7", reason = "Never compiled. Proc macro of hax-lib 0.3.7 in the same cfg(hax) split." },
+    { crate = "hax-lib-macros-types@0.3.7", reason = "Never compiled. Types crate of hax-lib-macros 0.3.7 in the same cfg(hax) split." },
+    { crate = "syn@2.0.119", reason = "Build-time only. Compiled for curve25519-dalek-derive, the proc macro of curve25519-dalek's x86_64 SIMD backend (runtime dependency of todoke-crypto). Also reachable through never-compiled bindgen/hax-lib-macros edges. libcrux-macros and serde_derive use syn 3." },
+    { crate = "getrandom@0.2.17", reason = "In the desktop graph, build time only on Linux (const-random-macro, a proc macro of the toolkit). Otherwise never compiled: dependency of ring 0.17.14, which quinn-proto declares only for wasm32-unknown-unknown, where todoke builds no QUIC; everything else uses getrandom 0.4." },
+    { crate = "windows-sys@0.52.0", reason = "Never compiled. Dependency of ring 0.17.14 (wasm32-unknown-unknown only through quinn-proto); everything else uses windows-sys 0.61." },
+    { crate = "shlex@1.3.0", reason = "Never compiled. Build dependency of bindgen 0.72.1 via crabgrind, declared by libcrux-secrets only under cfg(valgrind_ct_test); cc 1.7 uses shlex 2." },
+    # The desktop's GUI toolkit (gpui-kit 0.7.3) and its platform crates pin
+    # older versions of these; each entry skips an older one. A new duplicate
+    # still fails, and -D unmatched-skip fails a stale entry.
+    { crate = "base64@0.22.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "bit-set@0.9.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "bit-vec@0.9.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "bitflags@1.3.2", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "block-buffer@0.10.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "convert_case@0.10.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "core-foundation@0.9.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "cpufeatures@0.2.17", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "crypto-common@0.1.7", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "digest@0.10.7", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "dirs@5.0.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "dirs-sys@0.4.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "foldhash@0.1.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "font-types@0.11.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "getrandom@0.3.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "gif@0.13.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "hashbrown@0.14.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "hashbrown@0.15.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "hashbrown@0.16.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "heck@0.4.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "hkdf@0.12.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "hmac@0.12.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "imagesize@0.13.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "itertools@0.11.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "itertools@0.13.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "jni-sys@0.3.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "kurbo@0.11.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "miniz_oxide@0.8.9", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "objc2@0.5.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "objc2-app-kit@0.2.2", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "objc2-foundation@0.2.2", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "phf@0.11.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "phf_generator@0.11.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "phf_shared@0.11.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "png@0.17.16", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "pollster@0.2.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "quick-error@1.2.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "r-efi@5.3.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "rand@0.8.8", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "rand@0.9.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "rand_core@0.6.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "rand_core@0.9.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "read-fonts@0.37.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "redox_users@0.4.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "resvg@0.45.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "roxmltree@0.20.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "rustc-hash@1.1.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "serde_spanned@0.6.9", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "sha2@0.10.9", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "skrifa@0.40.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "spin@0.9.9", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "svgtypes@0.15.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "thiserror@1.0.69", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "thiserror-impl@1.0.69", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "toml@0.8.23", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "toml_datetime@0.6.11", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "toml_edit@0.22.27", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "usvg@0.45.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-core@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-implement@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-interface@0.58.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-link@0.1.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-registry@0.4.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-result@0.2.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-result@0.3.4", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-strings@0.1.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-strings@0.3.1", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-sys@0.48.0", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-sys@0.60.2", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-targets@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows-targets@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_aarch64_gnullvm@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_aarch64_gnullvm@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_aarch64_msvc@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_aarch64_msvc@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_i686_gnu@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_i686_gnu@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_i686_gnullvm@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_i686_msvc@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_i686_msvc@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_gnu@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_gnu@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_gnullvm@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_gnullvm@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_msvc@0.48.5", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "windows_x86_64_msvc@0.52.6", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "winnow@0.7.15", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "zune-core@0.4.12", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "zune-jpeg@0.4.21", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+]
+skip-tree = []
+
+[bans.workspace-dependencies]
+duplicates = "deny"
+include-path-dependencies = true
+unused = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+required-git-spec = "rev"
