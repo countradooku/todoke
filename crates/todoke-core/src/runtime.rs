@@ -172,3 +172,20 @@ mod running;
 mod session;
 #[cfg(all(test, feature = "unaudited-dev"))]
 mod tests;
+
+/// Without the development gates nothing starts (PROTOCOL §16). Run alone
+/// (`cargo test -p todoke-core`): the workspace's tests enable the gates.
+#[cfg(all(test, not(feature = "unaudited-dev")))]
+mod gate_tests {
+    use super::*;
+
+    #[test]
+    fn sessions_are_disabled_without_the_gates() {
+        let config = CoreConfig::new("/nonexistent/state".into(), "/nonexistent/down".into());
+        let key = crate::storage_key::KeyFile::new("/nonexistent/key");
+        assert!(matches!(
+            Core::start(config, Box::new(key)),
+            Err(StartError::Disabled)
+        ));
+    }
+}

@@ -38,6 +38,7 @@ pub const MAX_ENTRIES: usize = 10_000;
 /// At most this many directory levels (§13).
 pub const MAX_DEPTH: usize = 64;
 /// Open files kept free for everything else (sockets, the quarantine).
+#[cfg(unix)]
 const SPARE_FILES: u64 = 128;
 
 /// Why files could not be offered.
@@ -150,12 +151,6 @@ fn visit(
     depth: usize,
     walked: &mut Walked,
 ) -> Result<(), SendError> {
-    if depth >= MAX_DEPTH {
-        return Err(SendError::TooLarge);
-    }
-    if walked.entries.len() >= MAX_ENTRIES {
-        return Err(SendError::TooLarge);
-    }
     let metadata = std::fs::symlink_metadata(path).map_err(|error| {
         // A chosen top-level path must exist; inside a folder, a vanished
         // entry is skipped.
@@ -175,9 +170,16 @@ fn visit(
         _ => name.len(),
     };
     let kind = metadata.file_type();
+    // The path length rarely binds: the absolute path holding it must fit
+    // the OS's own limit (`PATH_MAX`) first. It is kept so a walk never
+    // accepts what the manifest refuses.
     if kind.is_symlink() || !(kind.is_file() || kind.is_dir()) || path_len > MAX_PATH_LEN {
         walked.skipped += 1;
         return Ok(());
+    }
+    // Bounds count only what is sent: a skipped link costs nothing.
+    if depth >= MAX_DEPTH || walked.entries.len() >= MAX_ENTRIES {
+        return Err(SendError::TooLarge);
     }
     if !walked.names.insert((parent, name.clone())) {
         if parent.is_none() {
@@ -216,6 +218,17 @@ fn visit(
     Ok(())
 }
 
+/// Whether holding `files` more files (two handles each) next to `open`
+/// descriptors, with [`SPARE_FILES`] free, would pass `limit`.
+#[cfg(unix)]
+fn over_limit(files: usize, open: u64, limit: u64) -> bool {
+    (files as u64)
+        .saturating_mul(2)
+        .saturating_add(open)
+        .saturating_add(SPARE_FILES)
+        > limit
+}
+
 /// Whether `files` more files (two handles each) can be held open under
 /// the process's open-file limit, next to what is open now.
 ///
@@ -229,16 +242,12 @@ pub fn check_open_files(files: usize) -> Result<(), SendError> {
             .current
             .unwrap_or(u64::MAX);
         let open = std::fs::read_dir("/dev/fd").map_or(0, Iterator::count) as u64;
-        let needed = (files as u64)
-            .saturating_mul(2)
-            .saturating_add(open)
-            .saturating_add(SPARE_FILES);
-        if needed > limit {
+        if over_limit(files, open, limit) {
             return Err(SendError::TooManyOpen { files, limit });
         }
     }
     #[cfg(not(unix))]
-    let _ = (files, SPARE_FILES);
+    let _ = files;
     Ok(())
 }
 

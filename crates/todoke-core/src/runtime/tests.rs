@@ -278,3 +278,200 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     let _ = ErrorCode::State;
     Ok(())
 }
+
+/// Past `MAX_FINISHED` idle transfers the oldest are forgotten; one that
+/// becomes active again leaves the list, and a second idle state does not
+/// count twice.
+#[test]
+fn idle_transfers_are_bounded() {
+    use super::running::Idle;
+    let id = |n: u32| {
+        let mut id = [0; 16];
+        id[..4].copy_from_slice(&n.to_le_bytes());
+        id
+    };
+    let mut idle = Idle::default();
+    let mut forgotten = Vec::new();
+    for n in 0..300 {
+        forgotten.extend(idle.update(id(n), false, true));
+    }
+    assert_eq!(forgotten, (0..44).map(id).collect::<Vec<_>>());
+    // Interrupted, then received: idle twice, counted once.
+    assert_eq!(idle.update(id(299), true, true), Vec::<[u8; 16]>::new());
+    // A resumed transfer is active again; the next idle one fits.
+    assert_eq!(idle.update(id(298), true, false), Vec::<[u8; 16]>::new());
+    assert_eq!(idle.update(id(1000), false, true), Vec::<[u8; 16]>::new());
+    assert_eq!(idle.update(id(1001), false, true), vec![id(44)]);
+    idle.forget(&id(1001));
+    assert_eq!(idle.update(id(1002), false, true), Vec::<[u8; 16]>::new());
+}
+
+/// One `Offers` answer lists at most 40000 entries, but always the first
+/// offer, and fits one IPC message.
+#[test]
+fn listed_offers_are_capped() {
+    use crate::api::{EntryInfo, OfferInfo};
+    let offer = |n: usize, entries: usize| OfferInfo {
+        transfer: format!("{n:032x}"),
+        from: "aa".into(),
+        entries: (0..entries)
+            .map(|id| EntryInfo {
+                id: u32::try_from(id + 1).unwrap_or(u32::MAX),
+                parent: 0,
+                directory: false,
+                // The longest name §7.1 allows, in four-byte characters.
+                name: "\u{1f600}".repeat(63),
+                size: u64::MAX,
+            })
+            .collect(),
+        total_bytes: u64::MAX,
+        resume: Some((1..=10_000).collect()),
+    };
+    let five: Vec<OfferInfo> = (0..5).map(|n| offer(n, 10_000)).collect();
+    let listed = super::running::capped(five.iter());
+    assert_eq!(listed.len(), 4);
+    let size = serde_json::to_vec(&Response::Offers(listed)).map_or(usize::MAX, |json| json.len());
+    assert!(size < 16 << 20, "{size} bytes");
+    let huge = [offer(9, 50_000)];
+    assert_eq!(super::running::capped(huge.iter()).len(), 1);
+}
+
+/// A queued offer expires with its lifetime and stops being served.
+#[test]
+fn queued_offers_expire() -> AnyResult<()> {
+    use todoke_proto::time::UnixTime;
+    let scratch = Scratch::new("expire")?;
+    std::fs::create_dir_all(&scratch.0)?;
+    std::fs::write(scratch.0.join("f"), b"x")?;
+    let hasher = todoke_fs::Preparer::new(&scratch.0.join("prepared"))?;
+    let created = UnixTime::new(1_800_000_000).ok_or("time")?;
+    let walked = crate::send::walk(&[scratch.0.join("f")])?;
+    let mut prepared = crate::send::prepare(&walked, created, &hasher)?;
+    let id = *prepared.transfer_id();
+    let mut queue = super::running::PeerQueue {
+        source: todoke_fs::FsSource::new(&scratch.0.join("source"))?,
+        prepared: Vec::new(),
+        offers: Vec::new(),
+    };
+    prepared.install(&mut queue.source);
+    queue.prepared.push(prepared);
+    let at = |offset: u64| {
+        UnixTime::new(created.seconds() + crate::send::OFFER_LIFETIME + offset - 1).ok_or("time")
+    };
+    assert_eq!(queue.expire(at(0)?), Vec::<[u8; 16]>::new());
+    assert!(todoke_transfer::SendSource::open(&mut queue.source, &id, 1).is_ok());
+    assert_eq!(queue.expire(at(1)?), vec![id]);
+    assert!(queue.prepared.is_empty());
+    assert!(todoke_transfer::SendSource::open(&mut queue.source, &id, 1).is_err());
+    Ok(())
+}
+
+/// Stopping pairing is visible in the status; a decline reaches the
+/// sender with its reason; an offer waiting for a session can be
+/// cancelled.
+#[tokio::test]
+async fn declines_and_cancels_reach_both_sides() -> AnyResult<()> {
+    let scratch = Scratch::new("decline")?;
+    let discovery = scratch.0.join("discovery");
+    let alice = device(&scratch.0, "alice", &discovery)?;
+    let bob = device(&scratch.0, "bob", &discovery)?;
+    let alice_hex = device_hex(&alice).await?;
+    let pairing = |core: &Core| {
+        let core = core.clone();
+        async move {
+            match core.request(Request::Status).await {
+                Response::Status(status) => Ok(status.pairing),
+                other => Err(format!("{other:?}")),
+            }
+        }
+    };
+    let Response::Qr { .. } = alice.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    assert!(pairing(&alice).await?);
+    assert_eq!(alice.request(Request::StopPairing).await, Response::Done);
+    assert!(!pairing(&alice).await?);
+    pair(&alice, &bob).await?;
+
+    std::fs::write(scratch.0.join("note.txt"), b"no thanks")?;
+    let send = || {
+        bob.request(Request::Send {
+            contact: alice_hex[..12].to_owned(),
+            paths: vec![scratch.0.join("note.txt")],
+        })
+    };
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    let Response::Offered { transfer, .. } = send().await else {
+        return Err("not offered".into());
+    };
+    wait_for(&mut alice_events, |event| match event {
+        Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        alice
+            .request(Request::Decline {
+                transfer: transfer.clone(),
+            })
+            .await,
+        Response::Done
+    );
+    let (reason, message) = wait_for(&mut bob_events, |event| match event {
+        Event::Ended {
+            transfer: ended,
+            reason,
+            message,
+        } if *ended == transfer => Some((*reason, message.clone())),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(reason, crate::api::TransferState::Rejected);
+    assert_eq!(message, "declined");
+    assert!(matches!(
+        alice.request(Request::Offers).await,
+        Response::Offers(list) if list.is_empty()
+    ));
+
+    // Alice goes away; Bob's next offer waits for a session, and he
+    // cancels it.
+    drop(alice_events);
+    drop(alice);
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while !matches!(
+            bob.request(Request::Status).await,
+            Response::Status(status) if status.sessions == 0
+        ) {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await?;
+    let Response::Offered { transfer, .. } = send().await else {
+        return Err("not offered".into());
+    };
+    assert_eq!(
+        bob.request(Request::Cancel {
+            transfer: transfer.clone(),
+        })
+        .await,
+        Response::Done
+    );
+    let Response::Transfers(list) = bob.request(Request::Transfers).await else {
+        return Err("no transfers".into());
+    };
+    assert!(list.iter().any(
+        |info| info.transfer == transfer && info.state == crate::api::TransferState::Cancelled
+    ));
+    assert!(matches!(
+        bob.request(Request::Cancel {
+            transfer: "ffffffffffff".into(),
+        })
+        .await,
+        Response::Error {
+            code: ErrorCode::Invalid,
+            ..
+        }
+    ));
+    Ok(())
+}

@@ -89,6 +89,80 @@ pub(super) struct PeerQueue {
     pub(super) offers: Vec<OutgoingOffer>,
 }
 
+impl PeerQueue {
+    /// Drops the offers past their lifetime at `now` and stops serving
+    /// their files; returns their IDs.
+    pub(super) fn expire(&mut self, now: UnixTime) -> Vec<TransferId> {
+        let mut gone = Vec::new();
+        self.prepared.retain(|prepared| {
+            let live = prepared
+                .created_at()
+                .seconds()
+                .saturating_add(send::OFFER_LIFETIME)
+                > now.seconds();
+            if !live {
+                gone.push(*prepared.transfer_id());
+            }
+            live
+        });
+        self.offers.retain(|offer| {
+            let live = offer.manifest().manifest().header().expires_at > now;
+            if !live {
+                gone.push(*offer.transfer_id());
+            }
+            live
+        });
+        for id in &gone {
+            self.source.remove_transfer(id);
+        }
+        gone
+    }
+}
+
+/// Which transfers are idle (finished or interrupted), oldest first; past
+/// [`MAX_FINISHED`] the oldest are forgotten.
+#[derive(Default)]
+pub(super) struct Idle {
+    order: VecDeque<TransferId>,
+}
+
+impl Idle {
+    /// `id` went from `was` to `now` (`true`: idle); returns the transfers
+    /// to forget.
+    pub(super) fn update(&mut self, id: TransferId, was: bool, now: bool) -> Vec<TransferId> {
+        if !now {
+            self.order.retain(|old| *old != id);
+            return Vec::new();
+        }
+        if was && self.order.contains(&id) {
+            return Vec::new();
+        }
+        self.order.push_back(id);
+        let excess = self.order.len().saturating_sub(MAX_FINISHED);
+        self.order.drain(..excess).collect()
+    }
+
+    /// `id` was recorded afresh (a resumed offer): not idle.
+    pub(super) fn forget(&mut self, id: &TransferId) {
+        self.order.retain(|old| old != id);
+    }
+}
+
+/// Offers to list, in order, at most [`MAX_LISTED_ENTRIES`] entries in all
+/// but never none when one waits.
+pub(super) fn capped<'a>(offers: impl Iterator<Item = &'a OfferInfo>) -> Vec<OfferInfo> {
+    let mut entries = 0;
+    let mut listed = Vec::new();
+    for offer in offers {
+        entries += offer.entries.len();
+        if entries > MAX_LISTED_ENTRIES && !listed.is_empty() {
+            break;
+        }
+        listed.push(offer.clone());
+    }
+    listed
+}
+
 /// What the core knows about one transfer.
 #[derive(Clone)]
 pub(super) struct TransferRecord {
@@ -128,8 +202,8 @@ pub(super) struct State {
     pub(super) transfers: RefCell<BTreeMap<TransferId, TransferRecord>>,
     /// Received offers, until they are decided or end.
     pub(super) received: RefCell<BTreeMap<TransferId, OfferInfo>>,
-    /// Finished transfers, oldest first.
-    finished: RefCell<VecDeque<TransferId>>,
+    /// Idle transfers, oldest first.
+    finished: RefCell<Idle>,
     /// Addresses each contact was last reached at (its own listener's).
     pub(super) last_known: RefCell<BTreeMap<Ed25519PublicKey, Vec<SocketAddr>>>,
     retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
@@ -212,7 +286,7 @@ impl State {
             queues: RefCell::new(BTreeMap::new()),
             transfers: RefCell::new(BTreeMap::new()),
             received: RefCell::new(BTreeMap::new()),
-            finished: RefCell::new(VecDeque::new()),
+            finished: RefCell::new(Idle::default()),
             last_known: RefCell::new(BTreeMap::new()),
             retry: RefCell::new(BTreeMap::new()),
             pairing: Cell::new(None),
@@ -574,7 +648,7 @@ impl State {
     /// Records a new transfer.
     pub(super) fn remember(&self, id: TransferId, record: TransferRecord) {
         self.transfers.borrow_mut().insert(id, record);
-        self.finished.borrow_mut().retain(|old| *old != id);
+        self.finished.borrow_mut().forget(&id);
     }
 
     /// Moves a transfer to `next`; a received offer leaves the list of
@@ -590,18 +664,10 @@ impl State {
         let Some(record) = transfers.get_mut(id) else {
             return;
         };
-        let was_idle = idle(record.state);
+        let was = idle(record.state);
         record.state = next;
-        let mut finished = self.finished.borrow_mut();
-        if !idle(next) {
-            finished.retain(|old| old != id);
-        } else if !was_idle {
-            finished.push_back(*id);
-            while finished.len() > MAX_FINISHED {
-                if let Some(old) = finished.pop_front() {
-                    transfers.remove(&old);
-                }
-            }
+        for old in self.finished.borrow_mut().update(*id, was, idle(next)) {
+            transfers.remove(&old);
         }
     }
 
@@ -633,22 +699,13 @@ impl State {
     /// are decided), so the answer fits one IPC message.
     fn offers_waiting(&self) -> Vec<OfferInfo> {
         let transfers = self.transfers.borrow();
-        let mut entries = 0;
-        let mut listed = Vec::new();
-        for (id, offer) in self.received.borrow().iter() {
-            let waiting = transfers
+        let received = self.received.borrow();
+        capped(received.iter().filter_map(|(id, offer)| {
+            transfers
                 .get(id)
-                .is_some_and(|record| record.state == TransferState::AwaitingDecision);
-            if !waiting {
-                continue;
-            }
-            entries += offer.entries.len();
-            if entries > MAX_LISTED_ENTRIES && !listed.is_empty() {
-                break;
-            }
-            listed.push(offer.clone());
-        }
-        listed
+                .is_some_and(|record| record.state == TransferState::AwaitingDecision)
+                .then_some(offer)
+        }))
     }
 
     fn show_qr(&self) -> Response {
@@ -937,32 +994,12 @@ impl State {
 
     /// Drops queued offers past their lifetime (§7.5: they cannot resume).
     fn expire_queued(&self, now: UnixTime) {
-        let mut expired = Vec::new();
-        for queue in self.queues.borrow_mut().values_mut() {
-            let mut gone = Vec::new();
-            queue.prepared.retain(|prepared| {
-                let live = prepared
-                    .created_at()
-                    .seconds()
-                    .saturating_add(send::OFFER_LIFETIME)
-                    > now.seconds();
-                if !live {
-                    gone.push(*prepared.transfer_id());
-                }
-                live
-            });
-            queue.offers.retain(|offer| {
-                let live = offer.manifest().manifest().header().expires_at > now;
-                if !live {
-                    gone.push(*offer.transfer_id());
-                }
-                live
-            });
-            for id in &gone {
-                queue.source.remove_transfer(id);
-            }
-            expired.extend(gone);
-        }
+        let expired: Vec<TransferId> = self
+            .queues
+            .borrow_mut()
+            .values_mut()
+            .flat_map(|queue| queue.expire(now))
+            .collect();
         for id in expired {
             session::end(self, &id, TransferState::Failed, "expired");
         }
