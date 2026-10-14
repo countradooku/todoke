@@ -116,12 +116,15 @@ adds: unspecified behavior must not be filled in by code.
    - A relay error pauses that contact for 30 seconds.
 9a. **R1 hardening.**
     - A tunnel is accepted only for what it was opened for: a contact
-      tunnel carries that contact's session only, and a QR wait carries
-      QR pairing only. Human-code pairing (and its CodeOfferRequest) is
+      tunnel carries that contact's session only (its Hello must name the
+      contact the tunnel was opened for, so a relay operator who is also a
+      contact cannot answer on another contact's token), and a QR wait
+      carries QR pairing only. Human-code pairing (and its CodeOfferRequest) is
       accepted only on the LAN, so a relay cannot reach a shown code (O8).
     - A registration's room is taken when it is scheduled, so one tick
-      never starts more than two. Contacts leave one room free while a QR
-      offer is shown or a scanner waits; stopping the offer ends its relay
+      never starts more than two. Contact rooms are counted on their own:
+      contacts leave one room free while a QR offer is shown or a scanner
+      waits, and keep the other; stopping the offer ends its relay
       wait at once; the scanner retries a connection that did not come up.
     - A tunnel that led to no session pauses that contact, doubling from
       one minute to 16, so a relay answering for absent peers cannot spend
@@ -236,6 +239,21 @@ adds: unspecified behavior must not be filled in by code.
 - **Metadata at the relay** (§10): source and destination addresses, timing,
   sizes, and which token meets when, within an epoch. No anonymity is
   provided.
+
+## Known test gaps
+
+- **Binding a contact tunnel to its contact** (the responder refuses a
+  Hello naming another contact) has no test: it needs two paired contacts
+  inside one core's state. Fix: a state-level fixture with two contacts.
+- **The registration planner** is tested for room limits (two contact
+  rooms, one beside a shown QR offer), presence windows, back-off values,
+  QR stop, and relay-list validation; skipping paused, busy, or in-session
+  contacts, urgent-before-presence order, and applying the back-off after
+  a failed tunnel are not. Fix: extract the decision into a pure planner
+  and table-test it.
+- **The NAT job** proves the file went through the relay by its byte
+  count; it cannot run outside Linux CI, and it does not cover networks
+  that block UDP (no fallback exists) or a relay restarting mid-transfer.
 
 ## Not here
 

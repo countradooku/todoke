@@ -111,11 +111,14 @@ if in_ns client-a ping -c 1 -W 2 10.2.0.2 > /dev/null 2>&1; then
     echo "client-a reaches client-b directly: the topology is wrong" >&2
     exit 1
 fi
+# (Behind full-cone NATs client-b's public address would forward to it;
+# todoke never uses it, as no candidates are exchanged, and the relay's
+# byte count below shows the file went through the relay.)
 
 # The relay, with a self-signed certificate; its printed pin goes into
 # both devices' configuration.
 in_ns relay "$relay_bin" --listen 203.0.113.10:4433 --state "$work/relay" --name relay.test \
-    > "$work/relay.out" 2> "$work/relay.err" &
+    --metrics 127.0.0.1:9184 > "$work/relay.out" 2> "$work/relay.err" &
 pids+=($!)
 for _ in $(seq 50); do
     grep -q '^pin ' "$work/relay.out" 2> /dev/null && break
@@ -189,4 +192,10 @@ if [[ "$expected" != "$received" ]]; then
     echo 'the received file differs from the one sent' >&2
     exit 1
 fi
-echo "Paired and transferred through the relay behind $nat_type NATs."
+# The file went through the relay: it forwarded at least the file's bytes.
+forwarded="$(in_ns relay curl -s http://127.0.0.1:9184/metrics | sed -n 's/^todoke_relay_forwarded_bytes_total //p')"
+if [[ -z "$forwarded" || "$forwarded" -lt 3000000 ]]; then
+    echo "the relay forwarded ${forwarded:-nothing}, less than the file" >&2
+    exit 1
+fi
+echo "Paired and transferred through the relay ($forwarded bytes forwarded) behind $nat_type NATs."

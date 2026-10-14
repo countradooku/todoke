@@ -133,6 +133,42 @@ fn malformed_records_are_refused() {
     let mut punch = [1; 34];
     punch[16..18].copy_from_slice(&2001_u16.to_be_bytes());
     assert_eq!(Control::decode(0x05, &punch), Err(DecodeError::Range));
+    // Registered expiry above the room lifetime.
+    let mut long = [1; 34];
+    long[32..].copy_from_slice(&121_u16.to_be_bytes());
+    assert_eq!(Control::decode(0x02, &long), Err(DecodeError::Range));
+    // Zero rooms and nonces, wherever they are random.
+    let zeroed = |kind: u8, len: usize, zero: core::ops::Range<usize>| {
+        let mut body = vec![1; len];
+        if kind == 0x02 {
+            // A valid expiry, so only the zero field is wrong.
+            body[32..].copy_from_slice(&30_u16.to_be_bytes());
+        }
+        body[zero].fill(0);
+        Control::decode(kind, &body)
+    };
+    for (kind, len, zero) in [
+        (0x02, 34, 0..16),
+        (0x02, 34, 16..32),
+        (0x03, 32, 0..16),
+        (0x03, 32, 16..32),
+        (0x05, 34, 0..16),
+        (0x05, 34, 18..34),
+    ] {
+        assert_eq!(
+            zeroed(kind, len, zero.clone()),
+            Err(DecodeError::ZeroIdentifier),
+            "{kind:#x} {zero:?}"
+        );
+    }
+    let mut zero_nonce = 1_u16.to_be_bytes().to_vec();
+    zero_nonce.extend_from_slice(&[7; 32]);
+    zero_nonce.extend_from_slice(&[0; 16]);
+    zero_nonce.extend_from_slice(&10_u16.to_be_bytes());
+    assert_eq!(
+        Control::decode(0x01, &zero_nonce),
+        Err(DecodeError::ZeroIdentifier)
+    );
     let mut close = [0; 18];
     close[16..].copy_from_slice(&6_u16.to_be_bytes());
     assert_eq!(Control::decode(0x08, &close), Err(DecodeError::UnknownEnum));
