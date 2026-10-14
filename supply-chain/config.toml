@@ -22,20 +22,115 @@ url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 [imports.zcash]
 url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/audits.toml"
 
+[[exemptions.accesskit]]
+version = "0.24.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.accesskit_atspi_common]]
+version = "0.19.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.accesskit_consumer]]
+version = "0.38.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.accesskit_macos]]
+version = "0.26.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.accesskit_unix]]
+version = "0.22.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.accesskit_windows]]
+version = "0.34.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.addr2line]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.aes]]
+version = "0.7.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ahash]]
+version = "0.8.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.aho-corasick]]
 version = "1.1.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.aligned]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.aligned-vec]]
+version = "0.6.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.android_system_properties]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.annotate-snippets]]
+version = "0.12.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.anstyle]]
 version = "1.0.14"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for clap_builder (help styling) in the todoke CLI; no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.anyhow]]
+version = "1.0.104"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.arbitrary]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.arc-swap]]
+version = "1.9.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.arg_enum_proc_macro]]
+version = "0.3.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.arrayvec]]
 version = "0.7.8"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.as-raw-xcb-connection]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ashpd]]
+version = "0.13.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.asn1-rs]]
 version = "0.7.2"
@@ -52,10 +147,100 @@ version = "0.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
+[[exemptions.async-broadcast]]
+version = "0.7.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-channel]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-executor]]
+version = "1.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-fs]]
+version = "2.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-io]]
+version = "2.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-lock]]
+version = "3.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-net]]
+version = "2.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-process]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-recursion]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-signal]]
+version = "0.2.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.async-trait]]
+version = "0.1.92"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.atomic]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.atspi]]
+version = "0.29.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.atspi-common]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.atspi-proxies]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.autocfg]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.av-scenechange]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.av1-grain]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.avif-serialize]]
+version = "0.8.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.aws-lc-rs]]
 version = "1.18.2"
@@ -77,6 +262,11 @@ version = "0.5.6"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum; replace with an audit or imported audit."
 
+[[exemptions.backtrace]]
+version = "0.3.76"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.bao]]
 version = "0.13.1"
 criteria = "safe-to-deploy"
@@ -87,30 +277,120 @@ version = "3.2.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.base62]]
+version = "2.2.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.base64]]
 version = "0.23.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by pem; replace with an audit or imported audit."
+
+[[exemptions.bit_field]]
+version = "0.10.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.bitflags]]
 version = "2.13.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.bitstream-io]]
+version = "4.10.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.blake3]]
 version = "1.8.7"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.block]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.block-buffer]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.block-padding]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.block2]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.blocking]]
+version = "1.7.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.borsh]]
+version = "1.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.borsh-derive]]
+version = "1.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.bstr]]
+version = "1.13.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.built]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.bytemuck]]
+version = "1.25.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.bytemuck_derive]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.byteorder-lite]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.bytes]]
 version = "1.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport tests (tokio io-util, development builds only); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.calloop]]
+version = "0.14.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.calloop-wayland-source]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cbc]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cbindgen]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.cc]]
 version = "1.8.0"
@@ -126,6 +406,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.10.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.chrono]]
+version = "0.4.45"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.clang-sys]]
 version = "1.9.1"
@@ -167,30 +452,100 @@ version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.cocoa]]
+version = "0.25.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cocoa]]
+version = "0.26.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cocoa-foundation]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cocoa-foundation]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.combine]]
 version = "4.6.8"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
+
+[[exemptions.concurrent-queue]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.console_error_panic_hook]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.const-oid]]
 version = "0.10.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
+[[exemptions.const-random]]
+version = "0.1.18"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.const-random-macro]]
+version = "0.1.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.constant_time_eq]]
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.convert_case]]
+version = "0.10.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.convert_case]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.core-foundation]]
 version = "0.10.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-platform-verifier, security-framework; replace with an audit or imported audit."
 
+[[exemptions.core-graphics]]
+version = "0.23.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.core-graphics-helmer-fork]]
+version = "0.24.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.core-models]]
 version = "0.0.7"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.cosmic-text]]
+version = "0.19.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.cpufeatures]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.cpufeatures]]
 version = "0.3.1"
@@ -202,10 +557,45 @@ version = "0.3.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.crc32fast]]
+version = "1.5.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.crossbeam-deque]]
+version = "0.8.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.crossbeam-epoch]]
+version = "0.9.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.crossbeam-queue]]
+version = "0.3.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.crossbeam-utils]]
+version = "0.8.23"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.crypto-common]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.crypto-common]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.ctor]]
+version = "1.0.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.ctutils]]
 version = "0.4.3"
@@ -227,6 +617,11 @@ version = "2.11.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
+[[exemptions.data-url]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.der-parser]]
 version = "10.0.0"
 criteria = "safe-to-deploy"
@@ -237,15 +632,75 @@ version = "0.5.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by time; replace with an audit or imported audit."
 
+[[exemptions.derive_more]]
+version = "2.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.derive_more-impl]]
+version = "2.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.digest]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.digest]]
 version = "0.11.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.dirs]]
+version = "2.0.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dirs]]
+version = "5.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dirs-sys]]
+version = "0.3.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dirs-sys]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dispatch]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.displaydoc]]
 version = "0.2.7"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.dlib]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.downcast-rs]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.dyn-clone]]
+version = "1.0.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.ed25519]]
 version = "3.0.0"
@@ -262,30 +717,215 @@ version = "1.19.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.embed-resource]]
+version = "3.0.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.encoding_rs_io]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.endi]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.enum-iterator]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.enum-iterator-derive]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.enumflags2]]
+version = "0.7.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.enumflags2_derive]]
+version = "0.7.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.enumn]]
+version = "0.1.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.equator]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.equator-macro]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.equivalent]]
+version = "1.0.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.event-listener]]
+version = "5.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.event-listener-strategy]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.exr]]
+version = "1.74.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.fastrand]]
 version = "2.5.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (random query delays); imported audits cover only 2.3.0; replace with an audit or imported audit."
+
+[[exemptions.fax]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.filedescriptor]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.find-msvc-tools]]
 version = "0.1.14"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.fixedbitset]]
+version = "0.5.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.flate2]]
+version = "1.1.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.float-cmp]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.float-ord]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.float_next_after]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.fluent-uri]]
+version = "0.1.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.flume]]
 version = "0.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (channels to its daemon thread); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.font-types]]
+version = "0.11.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.font-types]]
+version = "0.12.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.fontconfig-parser]]
+version = "0.5.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.fontdb]]
+version = "0.23.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.foreign-types-macros]]
+version = "0.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.freetype-sys]]
+version = "0.20.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.fs_extra]]
 version = "1.3.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by aws-lc-sys; replace with an audit or imported audit."
 
+[[exemptions.fsevent-sys]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futf]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures-channel]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures-concurrency]]
+version = "7.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures-executor]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.futures-io]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.futures-lite]]
+version = "2.6.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures-macro]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.futures-sink]]
+version = "0.3.34"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.futures-task]]
 version = "0.3.21"
@@ -297,6 +937,21 @@ version = "0.3.21"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.generic-array]]
+version = "0.14.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gethostname]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.getrandom]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.getrandom]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
@@ -307,11 +962,256 @@ version = "0.4.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.gif]]
+version = "0.13.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gif]]
+version = "0.14.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gl_generator]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.glob]]
 version = "0.3.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.globset]]
+version = "0.4.20"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.globwalk]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.glow]]
+version = "0.17.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.glutin_wgl_sys]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpu-descriptor]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpu-descriptor-types]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-base]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-component]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-component-macros]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-apple]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-linux]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-macos]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-macros]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-platform]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-web]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-wgpu]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-fast-windows]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-kit]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-kit-assets]]
+version = "0.7.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-apple]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-collections]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-derive-refineable]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-http-client]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-linux]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-macos]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-macros]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-platform]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-refineable]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-reqwest]]
+version = "0.12.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-scheduler]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-shared-string]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-sum-tree]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-util]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-web]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-wgpu]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-windows]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-ztracing]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.gpui-pre-ztracing-macro]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.granit-parser]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.h2]]
+version = "0.4.20"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.half]]
+version = "2.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.harfrust]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.hash32]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.hashbrown]]
+version = "0.14.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.hax-lib]]
 version = "0.3.7"
 criteria = "safe-to-deploy"
@@ -341,6 +1241,26 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.heapless]]
+version = "0.9.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.hermit-abi]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.hexf-parse]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.hkdf]]
+version = "0.12.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.hkdf]]
 version = "0.13.0"
@@ -351,6 +1271,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace 
 version = "0.13.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; raised from safe-to-run to safe-to-deploy on 2026-10-13 because pakery-crypto (code pairing, non-default unaudited-code-pairing feature) uses it at runtime; since 2026-10-14 todoke-crypto also uses it at runtime for HMAC-BLAKE3 discovery tokens (PROTOCOL §9); replace with an audit or imported audit."
+
+[[exemptions.html5ever]]
+version = "0.27.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.http]]
 version = "1.5.0"
@@ -382,15 +1307,135 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum (HTTP/1.1); used by axum, hyper-util; replace with an audit or imported audit."
 
+[[exemptions.hyper-rustls]]
+version = "0.27.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.hyper-util]]
 version = "0.1.21"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by axum; replace with an audit or imported audit."
 
+[[exemptions.iana-time-zone]]
+version = "0.1.65"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_collections]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_locale_core]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_normalizer]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_normalizer_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_properties]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_properties_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.icu_provider]]
+version = "2.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.idna_adapter]]
+version = "1.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.if-addrs]]
 version = "0.15.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (interface enumeration); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.ignore]]
+version = "0.4.33"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.image]]
+version = "0.25.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.image-webp]]
+version = "0.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.imagesize]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.imagesize]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.imgref]]
+version = "1.12.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.indexmap]]
+version = "2.14.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.inotify]]
+version = "0.11.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.inotify-sys]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.interpolate_name]]
+version = "0.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.inventory]]
+version = "0.3.25"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ipnet]]
+version = "2.12.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.itertools]]
+version = "0.10.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.itertools]]
+version = "0.11.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.itertools]]
 version = "0.13.0"
@@ -413,6 +1458,11 @@ criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
 
 [[exemptions.jni-sys]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.jni-sys]]
 version = "0.4.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
@@ -432,10 +1482,45 @@ version = "0.3.106"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.khronos-egl]]
+version = "4.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.khronos_api]]
+version = "3.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.kqueue]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.kqueue-sys]]
+version = "1.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.kurbo]]
+version = "0.11.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.kurbo]]
+version = "0.13.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.lazy_static]]
 version = "1.5.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.lebe]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.libc]]
 version = "0.2.189"
@@ -522,15 +1607,55 @@ version = "0.0.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.libfuzzer-sys]]
+version = "0.4.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.libloading]]
 version = "0.8.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.libm]]
+version = "0.2.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.libredox]]
+version = "0.1.25"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.linebender_resource_handle]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.link-section]]
+version = "0.19.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.linktime-proc-macro]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.linux-raw-sys]]
 version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-fs (Linux and Android system call definitions used by rustix); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.litemap]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.litrs]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.lock_api]]
 version = "0.4.14"
@@ -542,15 +1667,85 @@ version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.loop9]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.lru-slab]]
 version = "0.1.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by quinn-proto; replace with an audit or imported audit."
 
+[[exemptions.lsp-types]]
+version = "0.97.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.lyon]]
+version = "1.0.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.lyon_algorithms]]
+version = "1.0.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.lyon_geom]]
+version = "1.0.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.lyon_path]]
+version = "1.0.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.lyon_tessellation]]
+version = "1.0.22"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.mac]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.mac-notification-sys]]
+version = "0.6.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.mach2]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.markdown]]
+version = "1.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.markup5ever]]
+version = "0.12.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.markup5ever_rcdom]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.matchit]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum's router; used by axum; replace with an audit or imported audit."
+
+[[exemptions.md-5]]
+version = "0.10.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.mdns-sd]]
 version = "0.21.5"
@@ -562,30 +1757,245 @@ version = "2.8.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.memmap2]]
+version = "0.2.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.memoffset]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.mime]]
 version = "0.3.16"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.mime_guess]]
+version = "2.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.minimal-lexical]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.miniz_oxide]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.mio]]
 version = "1.2.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport (tokio's I/O event loop: epoll, kqueue, IOCP); mozilla and bytecode-alliance trust its publisher (Thomasdezeeuw) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.moxcms]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.naga]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ndk-sys]]
+version = "0.6.0+11769913"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.new_debug_unreachable]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.no_std_io2]]
+version = "0.9.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.nom]]
+version = "8.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.noop_proc_macro]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.normpath]]
+version = "1.5.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.notify]]
+version = "8.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.notify-rust]]
+version = "4.18.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.notify-types]]
+version = "2.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ntapi]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.num]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.num-bigint]]
 version = "0.4.8"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.num-bigint-dig]]
+version = "0.9.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.num-complex]]
+version = "0.4.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.num-integer]]
 version = "0.1.47"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.num-iter]]
+version = "0.1.46"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.num_cpus]]
+version = "1.13.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc-foundation]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc-sys]]
+version = "0.3.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2]]
+version = "0.6.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-app-kit]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-app-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-cloud-kit]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-data]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-data]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-image]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-image]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-text]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-core-video]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-foundation]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-metal]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-quartz-core]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-security]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc2-user-notifications]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc_exception]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.objc_id]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.object]]
+version = "0.36.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.oid-registry]]
 version = "0.8.1"
@@ -597,10 +2007,30 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.oo7]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.open]]
+version = "5.4.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.openssl-probe]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-native-certs; replace with an audit or imported audit."
+
+[[exemptions.ordered-float]]
+version = "5.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ordered-stream]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.pakery-core]]
 version = "0.6.0"
@@ -617,40 +2047,220 @@ version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
+[[exemptions.parking_lot]]
+version = "0.12.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.parking_lot_core]]
+version = "0.9.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.paste]]
+version = "1.0.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pastey]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pathfinder_geometry]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pathfinder_simd]]
+version = "0.5.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pbkdf2]]
+version = "0.12.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.pem]]
 version = "4.0.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rcgen; replace with an audit or imported audit."
+
+[[exemptions.phf]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.phf_codegen]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.phf_generator]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.phf_macros]]
+version = "0.13.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.phf_shared]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pico-args]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pin-project]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pin-project-internal]]
+version = "1.1.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.piper]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.png]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.polling]]
+version = "3.11.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pollster]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.polycool]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.portable-atomic]]
+version = "1.15.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.portable-atomic-util]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.postage]]
+version = "0.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.potential_utf]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.powerfmt]]
 version = "0.2.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by time; replace with an audit or imported audit."
+
+[[exemptions.ppv-lite86]]
+version = "0.2.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.prettyplease]]
 version = "0.2.37"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.proc-macro-crate]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.proc-macro2]]
 version = "1.0.107"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.profiling]]
+version = "1.0.18"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.profiling-procmacros]]
+version = "1.0.18"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.proptest]]
 version = "1.12.0"
-criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision (tests). Raised to safe-to-deploy on 2026-10-14 only because GPUI's test-support feature depends on it, which todoke-desktop's mock feature (screenshots, never shipped) and its tests enable; no shipped build compiles it. Replace with an audit or imported audit."
+
+[[exemptions.proptest-macro]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pulp]]
+version = "0.22.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pulp-wasm-simd-flag]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.pxfm]]
+version = "0.1.30"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.qoi]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.qrcode]]
 version = "0.14.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the todoke CLI (drawing pairing QR codes as text; default features off, no image dependency); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.quick-error]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.quick-error]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.quick-xml]]
+version = "0.41.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.quinn]]
 version = "0.11.12"
@@ -668,9 +2278,24 @@ criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): quinn's UDP socket layer; used by quinn; replace with an audit or imported audit."
 
 [[exemptions.r-efi]]
+version = "5.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.rand]]
+version = "0.8.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rand]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.rand]]
 version = "0.10.3"
@@ -689,13 +2314,78 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10)
 
 [[exemptions.rand_xorshift]]
 version = "0.5.0"
-criteria = "safe-to-run"
-notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision (tests). Raised to safe-to-deploy on 2026-10-14 only because GPUI's test-support feature depends on it, which todoke-desktop's mock feature (screenshots, never shipped) and its tests enable; no shipped build compiles it. Replace with an audit or imported audit."
+
+[[exemptions.range-alloc]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rangemap]]
+version = "1.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rav1e]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ravif]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.raw-cpuid]]
+version = "11.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rayon]]
+version = "1.12.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.rcgen]]
 version = "0.14.10"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): the relay's self-signed certificate; used by todoke-relay; replace with an audit or imported audit."
+
+[[exemptions.read-fonts]]
+version = "0.37.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.reborrow]]
+version = "0.5.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.redox_syscall]]
+version = "0.5.18"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.redox_users]]
+version = "0.4.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.redox_users]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ref-cast]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ref-cast-impl]]
+version = "1.0.27"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.regex]]
 version = "1.13.1"
@@ -712,10 +2402,80 @@ version = "0.8.11"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.renderdoc-sys]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.resvg]]
+version = "0.45.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.resvg]]
+version = "0.46.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rgb]]
+version = "0.8.53"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.ring]]
 version = "0.17.14"
 criteria = "safe-to-deploy"
 notes = "Never compiled: quinn-proto depends on ring only on wasm32-unknown-unknown, where todoke builds no QUIC. Replace with an audit or imported audit when upstream changes."
+
+[[exemptions.ropey]]
+version = "2.0.0-beta.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.roxmltree]]
+version = "0.20.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.roxmltree]]
+version = "0.21.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-embed]]
+version = "8.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-embed-impl]]
+version = "8.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-embed-utils]]
+version = "8.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-i18n]]
+version = "4.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-i18n-macro]]
+version = "4.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rust-i18n-support]]
+version = "4.2.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rustc-demangle]]
+version = "0.1.28"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.rustc-hash]]
 version = "2.1.3"
@@ -742,6 +2502,11 @@ version = "0.8.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): platform roots for rustls-platform-verifier on Linux; used by rustls-platform-verifier; replace with an audit or imported audit."
 
+[[exemptions.rustls-pemfile]]
+version = "2.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.rustls-pki-types]]
 version = "1.15.1"
 criteria = "safe-to-deploy"
@@ -767,6 +2532,21 @@ version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.rusty-fork]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.rustybuzz]]
+version = "0.20.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ryu]]
+version = "1.0.23"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.same-file]]
 version = "1.0.6"
 criteria = "safe-to-deploy"
@@ -777,10 +2557,35 @@ version = "0.1.29"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-native-certs; replace with an audit or imported audit."
 
+[[exemptions.schemars]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.schemars_derive]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.scoped-tls]]
+version = "1.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.scopeguard]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for lock_api (flume); isrg, mozilla, and bytecode-alliance trust its publisher (Amanieu) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.screencapturekit]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.screencapturekit-sys]]
+version = "0.2.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.security-framework]]
 version = "3.7.0"
@@ -792,10 +2597,25 @@ version = "2.17.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rustls-platform-verifier, security-framework; replace with an audit or imported audit."
 
+[[exemptions.self_cell]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.serde]]
 version = "1.0.229"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.serde-saphyr]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.serde_bytes]]
+version = "0.11.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.serde_core]]
 version = "1.0.229"
@@ -807,15 +2627,45 @@ version = "1.0.229"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.serde_derive_internals]]
+version = "0.30.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.serde_json]]
 version = "1.0.154"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.serde_repr]]
+version = "0.1.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.serde_spanned]]
+version = "0.6.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.serde_spanned]]
+version = "1.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.serde_urlencoded]]
+version = "0.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.sha2]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Version 0.11.0 was exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; upgraded to the latest release 0.11.1 on 2026-10-13 (riscv-zknh and AArch64 constant-loading changes, MSRV 1.88); replace with an audit or imported audit."
+
+[[exemptions.shellexpand]]
+version = "3.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.signal-hook-registry]]
 version = "1.4.8"
@@ -827,20 +2677,60 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.simd-adler32]]
+version = "0.3.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.simd_cesu8]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni, jni-macros; replace with an audit or imported audit."
+
+[[exemptions.simd_helpers]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.simplecss]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.siphasher]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.skrifa]]
+version = "0.40.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.slab]]
 version = "0.4.12"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.slotmap]]
+version = "1.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.smallvec]]
 version = "1.16.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by hyper; replace with an audit or imported audit."
+
+[[exemptions.smol]]
+version = "2.0.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.smol_str]]
+version = "0.3.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.snow]]
 version = "0.10.0"
@@ -862,6 +2752,71 @@ version = "0.9.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for flume; no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
+[[exemptions.spin]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.spirv]]
+version = "0.2.0+1.5.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.stable_deref_trait]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.str_indices]]
+version = "0.4.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.strict-num]]
+version = "0.1.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.string_cache]]
+version = "0.8.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.string_cache_codegen]]
+version = "0.5.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.strum]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.strum_macros]]
+version = "0.28.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.svg_fmt]]
+version = "0.4.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.svgtypes]]
+version = "0.15.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.svgtypes]]
+version = "0.16.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.swash]]
+version = "0.2.10"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -877,6 +2832,66 @@ version = "0.1.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): axum; used by the relay stack; replace with an audit or imported audit."
 
+[[exemptions.synstructure]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.sys-locale]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.sysinfo]]
+version = "0.31.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.system-configuration]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.system-configuration-sys]]
+version = "0.6.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.taffy]]
+version = "0.13.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.taffy]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tao-core-video-sys]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tauri-winrt-notification]]
+version = "0.8.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tempfile]]
+version = "3.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tendril]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.termcolor]]
+version = "1.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.thiserror]]
 version = "2.0.21"
 criteria = "safe-to-deploy"
@@ -887,6 +2902,11 @@ version = "2.0.21"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by thiserror; replace with an audit or imported audit."
 
+[[exemptions.tiff]]
+version = "0.11.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.time]]
 version = "0.3.55"
 criteria = "safe-to-deploy"
@@ -896,6 +2916,26 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10)
 version = "0.2.32"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.tiny-keccak]]
+version = "2.0.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tiny-skia]]
+version = "0.11.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tiny-skia-path]]
+version = "0.11.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tinystr]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.tinyvec]]
 version = "1.13.3"
@@ -911,6 +2951,66 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 (1.53.3) for todoke-transport,
 version = "2.7.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-transport tests (#[tokio::test], development builds only); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.tokio-rustls]]
+version = "0.26.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tokio-socks]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.tokio-util]]
+version = "0.7.20"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml]]
+version = "0.8.23"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml]]
+version = "1.1.8+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_datetime]]
+version = "0.6.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_datetime]]
+version = "1.1.2+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_edit]]
+version = "0.22.27"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_edit]]
+version = "0.25.17+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_parser]]
+version = "1.1.5+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_write]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.toml_writer]]
+version = "1.1.3+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.tower]]
 version = "0.5.3"
@@ -932,30 +3032,130 @@ version = "0.1.44"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): quinn (no subscriber is installed: nothing is logged); used by quinn, quinn-proto, quinn-udp; replace with an audit or imported audit."
 
+[[exemptions.tracing-attributes]]
+version = "0.1.31"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.triomphe]]
+version = "0.1.17"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.ttf-parser]]
+version = "0.25.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.typenum]]
 version = "1.20.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.uds_windows]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicase]]
+version = "2.10.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-bidi-mirroring]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-ccc]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-id]]
+version = "0.3.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.unicode-ident]]
 version = "1.0.27"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.unicode-properties]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-script]]
+version = "0.5.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-vo]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.untrusted]]
 version = "0.9.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by ring, rustls-webpki; replace with an audit or imported audit."
+
+[[exemptions.url]]
+version = "2.5.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.usvg]]
+version = "0.45.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.usvg]]
+version = "0.46.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.uuid]]
 version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.v_frame]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.version_check]]
+version = "0.9.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.vswhom]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.vswhom-sys]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wait-timeout]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.walkdir]]
 version = "2.5.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by jni; replace with an audit or imported audit."
+
+[[exemptions.want]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.wasi]]
 version = "0.11.1+wasi-snapshot-preview1"
@@ -966,6 +3166,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for mio on WASI targets, which
 version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.wasm-bindgen-futures]]
+version = "0.4.79"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.wasm-bindgen-macro]]
 version = "0.2.129"
@@ -982,6 +3187,61 @@ version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.wasm-streams]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wasm_thread]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-backend]]
+version = "0.3.17"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-client]]
+version = "0.31.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-cursor]]
+version = "0.31.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-protocols]]
+version = "0.32.13"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-protocols-plasma]]
+version = "0.3.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-protocols-wlr]]
+version = "0.3.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-scanner]]
+version = "0.31.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wayland-sys]]
+version = "0.31.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.web-sys]]
+version = "0.3.106"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.web-time]]
 version = "1.1.0"
 criteria = "safe-to-deploy"
@@ -992,10 +3252,240 @@ version = "1.0.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): fallback roots for rustls-platform-verifier; used by rustls-platform-verifier; replace with an audit or imported audit."
 
+[[exemptions.weezl]]
+version = "0.1.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-core]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-core-deps-apple]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-core-deps-emscripten]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-core-deps-wasm]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-core-deps-windows-linux-android]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-hal]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-naga-bridge]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wgpu-types]]
+version = "29.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.which]]
+version = "8.0.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.winapi]]
+version = "0.3.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.winapi-i686-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.winapi-util]]
 version = "0.1.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
+
+[[exemptions.winapi-x86_64-pc-windows-gnu]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows]]
+version = "0.57.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows]]
+version = "0.58.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows]]
+version = "0.61.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-capture]]
+version = "1.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-collections]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-collections]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-core]]
+version = "0.57.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-core]]
+version = "0.58.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-core]]
+version = "0.61.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-core]]
+version = "0.62.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-future]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-future]]
+version = "0.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-implement]]
+version = "0.57.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-implement]]
+version = "0.58.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-implement]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-interface]]
+version = "0.57.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-interface]]
+version = "0.58.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-interface]]
+version = "0.59.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-numerics]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-numerics]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-registry]]
+version = "0.4.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-registry]]
+version = "0.6.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-result]]
+version = "0.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-result]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-result]]
+version = "0.3.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-result]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-strings]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-strings]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-strings]]
+version = "0.4.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-strings]]
+version = "0.5.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
+version = "0.48.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows-sys]]
 version = "0.52.0"
@@ -1003,64 +3493,354 @@ criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through ring (see its exemption), never built for Windows. Replace with an audit or imported audit when upstream changes."
 
 [[exemptions.windows-sys]]
+version = "0.60.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
 version = "0.61.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for todoke-fs (Windows bindings that rustix and errno declare; todoke-fs itself uses only the standard library on Windows); imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.windows-targets]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows-targets]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
 
+[[exemptions.windows-targets]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-threading]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-threading]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows-version]]
+version = "0.1.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.windows_aarch64_gnullvm]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows_aarch64_msvc]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
 
+[[exemptions.windows_aarch64_msvc]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.windows_i686_gnu]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows_i686_gnullvm]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
 
+[[exemptions.windows_i686_gnullvm]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.windows_i686_msvc]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows_x86_64_gnu]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
 
+[[exemptions.windows_x86_64_gnu]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.windows_x86_64_gnullvm]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.48.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.windows_x86_64_msvc]]
 version = "0.52.6"
 criteria = "safe-to-deploy"
 notes = "Never compiled: reached only through windows-sys 0.52.0 (see its exemption)."
 
+[[exemptions.windows_x86_64_msvc]]
+version = "0.53.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.winnow]]
+version = "0.7.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.winnow]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.winreg]]
+version = "0.56.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.wio]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.writeable]]
+version = "0.6.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.x11]]
+version = "2.21.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.x11rb]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.x11rb-protocol]]
+version = "0.13.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.x509-parser]]
 version = "0.18.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by the relay stack; replace with an audit or imported audit."
 
+[[exemptions.xcb]]
+version = "1.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xcursor]]
+version = "0.3.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xim-ctext]]
+version = "0.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xim-parser]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xkbcommon]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xkeysym]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xml-rs]]
+version = "0.8.29"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xml5ever]]
+version = "0.18.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.xmlwriter]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.y4m]]
+version = "0.8.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.yasna]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the relay transport (§10): used by rcgen; replace with an audit or imported audit."
+
+[[exemptions.yazi]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.yeslogic-fontconfig-sys]]
+version = "6.0.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.yoke]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.yoke-derive]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus]]
+version = "5.19.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus-lockstep]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus-lockstep-macros]]
+version = "0.5.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus_macros]]
+version = "5.19.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus_names]]
+version = "4.3.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus_xml]]
+version = "5.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zcheapstr]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zed-font-kit]]
+version = "0.14.1-zed"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zed-scap]]
+version = "0.0.8-zed"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zed-xim]]
+version = "0.4.0-zed"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zeno]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerocopy]]
+version = "0.8.63"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerocopy-derive]]
+version = "0.8.63"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerofrom]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerofrom-derive]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.zeroize]]
 version = "1.9.1"
@@ -1072,7 +3852,67 @@ version = "1.5.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for human-code pairing (CPace from pakery, compiled only with the non-default unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
+[[exemptions.zerotrie]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerovec]]
+version = "0.11.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zerovec-derive]]
+version = "0.11.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zlib-rs]]
+version = "0.6.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.zmij]]
 version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.zune-core]]
+version = "0.4.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zune-core]]
+version = "0.5.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zune-inflate]]
+version = "0.2.54"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zune-jpeg]]
+version = "0.4.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zune-jpeg]]
+version = "0.5.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zvariant]]
+version = "5.15.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zvariant_derive]]
+version = "5.15.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zvariant_utils]]
+version = "4.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."

@@ -43,7 +43,7 @@ zeroize.workspace = true
 todoke-daemon.workspace = true
 # The UI toolkit: GPUI and its styled components. No tree-sitter, no
 # speech, no JavaScript runtime.
-gpui-kit = "=0.7.3"
+gpui-kit.workspace = true
 # The pairing QR code, drawn as quads.
 qrcode.workspace = true
 # Channels between the UI and the core (executor-agnostic), and the
@@ -54,4 +54,4 @@ image = { version = "=0.25.10", default-features = false, features = ["png"], op
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
 # Headless windows, simulated input, and the accessibility tree in tests.
-gpui-kit = { version = "=0.7.3", features = ["test-support"] }
+gpui-kit = { workspace = true, features = ["test-support"] }
