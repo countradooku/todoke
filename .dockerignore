@@ -1,0 +1,11 @@
+# Build contexts are the repository root; keep them small and free of
+# local state.
+.git
+target
+bench/target
+fuzz/target
+fuzz/corpus
+fuzz/artifacts
+mutants.out
+mutants.out.old
+**/.DS_Store

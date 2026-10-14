@@ -1,0 +1,23 @@
+# One-command self-hosting from the repository root:
+#
+#   docker compose -f crates/todoke-relay/compose.yaml up -d
+#   docker compose -f crates/todoke-relay/compose.yaml logs relay   # the pin
+#
+# Set TODOKE_RELAY_NAME to the name devices will use (the certificate's
+# name); devices pin the printed key, so no public certificate is needed.
+services:
+  relay:
+    build:
+      context: ../..
+      dockerfile: crates/todoke-relay/Dockerfile
+    command: ["--name", "${TODOKE_RELAY_NAME:-localhost}"]
+    ports:
+      - "4433:4433/udp"
+    volumes:
+      - relay-state:/var/lib/todoke-relay
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+volumes:
+  relay-state:
