@@ -48,8 +48,7 @@ pub(crate) async fn serve(core: Core, listener: Listener, stop: Arc<Notify>) {
         let Ok(permit) = Arc::clone(&permits).try_acquire_owned() else {
             // Over the limit: say so, then close.
             tokio::spawn(async move {
-                let busy = write_message(&mut stream, &ServerMessage::Busy, MAX_SERVER_MESSAGE);
-                let _ = tokio::time::timeout(BUSY_DEADLINE, busy).await;
+                let _ = tokio::time::timeout(BUSY_DEADLINE, busy(&mut stream)).await;
             });
             continue;
         };
@@ -59,6 +58,17 @@ pub(crate) async fn serve(core: Core, listener: Listener, stop: Arc<Notify>) {
             let _ = connection(core, stream, &proof, &stop).await;
         });
     }
+}
+
+/// Tells a client over the limit the daemon is busy. What it sent (its
+/// hello) is read and dropped until it closes: closing a TCP socket with
+/// unread data resets it, and the reset would discard the answer.
+async fn busy(stream: &mut Box<dyn Stream>) -> std::io::Result<()> {
+    write_message(stream, &ServerMessage::Busy, MAX_SERVER_MESSAGE).await?;
+    tokio::io::AsyncWriteExt::shutdown(stream).await?;
+    let mut discard = [0_u8; 1024];
+    while stream.read(&mut discard).await? > 0 {}
+    Ok(())
 }
 
 async fn connection(
