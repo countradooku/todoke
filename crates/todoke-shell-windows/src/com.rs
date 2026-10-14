@@ -13,11 +13,11 @@
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 use windows::Win32::Foundation::{
     CLASS_E_CLASSNOTAVAILABLE, CLASS_E_NOAGGREGATION, E_NOTIMPL, E_POINTER, HINSTANCE, HMODULE,
-    S_FALSE,
+    S_FALSE, S_OK,
 };
 use windows::Win32::System::Com::{CoTaskMemFree, IBindCtx, IClassFactory, IClassFactory_Impl};
 use windows::Win32::System::LibraryLoader::GetModuleFileNameW;
@@ -33,6 +33,11 @@ pub const CLSID: GUID = GUID::from_u128(0x346A_1ED9_A65C_4480_B1DE_A792_C182_93C
 
 /// This DLL's module handle, from `DllMain`.
 static MODULE: AtomicPtr<core::ffi::c_void> = AtomicPtr::new(core::ptr::null_mut());
+
+/// Commands alive and server locks held: the surrogate may unload this DLL
+/// (and an upgrade replace it) only when both are none.
+static OBJECTS: AtomicUsize = AtomicUsize::new(0);
+static LOCKS: AtomicUsize = AtomicUsize::new(0);
 
 /// At most this many items are handed over (the app's own limit).
 const MAX_ITEMS: u32 = 10_000;
@@ -79,10 +84,14 @@ pub unsafe extern "system" fn DllGetClassObject(
     unsafe { factory.query(interface, object) }
 }
 
-/// The DLL stays loaded while the surrogate runs (it is tiny).
+/// The DLL may unload once no command is alive and no lock is held.
 #[unsafe(no_mangle)]
 pub extern "system" fn DllCanUnloadNow() -> HRESULT {
-    S_FALSE
+    if OBJECTS.load(Ordering::SeqCst) == 0 && LOCKS.load(Ordering::SeqCst) == 0 {
+        S_OK
+    } else {
+        S_FALSE
+    }
 }
 
 #[implement(IClassFactory)]
@@ -103,18 +112,49 @@ impl IClassFactory_Impl for Factory_Impl {
         if outer.is_some() {
             return Err(CLASS_E_NOAGGREGATION.into());
         }
-        let command: IExplorerCommand = SendCommand.into();
+        let command: IExplorerCommand = SendCommand::new().into();
         // SAFETY: valid interface ID and out pointer, as above.
         unsafe { command.query(interface, object) }.ok()
     }
 
-    fn LockServer(&self, _lock: BOOL) -> windows_core::Result<()> {
+    fn LockServer(&self, lock: BOOL) -> windows_core::Result<()> {
+        if lock.as_bool() {
+            LOCKS.fetch_add(1, Ordering::SeqCst);
+        } else {
+            // Never below zero, whatever a caller does.
+            let mut held = LOCKS.load(Ordering::SeqCst);
+            while held > 0 {
+                match LOCKS.compare_exchange_weak(
+                    held,
+                    held - 1,
+                    Ordering::SeqCst,
+                    Ordering::SeqCst,
+                ) {
+                    Ok(_) => break,
+                    Err(now) => held = now,
+                }
+            }
+        }
         Ok(())
     }
 }
 
 #[implement(IExplorerCommand)]
-struct SendCommand;
+struct SendCommand(());
+
+impl SendCommand {
+    /// A command, counted until it is dropped.
+    fn new() -> Self {
+        OBJECTS.fetch_add(1, Ordering::SeqCst);
+        Self(())
+    }
+}
+
+impl Drop for SendCommand {
+    fn drop(&mut self) {
+        OBJECTS.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 /// A string the shell frees (`CoTaskMemFree`).
 fn shell_string(text: &str) -> windows_core::Result<PWSTR> {

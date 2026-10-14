@@ -533,7 +533,9 @@ jobs:
           Stop-Process -Id $app.Id -Force
           if (-not $received) { throw "the Explorer command's request did not arrive" }
 
-          Add-AppxPackage -Path "dist\upgrade\todoke-$($env:VERSION).1-windows-x64.msix"
+          # As Windows Update does: the package's running processes (the
+          # Explorer command's surrogate among them) are closed first.
+          Add-AppxPackage -ForceApplicationShutdown -Path "dist\upgrade\todoke-$($env:VERSION).1-windows-x64.msix"
           $version = (Get-AppxPackage -Name org.todoke.todoke).Version
           if ($version -ne "$($env:VERSION).1") { throw "after the upgrade the version is $version" }
 
