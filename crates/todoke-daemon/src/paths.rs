@@ -72,9 +72,10 @@ impl Paths {
     /// A Unix socket path must be short (`sun_path` holds 104 bytes on
     /// macOS, 108 on Linux). The socket lives in the private state
     /// directory when the path fits; otherwise in the user's private runtime
-    /// directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS, both per user),
-    /// or in `/tmp/todoke-<uid>`, which the daemon creates 0700 and refuses
-    /// to use unless it owns it. The name is derived from the state
+    /// directory (`$XDG_RUNTIME_DIR`, or `$TMPDIR` on macOS), used only if
+    /// this user owns it and nobody else can enter it, or in
+    /// `/tmp/todoke-<uid>`, which the daemon creates 0700 and refuses to use
+    /// unless it owns it. The name is derived from the state
     /// directory, so two homes never share a socket, and spellings of one
     /// path (repeated or trailing separators) share it.
     #[must_use]
@@ -96,6 +97,7 @@ impl Paths {
             if let Some(dir) = std::env::var_os(variable).map(PathBuf::from)
                 && dir.is_absolute()
                 && fits(&dir.join(&name))
+                && private_to_us(&dir)
             {
                 return dir.join(name);
             }
@@ -151,6 +153,24 @@ pub fn shared_tmp() -> PathBuf {
     #[cfg(not(unix))]
     let uid = 0;
     PathBuf::from("/tmp").join(format!("todoke-{uid}"))
+}
+
+/// Whether `dir` is a directory this user owns that nobody else can enter
+/// (a shared `/tmp` is not: another user could plant a socket in it).
+fn private_to_us(dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+        std::fs::metadata(dir).is_ok_and(|metadata| {
+            let shared = metadata.permissions().mode() & 0o077 != 0;
+            metadata.is_dir() && metadata.uid() == rustix::process::getuid().as_raw() && !shared
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = dir;
+        false
+    }
 }
 
 /// FNV-1a: a stable, short name for a path (not a security measure).

@@ -18,7 +18,15 @@
 //! close the connection. The first client message is [`ClientMessage::Hello`]
 //! (with the token on Windows). Requests carry an ID echoed by their
 //! response; a connection that sends [`ClientMessage::Subscribe`] receives
-//! every [`Event`] from then on.
+//! every [`Event`] from then on, and sends nothing more.
+//!
+//! # Limits
+//!
+//! At most [`MAX_CONNECTIONS`] connections are served; one more is sent
+//! [`ServerMessage::Busy`] and closed. The hello must arrive within 5
+//! seconds, and a request connection idle for 2 minutes is closed. A
+//! subscriber that falls behind gets [`Event::Missed`] in place of what it
+//! missed.
 
 use core::fmt;
 use std::path::Path;
@@ -92,6 +100,8 @@ pub enum ServerMessage {
         /// The event.
         event: Event,
     },
+    /// Every connection slot is taken; try again later.
+    Busy,
 }
 
 /// Writes one message.
@@ -167,7 +177,8 @@ impl Client {
     /// # Errors
     ///
     /// `NotFound` or `ConnectionRefused` if no daemon runs; `PermissionDenied`
-    /// if it refused this client.
+    /// if it refused this client or (Unix) runs as another user;
+    /// `ResourceBusy` if every connection slot is taken.
     pub async fn connect(endpoint: &Path) -> std::io::Result<Self> {
         let (stream, token) = crate::endpoint::connect(endpoint).await?;
         let mut client = Self { stream, next_id: 0 };
@@ -179,6 +190,7 @@ impl Client {
         .await?;
         match read_message::<_, ServerMessage>(&mut client.stream, MAX_SERVER_MESSAGE).await? {
             Some(ServerMessage::Welcome) => Ok(client),
+            Some(ServerMessage::Busy) => Err(std::io::ErrorKind::ResourceBusy.into()),
             _ => Err(std::io::ErrorKind::PermissionDenied.into()),
         }
     }

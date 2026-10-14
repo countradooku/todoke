@@ -139,11 +139,18 @@ impl Drop for Listener {
 ///
 /// # Errors
 ///
-/// `NotFound` or `ConnectionRefused` if no daemon runs.
+/// `NotFound` or `ConnectionRefused` if no daemon runs; `PermissionDenied`
+/// if (Unix) the socket belongs to another user.
 pub(crate) async fn connect(path: &Path) -> std::io::Result<(Box<dyn Stream>, Option<String>)> {
     #[cfg(unix)]
     {
         let stream = tokio::net::UnixStream::connect(path).await?;
+        // Only this user's daemon: anything else listening there would be
+        // handed pairing codes and paths.
+        let ours = rustix::process::getuid().as_raw();
+        if !stream.peer_cred().is_ok_and(|cred| cred.uid() == ours) {
+            return Err(std::io::ErrorKind::PermissionDenied.into());
+        }
         Ok((Box::new(stream), None))
     }
     #[cfg(not(unix))]

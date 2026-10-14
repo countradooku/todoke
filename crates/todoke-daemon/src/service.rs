@@ -80,7 +80,7 @@ pub fn definition(kind: Kind, exe: &Path) -> String {
             xml_escape(&exe)
         ),
         Kind::WindowsTask => format!(
-            "<?xml version=\"1.0\" encoding=\"UTF-16\"?>\n\
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
              <Task version=\"1.2\" xmlns=\"http://schemas.microsoft.com/windows/2004/02/mit/task\">\n\
              \x20 <Triggers>\n    <LogonTrigger>\n      <Enabled>true</Enabled>\n    </LogonTrigger>\n  </Triggers>\n\
              \x20 <Principals>\n    <Principal id=\"Author\">\n      <LogonType>InteractiveToken</LogonType>\n      <RunLevel>LeastPrivilege</RunLevel>\n    </Principal>\n  </Principals>\n\

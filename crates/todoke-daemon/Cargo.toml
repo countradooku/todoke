@@ -31,3 +31,7 @@ rustix.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# The server tests run a real core.
+todoke-core = { workspace = true, features = ["unaudited-dev"] }
