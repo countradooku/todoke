@@ -7,11 +7,16 @@
 //! background executor. Every interactive element has an ID, a role, and a
 //! label for screen readers; every action has a key binding.
 
+mod assets;
+#[cfg(any(test, feature = "mock"))]
+pub mod fixtures;
 mod history;
 mod home;
 mod pair;
 mod qr;
 mod receive;
+#[cfg(feature = "mock")]
+pub mod screenshots;
 mod settings;
 #[cfg(test)]
 mod tests;
@@ -214,7 +219,7 @@ pub struct Todoke {
     _subscriptions: Vec<Subscription>,
 }
 
-fn unix_now() -> u64 {
+pub(super) fn unix_now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
@@ -1170,7 +1175,7 @@ pub fn run() {
         }
     };
     gpui_kit::application()
-        .with_assets(gpui_kit::assets::Assets)
+        .with_assets(assets::Assets)
         .run(move |cx: &mut App| {
             gpui_kit::init(cx);
             cx.bind_keys(bindings());

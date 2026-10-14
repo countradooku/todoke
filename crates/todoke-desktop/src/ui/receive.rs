@@ -101,7 +101,7 @@ impl Todoke {
             .with_animation(
                 gpui_kit::ElementId::Name(format!("sheet-{transfer}").into()),
                 Animation::new(tokens::motion::NORMAL).with_easing(gpui_kit::ease_out_quint()),
-                |card, delta| card.opacity(delta).mt(px((1.0 - delta) * space::XL)),
+                |card, delta| card.mt(px((1.0 - delta) * space::XL)),
             );
         Some(
             div()

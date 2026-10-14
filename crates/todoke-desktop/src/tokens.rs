@@ -144,7 +144,7 @@ pub mod size {
     /// A contact avatar.
     pub const AVATAR: f32 = 56.0;
     /// A contact tile (avatar and label).
-    pub const TILE: f32 = 112.0;
+    pub const TILE: f32 = 144.0;
     /// The proximity dot on an avatar.
     pub const DOT: f32 = 14.0;
     /// A progress bar's height.

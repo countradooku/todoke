@@ -7878,6 +7878,7 @@ name = "todoke-desktop"
 version = "0.1.0"
 dependencies = [
  "gpui-kit",
+ "image",
  "qrcode",
  "serde",
  "serde_json",

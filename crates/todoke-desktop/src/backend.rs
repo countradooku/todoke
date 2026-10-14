@@ -262,7 +262,7 @@ pub fn stop_daemon(paths: &Paths) -> std::io::Result<()> {
     runtime.block_on(async { Client::connect(&paths.endpoint()).await?.shutdown().await })
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "mock"))]
 pub mod mock {
     //! A scripted core for the UI tests: it answers from a closure, records
     //! every request, and sends events on demand.

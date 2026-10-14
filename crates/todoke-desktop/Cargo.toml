@@ -16,10 +16,17 @@ workspace = true
 # Without it the app starts, shows that sessions are disabled in this build,
 # and can still attach to a development daemon.
 unaudited-dev = ["todoke-daemon/unaudited-dev"]
+# The mock core and the screenshot tool (examples/screenshots.rs): renders
+# every screen off screen with the real renderer. Never in a shipped build.
+mock = ["gpui-kit/test-support", "dep:image"]
 
 [[bin]]
 name = "todoke-desktop"
 path = "src/main.rs"
+
+[[example]]
+name = "screenshots"
+required-features = ["mock"]
 
 [dependencies]
 todoke-core.workspace = true
@@ -42,6 +49,8 @@ qrcode.workspace = true
 # Channels between the UI and the core (executor-agnostic), and the
 # runtime of the daemon client's thread.
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+# PNG output of the screenshot tool (`mock` feature only).
+image = { version = "=0.25.10", default-features = false, features = ["png"], optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dev-dependencies]
 # Headless windows, simulated input, and the accessibility tree in tests.

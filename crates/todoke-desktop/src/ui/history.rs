@@ -22,7 +22,7 @@ use crate::format;
 use crate::tokens::{self, Palette, space, text};
 
 /// One row's height: two lines and padding.
-const ROW: f32 = 76.0;
+const ROW: f32 = 100.0;
 
 impl Todoke {
     pub(super) fn render_history(&mut self, cx: &mut Context<Self>) -> AnyElement {
@@ -175,6 +175,9 @@ fn history_row(entry: &HistoryEntry, palette: &'static Palette, mono: &SharedStr
         .role(Role::ListItem)
         .aria_label(spoken)
         .h(px(ROW))
+        .w_full()
+        .min_w_0()
+        .overflow_hidden()
         .flex()
         .flex_col()
         .justify_center()
@@ -231,18 +234,10 @@ fn row_detail(
     let hash = entry.manifest_hash.clone().unwrap_or_default();
     let receipt = entry.receipt.as_ref().map(|receipt| receipt.id.clone());
     let short = |hex: &str| hex.chars().take(16).collect::<String>();
-    div()
+    let hashes = div()
         .flex()
         .items_center()
-        .gap(px(space::M))
-        .text_size(px(text::CAPTION))
-        .text_color(tokens::color(palette.muted))
-        .child(format!(
-            "{} {peer} · {} · {}",
-            if incoming { "from" } else { "to" },
-            format::bytes(entry.bytes),
-            when
-        ))
+        .gap(px(space::S))
         .when(!hash.is_empty(), |row| {
             row.child(widgets::mono_in(
                 format!("manifest {}…", short(&hash)),
@@ -264,5 +259,18 @@ fn row_detail(
                 receipt,
                 "Copy the receipt ID",
             ))
-        })
+        });
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(space::XS))
+        .text_size(px(text::CAPTION))
+        .text_color(tokens::color(palette.muted))
+        .child(format!(
+            "{} {peer} · {} · {}",
+            if incoming { "from" } else { "to" },
+            format::bytes(entry.bytes),
+            when
+        ))
+        .child(hashes)
 }
