@@ -560,11 +560,34 @@ fn vector(profile: Profile) -> Result<Value> {
     }))
 }
 
+/// `value` with every object's keys in sorted order. The fixtures are
+/// compared byte for byte, and `serde_json` keeps insertion order instead
+/// when another crate in the build enables its `preserve_order` feature
+/// (GPUI does), so the order is fixed here rather than by a feature.
+fn sorted(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let mut entries: Vec<(String, serde_json::Value)> = map.into_iter().collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            serde_json::Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, sorted(value)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.into_iter().map(sorted).collect())
+        }
+        other => other,
+    }
+}
+
 fn encoded_vectors() -> Result<Vec<(&'static str, Vec<u8>)>> {
     PROFILES
         .into_iter()
         .map(|profile| {
-            let mut bytes = serde_json::to_vec_pretty(&vector(profile)?)?;
+            let mut bytes = serde_json::to_vec_pretty(&sorted(vector(profile)?))?;
             bytes.push(b'\n');
             Ok((profile.file, bytes))
         })

@@ -15,7 +15,8 @@ mod home;
 mod pair;
 mod qr;
 mod receive;
-#[cfg(feature = "mock")]
+// Off-screen rendering is Metal: macOS only.
+#[cfg(all(feature = "mock", target_os = "macos"))]
 pub mod screenshots;
 mod settings;
 #[cfg(test)]
