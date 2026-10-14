@@ -567,3 +567,141 @@ async fn two_remote_devices_pair_and_transfer_through_a_relay() -> AnyResult<()>
     );
     Ok(())
 }
+
+/// An in-memory link that claims to be `kind`.
+struct Pipe(tokio::io::DuplexStream, todoke_transport::LinkInfo);
+
+impl todoke_transport::Link for Pipe {
+    fn info(&self) -> &todoke_transport::LinkInfo {
+        &self.1
+    }
+}
+
+impl futures_io::AsyncRead for Pipe {
+    fn poll_read(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &mut [u8],
+    ) -> core::task::Poll<std::io::Result<usize>> {
+        let mut read = tokio::io::ReadBuf::new(buf);
+        match tokio::io::AsyncRead::poll_read(core::pin::Pin::new(&mut self.0), cx, &mut read) {
+            core::task::Poll::Ready(Ok(())) => core::task::Poll::Ready(Ok(read.filled().len())),
+            core::task::Poll::Ready(Err(error)) => core::task::Poll::Ready(Err(error)),
+            core::task::Poll::Pending => core::task::Poll::Pending,
+        }
+    }
+}
+
+impl futures_io::AsyncWrite for Pipe {
+    fn poll_write(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+        buf: &[u8],
+    ) -> core::task::Poll<std::io::Result<usize>> {
+        tokio::io::AsyncWrite::poll_write(core::pin::Pin::new(&mut self.0), cx, buf)
+    }
+    fn poll_flush(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_flush(core::pin::Pin::new(&mut self.0), cx)
+    }
+    fn poll_close(
+        mut self: core::pin::Pin<&mut Self>,
+        cx: &mut core::task::Context<'_>,
+    ) -> core::task::Poll<std::io::Result<()>> {
+        tokio::io::AsyncWrite::poll_shutdown(core::pin::Pin::new(&mut self.0), cx)
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Forged {
+    /// A `CodeOfferRequest` for the shown code (the displayer's stranger
+    /// token).
+    CodeRequest,
+    /// A QR-mode `ClientHello` for the shown QR offer.
+    QrHello,
+}
+
+/// Whether a device showing the offer that `forged` is for answers it when
+/// it arrives on a link from `origin`.
+async fn answered(forged: Forged, origin: super::running::Origin) -> AnyResult<bool> {
+    use tokio::io::AsyncReadExt as _;
+    let scratch = Scratch::new("origin")?;
+    let config = CoreConfig::new(scratch.0.join("state"), scratch.0.join("downloads"));
+    let key = KeyFile::new(scratch.0.join("storage.key"));
+    let (events, _) = broadcast::channel(16);
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async move {
+            let state = super::running::State::open(config, &key, events)?;
+            let record = match forged {
+                Forged::CodeRequest => {
+                    assert!(matches!(
+                        state.handle(Request::PairShowCode).await,
+                        Response::Code { .. }
+                    ));
+                    let token = state.stranger_token().ok_or("no stranger token")?;
+                    let request = todoke_proto::pairing::CodeOfferRequest::new(token)?;
+                    todoke_proto::session::encode_prelude_record(
+                        todoke_proto::session::PreludeKind::CodeOfferRequest,
+                        &request.encode(),
+                    )?
+                }
+                Forged::QrHello => {
+                    let Response::Qr { text, .. } = state.handle(Request::PairShowQr).await else {
+                        return Err("no QR offer".into());
+                    };
+                    let payload = todoke_crypto::pairing::QrPayload::from_text(
+                        &text,
+                        super::running::wall(),
+                    )?;
+                    let hello = todoke_proto::session::Hello::client(
+                        todoke_proto::session::SessionMode::Qr,
+                        0,
+                        *payload.pairing_id(),
+                        [0x5e; 16],
+                    )?;
+                    todoke_proto::session::encode_prelude_record(
+                        todoke_proto::session::PreludeKind::ClientHello,
+                        &hello.encode(),
+                    )?
+                }
+            };
+            let (ours, mut theirs) = tokio::io::duplex(1 << 16);
+            let link = Pipe(
+                ours,
+                todoke_transport::LinkInfo::new(todoke_transport::LinkKind::Relay),
+            );
+            tokio::io::AsyncWriteExt::write_all(&mut theirs, &record).await?;
+            let running = tokio::task::spawn_local({
+                let state = std::rc::Rc::clone(&state);
+                async move { state.incoming(link, origin).await }
+            });
+            let mut chunk = [0_u8; 4096];
+            // What the displayer sends back within a moment, if anything.
+            let read = tokio::time::timeout(Duration::from_secs(2), theirs.read(&mut chunk)).await;
+            running.abort();
+            Ok::<_, Box<dyn std::error::Error>>(matches!(read, Ok(Ok(read)) if read > 0))
+        })
+        .await
+}
+
+/// §10, §16 O8: a relay tunnel is accepted only for what it was opened
+/// for. A shown code is never reachable through a relay, a contact's
+/// tunnel never carries pairing, and a QR tunnel carries QR pairing only.
+#[tokio::test(flavor = "current_thread")]
+async fn a_tunnel_carries_only_what_it_was_opened_for() -> AnyResult<()> {
+    use super::running::Origin::{Lan, RelayContact, RelayQr};
+    // Any contact key: the tunnel's purpose is what matters.
+    let mut base = [0x66; 32];
+    base[0] = 0x58;
+    let contact = todoke_crypto::identity::Ed25519PublicKey::from_bytes(&base)?;
+    assert!(answered(Forged::CodeRequest, Lan).await?);
+    assert!(!answered(Forged::CodeRequest, RelayContact(contact)).await?);
+    assert!(!answered(Forged::CodeRequest, RelayQr).await?);
+    assert!(answered(Forged::QrHello, Lan).await?);
+    assert!(answered(Forged::QrHello, RelayQr).await?);
+    assert!(!answered(Forged::QrHello, RelayContact(contact)).await?);
+    Ok(())
+}

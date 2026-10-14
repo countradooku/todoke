@@ -51,3 +51,4 @@ proptest.workspace = true
 [target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
 # A relay node for the tests that meet through one.
 todoke-relay.workspace = true
+futures-io.workspace = true

@@ -2052,6 +2052,7 @@ dependencies = [
 name = "todoke-core"
 version = "0.1.0"
 dependencies = [
+ "futures-io",
  "getrandom 0.4.3",
  "libcrux-ml-kem",
  "proptest",

@@ -72,6 +72,8 @@ pub(super) struct Relays {
     endpoints: Vec<RelayEndpoint>,
     /// Rooms open now (at most two, §10).
     rooms: Cell<usize>,
+    /// Of those, rooms held by contact registrations.
+    contact_rooms: Cell<usize>,
     /// Contacts with a registration in progress.
     busy: RefCell<BTreeSet<Ed25519PublicKey>>,
     /// Contacts not to try before this monotonic time.
@@ -126,6 +128,7 @@ impl Relays {
             client,
             endpoints,
             rooms: Cell::new(0),
+            contact_rooms: Cell::new(0),
             busy: RefCell::new(BTreeSet::new()),
             paused: RefCell::new(BTreeMap::new()),
             failures: RefCell::new(BTreeMap::new()),
@@ -158,6 +161,9 @@ impl Drop for Claim {
         if let Some(relays) = &self.state.relay {
             relays.rooms.set(relays.rooms.get().saturating_sub(1));
             if let Some(peer) = &self.peer {
+                relays
+                    .contact_rooms
+                    .set(relays.contact_rooms.get().saturating_sub(1));
                 relays.busy.borrow_mut().remove(peer);
             }
         }
@@ -186,15 +192,19 @@ fn failure_pause(failures: u32) -> Duration {
 }
 
 impl State {
-    /// A room for a registration, if fewer than `limit` are open; for a
-    /// contact, also its busy mark.
+    /// A room for a registration, if one of §10's two is free; for a
+    /// contact, also one of the `limit` contacts may hold, and its busy
+    /// mark.
     fn claim_room(self: &Rc<Self>, peer: Option<Ed25519PublicKey>, limit: usize) -> Option<Claim> {
         let relays = self.relay.as_ref()?;
-        if relays.rooms.get() >= limit.min(MAX_ROOMS_PER_ENDPOINT) {
+        if relays.rooms.get() >= MAX_ROOMS_PER_ENDPOINT
+            || (peer.is_some() && relays.contact_rooms.get() >= limit)
+        {
             return None;
         }
         relays.rooms.set(relays.rooms.get() + 1);
         if let Some(peer) = peer {
+            relays.contact_rooms.set(relays.contact_rooms.get() + 1);
             relays.busy.borrow_mut().insert(peer);
         }
         Some(Claim {
@@ -329,7 +339,7 @@ impl State {
                 Err(_) => false,
             }
         } else {
-            self.incoming(link, Origin::RelayContact).await
+            self.incoming(link, Origin::RelayContact(peer)).await
         }
     }
 
@@ -476,5 +486,152 @@ mod tests {
         assert_eq!(failure_pause(2), Duration::from_mins(2));
         assert_eq!(failure_pause(5), Duration::from_mins(16));
         assert_eq!(failure_pause(40), MAX_FAILURE_PAUSE);
+    }
+
+    /// A state with one (unreachable) relay configured; nothing is sent.
+    fn state(scratch: &std::path::Path) -> Result<Rc<State>, Box<dyn std::error::Error>> {
+        let mut config =
+            crate::config::CoreConfig::new(scratch.join("state"), scratch.join("downloads"));
+        config.lan.enabled = false;
+        config.relays = vec![RelayConfig {
+            name: "none".into(),
+            address: "127.0.0.1:9".into(),
+            server_name: "relay.test".into(),
+            pin: None,
+        }];
+        let key = crate::storage_key::KeyFile::new(scratch.join("storage.key"));
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        Ok(State::open(config, &key, events)?)
+    }
+
+    /// §10: two rooms at once. While a QR offer is shown, contacts leave
+    /// one room free for it, so a contact and the offer can wait together.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_shown_offer_and_one_contact_can_wait_together()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let scratch = crate::profile::tests::Scratch::new("rooms-unit")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let state = state(&scratch.0)?;
+                let own = *state.identity.binding().device_public();
+                // No offer shown: contacts take two rooms, never a third.
+                let one = state.claim_room(Some(own), state.contact_rooms());
+                let two = state.claim_room(Some(own), state.contact_rooms());
+                let three = state.claim_room(Some(own), state.contact_rooms());
+                assert!(one.is_some() && two.is_some() && three.is_none());
+                drop((one, two));
+                // The offer is registered first, then a contact asks.
+                state.pairing.set(Some(Pairing::Qr));
+                let offer = state.claim_room(None, MAX_ROOMS_PER_ENDPOINT);
+                let contact_room = state.claim_room(Some(own), state.contact_rooms());
+                assert!(offer.is_some());
+                assert!(
+                    contact_room.is_some(),
+                    "the offer's room starved the contact"
+                );
+                Ok(())
+            })
+            .await
+    }
+
+    fn config(name: &str, pin: Option<&str>) -> RelayConfig {
+        RelayConfig {
+            name: name.into(),
+            address: "127.0.0.1:9".into(),
+            server_name: "relay.test".into(),
+            pin: pin.map(str::to_owned),
+        }
+    }
+
+    /// The relay list is checked when the core starts: a name used twice
+    /// (it is the rendezvous-hashing key, so two would split a pair) and a
+    /// pin that is not exactly `spki-sha256:` and 64 hex digits are refused;
+    /// and a presence period below 10 seconds is raised to 10.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_relay_list_is_validated() {
+        let invalid = |result: Result<Option<Relays>, StartError>| {
+            matches!(
+                result,
+                Err(StartError::Io(std::io::ErrorKind::InvalidInput))
+            )
+        };
+        let pin = format!("spki-sha256:{}", "ab".repeat(32));
+        assert!(matches!(Relays::new(&[], 300), Ok(None)));
+        assert!(invalid(Relays::new(
+            &[config("a", None), config("a", Some(&pin))],
+            300
+        )));
+        for bad in ["spki-sha256:abcd", "sha256:00", &pin[..pin.len() - 1], ""] {
+            assert!(
+                invalid(Relays::new(&[config("a", Some(bad))], 300)),
+                "{bad}"
+            );
+        }
+        let list = [config("a", None), config("b", Some(&pin))];
+        let relays = Relays::new(&list, 1);
+        assert!(
+            matches!(&relays, Ok(Some(relays)) if relays.period == MIN_PRESENCE
+            && relays.endpoints.len() == 2 && relays.endpoints[1].pin == Some([0xab; 32]))
+        );
+    }
+
+    /// A shown QR offer waits at the relay, and stopping it ends that wait
+    /// at once, giving its room back (not after the 30-second wait).
+    #[tokio::test(flavor = "current_thread")]
+    async fn stopping_the_offer_ends_its_wait_at_the_relay()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::api::{Request, Response};
+        let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+        let node = todoke_relay::Relay::bind(
+            todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+            &identity,
+        )?;
+        let (counters, address) = (node.metrics(), node.local_addr()?);
+        tokio::spawn(node.run(std::sync::Arc::new(tokio::sync::Notify::new())));
+        let scratch = crate::profile::tests::Scratch::new("qr-stop")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let mut config = crate::config::CoreConfig::new(
+                    scratch.0.join("state"),
+                    scratch.0.join("downloads"),
+                );
+                config.lan.enabled = false;
+                config.relays = vec![RelayConfig {
+                    name: "node".into(),
+                    address: address.to_string(),
+                    server_name: "relay.test".into(),
+                    pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+                }];
+                let key = crate::storage_key::KeyFile::new(scratch.0.join("storage.key"));
+                let (events, _) = tokio::sync::broadcast::channel(4);
+                let state = State::open(config, &key, events)?;
+                let rooms = || state.relay.as_ref().map_or(99, |relays| relays.rooms.get());
+                assert!(matches!(
+                    state.handle(Request::PairShowQr).await,
+                    Response::Qr { .. }
+                ));
+                let waiting = async {
+                    while counters
+                        .registers
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        == 0
+                    {
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                };
+                tokio::time::timeout(Duration::from_secs(5), waiting).await?;
+                assert_eq!(rooms(), 1);
+                assert_eq!(state.handle(Request::StopPairing).await, Response::Done);
+                let freed = async {
+                    while rooms() != 0 {
+                        tokio::time::sleep(Duration::from_millis(20)).await;
+                    }
+                };
+                tokio::time::timeout(Duration::from_secs(1), freed).await?;
+                Ok(())
+            })
+            .await
     }
 }

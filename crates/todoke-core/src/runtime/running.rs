@@ -180,8 +180,8 @@ pub(super) struct TransferRecord {
 pub(super) enum Origin {
     /// The LAN listener: contacts and every kind of pairing.
     Lan,
-    /// A relay tunnel opened for a contact: that contact's session only.
-    RelayContact,
+    /// A relay tunnel opened for this contact: its session only.
+    RelayContact(Ed25519PublicKey),
     /// A relay tunnel opened for a shown QR offer: QR pairing only.
     RelayQr,
 }
@@ -490,6 +490,13 @@ impl State {
                 let Ok(claimed) = contact.claim(&table, now).await else {
                     return false;
                 };
+                // A tunnel opened for one contact carries no other's
+                // session (whoever registered on its token).
+                if let Origin::RelayContact(expected) = origin
+                    && *claimed.peer() != expected
+                {
+                    return false;
+                }
                 let Ok(local) = self.identity.local(now) else {
                     return false;
                 };
@@ -504,7 +511,7 @@ impl State {
                 session::run(Rc::clone(self), established).await;
                 true
             }
-            Incoming::Pairing(incoming) if origin != Origin::RelayContact => {
+            Incoming::Pairing(incoming) if !matches!(origin, Origin::RelayContact(_)) => {
                 let mode = incoming.client_hello().mode();
                 if origin == Origin::RelayQr && mode != SessionMode::Qr {
                     return false;
@@ -528,7 +535,7 @@ impl State {
     }
 
     /// The stranger token this device advertises now.
-    fn stranger_token(&self) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
+    pub(super) fn stranger_token(&self) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
         let table = self.table.borrow();
         let plan =
             self.advertiser
@@ -600,7 +607,7 @@ impl State {
     }
 
     /// Handles a request.
-    async fn handle(self: &Rc<Self>, request: Request) -> Response {
+    pub(super) async fn handle(self: &Rc<Self>, request: Request) -> Response {
         match request {
             Request::Status => Response::Status(self.status()),
             Request::Contacts => Response::Contacts(self.contact_list().await),
