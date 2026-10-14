@@ -185,6 +185,20 @@ from local user intent for every resumed transfer (§7.2, §7.5).
   seconds, so a long-idle receiver reconnects for each new offer (a cost,
   not a weakness).
 
+## Known test gaps
+
+- **The session idle close** (30 seconds) and its guard for transfers
+  still awaiting a decision are not exercised: no test waits that long.
+  Fix: a test-only idle period, then assert an undecided offer survives
+  three of them and an idle session closes and reconnects.
+- **Offer races at a session's end** (an offer sent as the session stops
+  reading, or before it is ready) are handled in `finish` and `apply`
+  but not driven deterministically. Fix: a session test seam that pauses
+  the loop between the last read and the drain.
+- **Windows links**: the junction walk test runs only on the Windows CI
+  runner; owner checks of socket directories need a second user and are
+  covered by the same comparison as the mode checks.
+
 ## Not here
 
 QR scanning from a camera, desktop notifications, the GUI (P12), OS
