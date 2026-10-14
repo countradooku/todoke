@@ -209,12 +209,14 @@ fn walk_bounds_match_the_manifest() -> TestResult {
         walk(&[scratch.0.join("deep")]).err(),
         Some(SendError::TooLarge)
     );
-    // Exactly 10000 entries: a folder and 9999 empty files.
+    // Exactly 10000 entries: a folder, 9998 folders, and a file (folders
+    // hold no descriptors, so the runner's open-file limit does not bind).
     let wide = scratch.0.join("wide");
     std::fs::create_dir(&wide)?;
-    for n in 0..MAX_ENTRIES - 1 {
-        std::fs::write(wide.join(format!("{n}")), b"")?;
+    for n in 0..MAX_ENTRIES - 2 {
+        std::fs::create_dir(wide.join(format!("{n}")))?;
     }
+    std::fs::write(wide.join("file"), b"x")?;
     // A link costs nothing: it is skipped.
     #[cfg(unix)]
     std::os::unix::fs::symlink("/", wide.join("link"))?;
@@ -234,7 +236,7 @@ fn walk_bounds_match_the_manifest() -> TestResult {
         Some(SendError::Manifest)
     );
     drop(prepared);
-    std::fs::write(wide.join("one-more"), b"")?;
+    std::fs::create_dir(wide.join("one-more"))?;
     assert_eq!(walk(&[wide]).err(), Some(SendError::TooLarge));
     Ok(())
 }
