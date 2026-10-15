@@ -728,8 +728,7 @@ impl<L: Link> ClaimedIncoming<L> {
     ///
     /// # Errors
     ///
-    /// [`ConnectError::StaleTable`]; [`ConnectError::Session`], including
-    /// [`SessionError::GenerationMismatch`] (reported locally only, §4.4).
+    /// [`ConnectError::StaleTable`] or [`ConnectError::Session`].
     pub async fn respond<K: KeyStore, S: Sealer, B: BlobStorage>(
         self,
         table: &DiscoveryTable,

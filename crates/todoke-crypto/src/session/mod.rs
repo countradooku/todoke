@@ -192,8 +192,9 @@ pub enum SessionError {
     Protocol(ErrorCode),
     /// The peer closed the session with a session-scoped `Error`.
     PeerError(ErrorCode),
-    /// The Hello generation differs from the stored one (divergent
-    /// generations, §4.1, §4.4). Reported locally only; nothing is retried.
+    /// A ratchet record names another `generation_next` than this side's
+    /// (divergent generations, §4.4). Reported locally only; nothing is
+    /// retried. (Hellos carry no generation, §4.1.)
     GenerationMismatch,
     /// The pair generation cannot be incremented; a new pairing is required
     /// (§4.4). A contact at `u64::MAX` is refused before any handshake, and

@@ -74,7 +74,6 @@ impl CodePairing {
     fn hello(&self) -> AnyResult<Hello> {
         Ok(Hello::client(
             SessionMode::Code,
-            0,
             *self.offer.pairing_id(),
             CLIENT_NONCE,
         )?)
@@ -229,7 +228,7 @@ fn a_man_in_the_middle_with_a_guessed_code_fails_on_both_sides() -> TestResult {
     mallory_offers.create_code(CODE_GATE, wall()?, MONO)?;
     let mallory_id = mallory_offers.code_pairing_id().ok_or("offer")?;
     let reservation = mallory_offers.reserve(
-        &Hello::client(SessionMode::Code, 0, mallory_id, CLIENT_NONCE)?,
+        &Hello::client(SessionMode::Code, mallory_id, CLIENT_NONCE)?,
         wall()?,
         MONO,
     )?;

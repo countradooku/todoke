@@ -72,7 +72,7 @@ impl Offer {
     }
 
     fn reserve(&self) -> AnyResult<OfferReservation> {
-        let hello = Hello::client(SessionMode::Qr, 0, *self.payload.pairing_id(), CLIENT_NONCE)?;
+        let hello = Hello::client(SessionMode::Qr, *self.payload.pairing_id(), CLIENT_NONCE)?;
         Ok(self.offers.reserve(&hello, wall()?, MONO)?)
     }
 }
@@ -327,7 +327,7 @@ fn begin_refuses_a_pending_pairing_and_the_wrong_offer_kind() -> TestResult {
     codes.create_code(CODE_GATE, wall()?, MONO)?;
     let id = codes.code_pairing_id().ok_or("code offer")?;
     let reservation = codes.reserve(
-        &Hello::client(SessionMode::Code, 0, id, CLIENT_NONCE)?,
+        &Hello::client(SessionMode::Code, id, CLIENT_NONCE)?,
         wall()?,
         MONO,
     )?;

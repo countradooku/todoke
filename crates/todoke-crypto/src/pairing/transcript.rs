@@ -15,7 +15,7 @@
 //! context choices still need conformance vectors before release (§3.2).
 
 use todoke_proto::pairing::{CODE_OFFER_TRANSCRIPT_LEN, CODE_SHARE_LEN};
-use todoke_proto::session::Hello;
+use todoke_proto::session::{HELLO_LEN, Hello};
 use zeroize::Zeroizing;
 
 use super::cpace::Isk;
@@ -35,7 +35,7 @@ pub(crate) fn channel_identifier(
     client: &Hello,
     server: &Hello,
 ) -> Vec<u8> {
-    let mut ci = Vec::with_capacity(CI_DOMAIN.len() + CODE_OFFER_TRANSCRIPT_LEN + 2 * 66);
+    let mut ci = Vec::with_capacity(CI_DOMAIN.len() + CODE_OFFER_TRANSCRIPT_LEN + 2 * HELLO_LEN);
     ci.extend_from_slice(CI_DOMAIN);
     ci.extend_from_slice(code_offer);
     ci.extend_from_slice(&client.encode());
@@ -60,7 +60,8 @@ pub(crate) fn pre_noise(
     share_a: &[u8; CODE_SHARE_LEN],
     share_b: &[u8; CODE_SHARE_LEN],
 ) -> Vec<u8> {
-    let mut out = Vec::with_capacity(CODE_OFFER_TRANSCRIPT_LEN + 2 * 66 + 2 * CODE_SHARE_LEN);
+    let mut out =
+        Vec::with_capacity(CODE_OFFER_TRANSCRIPT_LEN + 2 * HELLO_LEN + 2 * CODE_SHARE_LEN);
     out.extend_from_slice(code_offer);
     out.extend_from_slice(&client.encode());
     out.extend_from_slice(&server.encode());
@@ -86,7 +87,7 @@ mod tests {
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
     fn hellos() -> Result<(Hello, Hello), Box<dyn std::error::Error>> {
-        let client = Hello::client(SessionMode::Code, 0, [0xa1; 16], [0xc1; 16])?;
+        let client = Hello::client(SessionMode::Code, [0xa1; 16], [0xc1; 16])?;
         let server = client.server_reply([0x5c; 16])?;
         Ok((client, server))
     }
@@ -96,23 +97,23 @@ mod tests {
         let (client, server) = hellos()?;
         let offer = [0x0f; CODE_OFFER_TRANSCRIPT_LEN];
         let ci = channel_identifier(&offer, &client, &server);
-        assert_eq!(ci.len(), 19 + 44 + 66 + 66);
+        assert_eq!(ci.len(), 19 + 44 + 58 + 58);
         assert_eq!(&ci[..19], b"todoke/v1/cpace-ci\0");
         assert_eq!(&ci[19..63], &offer);
-        assert_eq!(&ci[63..129], &client.encode());
-        assert_eq!(&ci[129..], &server.encode());
+        assert_eq!(&ci[63..121], &client.encode());
+        assert_eq!(&ci[121..], &server.encode());
         let sid = session_identifier(&server);
         assert_eq!(&sid[..16], &[0xc1; 16]);
         assert_eq!(&sid[16..], &[0x5c; 16]);
         assert_eq!(AD_A, b"todoke/v1/cpace-a\0");
         assert_eq!(AD_B, b"todoke/v1/cpace-b\0");
         let pre = pre_noise(&offer, &client, &server, &[0xaa; 49], &[0xbb; 49]);
-        assert_eq!(pre.len(), 44 + 66 + 66 + 49 + 49);
+        assert_eq!(pre.len(), 44 + 58 + 58 + 49 + 49);
         assert_eq!(&pre[..44], &offer);
-        assert_eq!(&pre[44..110], &client.encode());
-        assert_eq!(&pre[110..176], &server.encode());
-        assert_eq!(&pre[176..225], &[0xaa; 49]);
-        assert_eq!(&pre[225..], &[0xbb; 49]);
+        assert_eq!(&pre[44..102], &client.encode());
+        assert_eq!(&pre[102..160], &server.encode());
+        assert_eq!(&pre[160..209], &[0xaa; 49]);
+        assert_eq!(&pre[209..], &[0xbb; 49]);
         Ok(())
     }
 

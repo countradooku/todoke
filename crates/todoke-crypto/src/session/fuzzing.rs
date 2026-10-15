@@ -99,10 +99,9 @@ fn transcript() -> CodeTranscript {
     )
 }
 
-/// The fixture `ClientHello` for `mode` (generation 7 for contacts).
+/// The fixture `ClientHello` for `mode`.
 fn client_hello(mode: SessionMode) -> Option<Hello> {
-    let generation = if mode == SessionMode::Contact { 7 } else { 0 };
-    Hello::client(mode, generation, [0xa1; 16], [0xa5; 16]).ok()
+    Hello::client(mode, [0xa1; 16], [0xa5; 16]).ok()
 }
 
 /// Handshake input parsing. The first byte selects the mode (`% 3`) and

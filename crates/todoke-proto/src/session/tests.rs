@@ -173,8 +173,7 @@ fn prelude_kinds_and_reserved_values() -> TestResult {
 }
 
 fn sample_client(mode: SessionMode) -> Result<Hello, DecodeError> {
-    let generation = if mode == SessionMode::Contact { 7 } else { 0 };
-    Hello::client(mode, generation, [0xa1; 16], [0xa5; 16])
+    Hello::client(mode, [0xa1; 16], [0xa5; 16])
 }
 
 #[test]
@@ -211,38 +210,33 @@ fn hello_field_validation() -> TestResult {
         Err(DecodeError::Reserved)
     );
     assert_eq!(
-        Hello::decode_client(&mutate(50, 1)),
+        Hello::decode_client(&mutate(42, 1)),
         Err(DecodeError::Reserved)
     );
-    assert_eq!(Hello::decode_client(&bytes[..65]), Err(DecodeError::Length));
+    assert_eq!(Hello::decode_client(&bytes[..57]), Err(DecodeError::Length));
+    // The 66-byte layout that carried a generation (before §16 O12).
+    assert_eq!(
+        Hello::decode_client(&[bytes.as_slice(), &[0; 8]].concat()),
+        Err(DecodeError::Length)
+    );
     let mut long = bytes.to_vec();
     long.push(0);
     assert_eq!(Hello::decode_client(&long), Err(DecodeError::Length));
     let mut zero_locator = bytes;
-    zero_locator[18..34].fill(0);
+    zero_locator[10..26].fill(0);
     assert_eq!(
         Hello::decode_client(&zero_locator),
         Err(DecodeError::ZeroIdentifier)
     );
     let mut zero_nonce = bytes;
-    zero_nonce[34..50].fill(0);
+    zero_nonce[26..42].fill(0);
     assert_eq!(
         Hello::decode_client(&zero_nonce),
         Err(DecodeError::ZeroIdentifier)
     );
-    // Pairing modes carry generation 0; a contact may carry any value.
-    for mode in [SessionMode::Qr, SessionMode::Code] {
-        assert_eq!(
-            Hello::client(mode, 1, [1; 16], [1; 16]),
-            Err(DecodeError::Range)
-        );
-        let mut encoded = sample_client(mode)?.encode();
-        encoded[17] = 1;
-        assert_eq!(Hello::decode_client(&encoded), Err(DecodeError::Range));
-    }
-    assert!(Hello::client(SessionMode::Contact, 0, [1; 16], [1; 16]).is_ok());
+    assert!(Hello::client(SessionMode::Contact, [1; 16], [1; 16]).is_ok());
     assert_eq!(
-        Hello::client(SessionMode::Contact, 1, [0; 16], [1; 16]),
+        Hello::client(SessionMode::Contact, [0; 16], [1; 16]),
         Err(DecodeError::ZeroIdentifier)
     );
     Ok(())
@@ -259,13 +253,13 @@ fn server_hello_must_echo_every_field() -> TestResult {
         Err(DecodeError::ZeroIdentifier)
     );
     let mut zero = bytes;
-    zero[50..].fill(0);
+    zero[42..].fill(0);
     assert_eq!(
         Hello::decode_server(&zero, &client),
         Err(DecodeError::ZeroIdentifier)
     );
-    // Every echoed byte (mode, generation, locator, client nonce) is checked.
-    for offset in 8..50 {
+    // Every echoed byte (mode, locator, client nonce) is checked.
+    for offset in 8..42 {
         if offset == 9 {
             continue;
         }
@@ -495,13 +489,11 @@ proptest! {
     #[test]
     fn hellos_round_trip(
         mode in arb_mode(),
-        generation in any::<u64>(),
         locator in any::<[u8; 16]>(),
         client_nonce in any::<[u8; 16]>(),
         server_nonce in any::<[u8; 16]>(),
     ) {
-        let generation = if mode == SessionMode::Contact { generation } else { 0 };
-        if let Ok(client) = Hello::client(mode, generation, locator, client_nonce) {
+        if let Ok(client) = Hello::client(mode, locator, client_nonce) {
             let bytes = client.encode();
             prop_assert_eq!(Hello::decode_client(&bytes), Ok(client));
             if let Ok(server) = client.server_reply(server_nonce) {
@@ -571,7 +563,7 @@ proptest! {
 /// `Debug` shows only their sizes.
 #[test]
 fn hello_debug_redacts_locator_and_nonces() -> TestResult {
-    let client = Hello::client(SessionMode::Contact, 7, [0xa1; 16], [0xa5; 16])?;
+    let client = Hello::client(SessionMode::Contact, [0xa1; 16], [0xa5; 16])?;
     let server = client.server_reply([0xa6; 16])?;
     for hello in [client, server] {
         let debug = format!("{hello:?}");
@@ -583,7 +575,7 @@ fn hello_debug_redacts_locator_and_nonces() -> TestResult {
             debug.contains("[16 bytes]") && debug.contains("Contact"),
             "{debug}"
         );
-        assert!(debug.contains("generation: 7"), "{debug}");
+        assert!(!debug.contains("generation"), "{debug}");
     }
     Ok(())
 }

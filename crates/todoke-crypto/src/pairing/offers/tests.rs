@@ -20,7 +20,7 @@ fn later(seconds: u64) -> AnyResult<UnixTime> {
 }
 
 fn hello(mode: SessionMode, pairing_id: [u8; 16]) -> AnyResult<Hello> {
-    Ok(Hello::client(mode, 0, pairing_id, [0xc1; 16])?)
+    Ok(Hello::client(mode, pairing_id, [0xc1; 16])?)
 }
 
 fn qr_offer(offers: &PairingOffers, device: &Device) -> AnyResult<QrPayload> {
@@ -123,7 +123,7 @@ fn reserve_checks_id_mode_and_expiry() -> TestResult {
             .err(),
         Some(PairingError::Mode)
     );
-    let contact = Hello::client(SessionMode::Contact, 3, id, [1; 16])?;
+    let contact = Hello::client(SessionMode::Contact, id, [1; 16])?;
     assert_eq!(
         offers.reserve(&contact, now()?, MONO).err(),
         Some(PairingError::Mode)

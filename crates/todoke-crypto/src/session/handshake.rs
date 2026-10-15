@@ -386,6 +386,9 @@ type SecretParts = (
 pub(crate) struct HandshakeDriver {
     role: Role,
     client: Hello,
+    /// The pair generation, from the plan: the Hello carries none (§4.1);
+    /// the PSK is this generation's, so the handshake fails on any other.
+    generation: u64,
     phase: Phase,
     deadline: Duration,
     /// Known up front, or derived from `CPace` in code pairing.
@@ -415,7 +418,7 @@ impl HandshakeDriver {
         entropy: Entropy,
         started: Duration,
     ) -> Result<(Self, Vec<u8>), SessionError> {
-        let client = Hello::client(plan.mode, plan.generation, plan.locator, client_nonce)
+        let client = Hello::client(plan.mode, plan.locator, client_nonce)
             .map_err(|_| SessionError::Usage)?;
         let record = encode_prelude_record(PreludeKind::ClientHello, &client.encode())
             .map_err(|_| SessionError::Usage)?;
@@ -423,6 +426,7 @@ impl HandshakeDriver {
         let driver = Self {
             role: Role::Initiator,
             client,
+            generation: plan.generation,
             phase: Phase::AwaitServerHello,
             deadline: started.saturating_add(HANDSHAKE_TIMEOUT),
             psk,
@@ -453,11 +457,6 @@ impl HandshakeDriver {
         if plan.mode != client.mode() {
             return Err(SessionError::Usage);
         }
-        // §4.1: a stored contact generation that differs from the Hello is
-        // reported locally; no re-pairing, older PSK, or fallback is tried.
-        if plan.generation != client.generation() {
-            return Err(SessionError::GenerationMismatch);
-        }
         let server = client
             .server_reply(server_nonce)
             .map_err(|_| SessionError::Random)?;
@@ -467,6 +466,7 @@ impl HandshakeDriver {
         let mut driver = Self {
             role: Role::Responder,
             client,
+            generation: plan.generation,
             phase: Phase::Noise,
             deadline: started.saturating_add(HANDSHAKE_TIMEOUT),
             psk,
@@ -770,7 +770,7 @@ impl HandshakeDriver {
             transport,
             role: self.role,
             mode: self.client.mode(),
-            generation: self.client.generation(),
+            generation: self.generation,
             psk: self.psk.take().ok_or_else(state)?,
             handshake_hash,
             session_id: super::session_id(&handshake_hash),

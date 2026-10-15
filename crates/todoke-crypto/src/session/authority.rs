@@ -246,18 +246,15 @@ impl<S: Sealer, B: BlobStorage> ContactAuthority<'_, S, B> {
     /// # Errors
     ///
     /// [`SessionError::Usage`] for another mode,
-    /// [`SessionError::GenerationMismatch`] when the Hello's generation
-    /// differs from the stored one (reported locally only, §4.4),
     /// [`SessionError::GenerationExhausted`], or
     /// [`SessionError::Unavailable`].
     pub fn responder_plan(&self, hello: &Hello) -> Result<ResponderPlan, SessionError> {
         if hello.mode() != SessionMode::Contact {
             return Err(SessionError::Usage);
         }
+        // The locator resolved the contact and with it the generation (its
+        // pair secret's); the Hello carries none (§4.1, §16 O12).
         let inputs = self.inputs()?;
-        if hello.generation() != inputs.generation {
-            return Err(SessionError::GenerationMismatch);
-        }
         Ok(ResponderPlan::contact(
             inputs.generation,
             inputs.psk,
