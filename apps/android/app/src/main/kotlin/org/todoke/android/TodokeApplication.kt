@@ -1,27 +1,36 @@
 // The process-wide state: the core, started once (off the main thread, after
-// the user unlocks when the key is gated), and the settings the app keeps.
+// the user unlocks when the key is gated), the export of received files to
+// the folder the user chose, and the settings the app keeps.
 
 package org.todoke.android
 
 import android.app.Application
 import android.app.KeyguardManager
+import android.net.Uri
 import android.net.wifi.WifiManager
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.todoke.android.core.AndroidKeyStore
 import org.todoke.android.core.Backend
 import org.todoke.android.core.Channels
 import org.todoke.android.core.CoreBackend
+import org.todoke.android.core.Exporter
+import org.todoke.android.core.SafFolder
 import org.todoke.android.core.TodokeNotifier
 import org.todoke.ffi.Core
+import org.todoke.ffi.CoreEvent
 import org.todoke.ffi.Guarded
 import org.todoke.ffi.KeyStoragePolicy
 import org.todoke.ffi.KeyStoreError
 import org.todoke.ffi.Settings
 import org.todoke.ffi.TodokeError
+import org.todoke.ffi.events
 
 /** Where the core is. */
 sealed interface CoreState {
@@ -46,6 +55,12 @@ class TodokeApplication : Application() {
 
     private var guarded: Guarded<Core>? = null
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+    private val received by lazy { File(filesDir, "received") }
+
+    private val exporter by lazy { Exporter(received) }
+
     override fun onCreate() {
         super.onCreate()
         Channels.create(this)
@@ -68,7 +83,7 @@ class TodokeApplication : Application() {
             try {
                 val settings = Settings(
                     home = File(filesDir, "todoke").path,
-                    downloads = File(filesDir, "received").path,
+                    downloads = received.path,
                     lan = true,
                     allowLoopback = false,
                     hidden = prefs.hidden,
@@ -84,7 +99,16 @@ class TodokeApplication : Application() {
                     setReferenceCounted(false)
                     acquire()
                 }
-                CoreState.Ready(CoreBackend(held, contentResolver))
+                // Whatever finished while the app was away, then each
+                // incoming transfer as it ends.
+                val backend = CoreBackend(held, contentResolver)
+                scope.launch {
+                    exportReceived(backend)
+                    held.events().collect {
+                        if (it is CoreEvent.Completed || it is CoreEvent.Ended) exportReceived(backend)
+                    }
+                }
+                CoreState.Ready(backend)
             } catch (error: TodokeError.Disabled) {
                 CoreState.Disabled(error.message.orEmpty())
             } catch (error: TodokeError.KeyStore) {
@@ -94,6 +118,17 @@ class TodokeApplication : Application() {
             } catch (error: TodokeError) {
                 CoreState.Failed(error.message.orEmpty())
             }
+        }
+    }
+
+    /** Moves received files to the folder the user chose, if they chose
+     * one and nothing is being received. Failures (the folder gone, the
+     * grant revoked) leave the files here for the next try. */
+    fun exportReceived(backend: Backend? = backendOrNull()) {
+        backend ?: return
+        val tree = prefs.exportTree?.let(Uri::parse) ?: return
+        scope.launch {
+            runCatching { exporter.exportWhenQuiet(backend, SafFolder.tree(contentResolver, tree)) }
         }
     }
 

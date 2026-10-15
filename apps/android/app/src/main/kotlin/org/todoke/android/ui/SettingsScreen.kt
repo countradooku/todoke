@@ -52,6 +52,7 @@ fun SettingsScreen(state: UiState, modifier: Modifier, onHidden: (Boolean) -> Un
             )
             app.prefs.exportTree = uri.toString()
             exportTree = uri.toString()
+            app.exportReceived()
         }
     }
     val hidden = state.status?.hidden ?: app.prefs.hidden
