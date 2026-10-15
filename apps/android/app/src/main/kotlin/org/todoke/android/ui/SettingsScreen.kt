@@ -5,6 +5,7 @@
 package org.todoke.android.ui
 
 import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -46,10 +47,12 @@ fun SettingsScreen(state: UiState, modifier: Modifier, onHidden: (Boolean) -> Un
     var exportTree by remember { mutableStateOf(app.prefs.exportTree) }
     val folder = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            context.contentResolver.takePersistableUriPermission(
-                uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
-            )
+            val access = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            context.contentResolver.takePersistableUriPermission(uri, access)
+            // The folder chosen before is no longer needed: give its grant up.
+            app.prefs.exportTree?.let(Uri::parse)?.takeIf { it != uri }?.let { old ->
+                runCatching { context.contentResolver.releasePersistableUriPermission(old, access) }
+            }
             app.prefs.exportTree = uri.toString()
             exportTree = uri.toString()
             app.exportReceived()

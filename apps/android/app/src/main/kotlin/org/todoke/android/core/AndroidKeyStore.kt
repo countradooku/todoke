@@ -6,7 +6,9 @@
 // With `gated`, the Keystore key may only be used for 30 seconds after the
 // user unlocks with a strong biometric or the device credential: the app
 // asks (BiometricPrompt) right before it starts the core. New fingerprints
-// do not invalidate the key, so enrolling one never locks a profile out.
+// do not invalidate the key, so enrolling one never locks a profile out;
+// removing the screen lock does invalidate it (Android's rule for keys that
+// need authentication), and the app then says the key is gone.
 
 package org.todoke.android.core
 
@@ -15,8 +17,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import android.security.keystore.UserNotAuthenticatedException
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import java.io.File
 import java.security.KeyStore as JavaKeyStore
 import javax.crypto.Cipher
@@ -31,6 +38,26 @@ import org.todoke.ffi.KeyStoreError
 class AndroidKeyStore(private val context: Context, private val gated: Boolean) : KeyStore {
     private val dir = File(context.noBackupFilesDir, "keys")
 
+    /** The profile last loaded or stored, for [protection]. */
+    @Volatile
+    private var profile: String? = null
+
+    /** Whether the last failure was the user not having unlocked (asking
+     * again helps), and what the last failure was, for people. */
+    @Volatile
+    var refused = false
+        private set
+
+    @Volatile
+    var problem: String? = null
+        private set
+
+    private fun fail(error: KeyStoreError, refusal: Boolean, why: String): Nothing {
+        refused = refusal
+        problem = why
+        throw error
+    }
+
     private fun alias(profile: String) = "todoke-storage-$profile"
 
     private fun keystore(): JavaKeyStore = JavaKeyStore.getInstance(PROVIDER).apply { load(null) }
@@ -39,39 +66,54 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
         Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
 
-    override fun protection(): KeyProtection = if (strongBoxAvailable()) KeyProtection.STRONG_BOX else KeyProtection.TEE
+    /** StrongBox only when the profile's key is known to be there (the
+     * generator falls back to the TEE, and Android before 12 cannot say). */
+    override fun protection(): KeyProtection =
+        if (profile?.let { runCatching { inStrongBox(it) }.getOrNull() } == true) KeyProtection.STRONG_BOX else KeyProtection.TEE
 
     override fun load(profile: String): ByteArray? {
+        this.profile = profile
+        refused = false
         val file = File(dir, "$profile.key")
         if (!file.exists()) return null
         val key = keystore().getKey(alias(profile), null) as? SecretKey
-            ?: throw KeyStoreError.Unavailable("the wrapping key is gone")
+            ?: fail(KeyStoreError.Unavailable("the wrapping key is gone"), false, GONE)
         val blob = file.readBytes()
-        if (blob.size != BLOB_LEN || blob[0] != VERSION) throw KeyStoreError.Unavailable("the stored key is damaged")
+        if (blob.size != BLOB_LEN || blob[0] != VERSION) {
+            fail(KeyStoreError.Unavailable("the stored key is damaged"), false, DAMAGED)
+        }
         return try {
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(TAG_BITS, blob, 1, IV_LEN))
             cipher.updateAAD(profile.toByteArray())
             cipher.doFinal(blob, 1 + IV_LEN, blob.size - 1 - IV_LEN)
-        } catch (error: android.security.keystore.UserNotAuthenticatedException) {
-            throw KeyStoreError.Refused("unlock to open todoke")
+        } catch (error: UserNotAuthenticatedException) {
+            fail(KeyStoreError.Refused("unlock to open todoke"), true, LOCKED)
+        } catch (error: KeyPermanentlyInvalidatedException) {
+            fail(KeyStoreError.Unavailable("the wrapping key was invalidated"), false, INVALIDATED)
         } catch (error: java.security.GeneralSecurityException) {
-            throw KeyStoreError.Unavailable("the stored key could not be opened")
+            fail(KeyStoreError.Unavailable("the stored key could not be opened"), false, DAMAGED)
         }
     }
 
     override fun store(profile: String, key: ByteArray) {
-        val file = File(dir, "$profile.key")
-        if (file.exists()) throw KeyStoreError.AlreadyExists
-        dir.mkdirs()
-        val wrapping = generate(alias(profile))
+        this.profile = profile
+        refused = false
         try {
+            val file = File(dir, "$profile.key")
+            if (file.exists()) throw KeyStoreError.AlreadyExists
+            dir.mkdirs()
+            val wrapping = generate(alias(profile))
             val cipher = Cipher.getInstance(TRANSFORMATION)
             cipher.init(Cipher.ENCRYPT_MODE, wrapping)
             cipher.updateAAD(profile.toByteArray())
             val sealed = cipher.doFinal(key)
             val iv = cipher.iv
             check(iv.size == IV_LEN && sealed.size == KEY_LEN + TAG_BITS / 8)
+            // Written aside and renamed into place, so never torn, then the
+            // directory synced. The core stores a profile's key once, holding
+            // the profile's lock, so nothing else writes this name; the
+            // check above refuses one stored before.
             val temp = File(dir, "$profile.key.tmp")
             temp.outputStream().use { out ->
                 out.write(byteArrayOf(VERSION))
@@ -79,17 +121,28 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
                 out.write(sealed)
                 out.fd.sync()
             }
-            // Never replace: a key stored once stays the profile's.
             if (!temp.renameTo(file) || file.length() != BLOB_LEN.toLong()) {
                 temp.delete()
-                throw KeyStoreError.Unavailable("the key could not be stored")
+                fail(KeyStoreError.Unavailable("the key could not be stored"), false, NOT_STORED)
             }
-        } catch (error: android.security.keystore.UserNotAuthenticatedException) {
-            throw KeyStoreError.Refused("unlock to set up todoke")
+            syncDir()
+        } catch (error: UserNotAuthenticatedException) {
+            fail(KeyStoreError.Refused("unlock to set up todoke"), true, LOCKED)
         } catch (error: java.security.GeneralSecurityException) {
-            throw KeyStoreError.Unavailable("the key could not be stored")
+            fail(KeyStoreError.Unavailable("the key could not be stored"), false, NOT_STORED)
+        } catch (error: ErrnoException) {
+            fail(KeyStoreError.Unavailable("the key could not be stored"), false, NOT_STORED)
         } finally {
             key.fill(0)
+        }
+    }
+
+    private fun syncDir() {
+        val fd = Os.open(dir.path, OsConstants.O_RDONLY, 0)
+        try {
+            Os.fsync(fd)
+        } finally {
+            Os.close(fd)
         }
     }
 
@@ -142,6 +195,13 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
     }
 
     private companion object {
+        // Why the key cannot be used, for people.
+        const val LOCKED = "Unlock to open todoke."
+        const val GONE = "todoke's key is gone from this device's key store, so its data cannot be opened."
+        const val DAMAGED = "todoke's stored key is damaged, so its data cannot be opened."
+        const val INVALIDATED = "todoke's key was erased when the screen lock was removed, so its data cannot be opened."
+        const val NOT_STORED = "todoke could not store its key."
+
         const val PROVIDER = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val VERSION: Byte = 1

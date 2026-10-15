@@ -95,6 +95,7 @@ class TodokeApplication : Application() {
 
     private fun open() {
         _core.value = CoreState.Starting
+        val keys = AndroidKeyStore(this, prefs.gate)
         _core.value = try {
             val settings = Settings(
                 home = File(filesDir, "todoke").path,
@@ -105,8 +106,15 @@ class TodokeApplication : Application() {
                 historyDays = 30u,
                 keyStorage = KeyStoragePolicy.PLATFORM,
             )
-            val core = Core(settings, AndroidKeyStore(this@TodokeApplication, prefs.gate))
-            core.setNotifier(TodokeNotifier(this@TodokeApplication))
+            val core = Core(settings, keys)
+            try {
+                core.setNotifier(TodokeNotifier(this@TodokeApplication))
+            } catch (error: Throwable) {
+                // Never leave a core running that nothing holds: a retry
+                // would start a second one on the same profile.
+                core.close()
+                throw error
+            }
             val held = Guarded(core)
             guarded = held
             // mDNS discovery: Android drops multicast without this lock.
@@ -116,7 +124,7 @@ class TodokeApplication : Application() {
             }
             // Whatever finished while the app was away, then each
             // incoming transfer as it ends.
-            val backend = CoreBackend(held, contentResolver)
+            val backend = CoreBackend(held, this, exporter.receiving)
             scope.launch {
                 exportReceived(backend)
                 held.events().collect {
@@ -127,13 +135,19 @@ class TodokeApplication : Application() {
         } catch (error: TodokeError.Disabled) {
             CoreState.Disabled(error.message.orEmpty())
         } catch (error: TodokeError.KeyStore) {
-            CoreState.Locked(prefs.gate)
+            keyProblem(keys, error.message)
         } catch (error: KeyStoreError) {
-            CoreState.Locked(prefs.gate)
+            keyProblem(keys, error.message)
         } catch (error: TodokeError) {
             CoreState.Failed(error.message.orEmpty())
         }
     }
+
+    /** Locked when the user has to unlock first; otherwise the key cannot
+     * be used (gone, damaged, invalidated by removing the screen lock), and
+     * asking again would not help: say why. */
+    private fun keyProblem(keys: AndroidKeyStore, message: String?): CoreState =
+        if (keys.refused) CoreState.Locked(prefs.gate) else CoreState.Failed(keys.problem ?: message.orEmpty())
 
     /** Moves received files to the folder the user chose, if they chose
      * one and nothing is being received. Failures (the folder gone, the

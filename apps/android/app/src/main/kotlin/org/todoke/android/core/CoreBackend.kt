@@ -1,15 +1,19 @@
 // The Backend on the real core (the BoltFFI bindings), held through
 // Guarded so it is freed only after every call on it has finished. Calls
-// block in the core: they run on Dispatchers.IO.
+// block in the core: they run on Dispatchers.IO. Documents are opened here
+// and refused when they are the app's own files (Documents); accepting an
+// offer waits for the export to finish the file it is moving (Exporter).
 
 @file:OptIn(ExperimentalUnsignedTypes::class)
 
 package org.todoke.android.core
 
-import android.content.ContentResolver
+import android.content.Context
 import android.os.ParcelFileDescriptor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.todoke.ffi.Contact
 import org.todoke.ffi.Core
@@ -22,7 +26,13 @@ import org.todoke.ffi.Stranger
 import org.todoke.ffi.Transfer
 import org.todoke.ffi.events
 
-class CoreBackend(private val core: Guarded<Core>, private val resolver: ContentResolver) : Backend {
+class CoreBackend(
+    private val core: Guarded<Core>,
+    private val context: Context,
+    private val receiving: Mutex = Mutex(),
+) : Backend {
+    private val resolver = context.contentResolver
+
     private suspend fun <R> call(block: (Core) -> R): R = withContext(Dispatchers.IO) { core.call(block) }
 
     override suspend fun status(): Status = call { it.status() }
@@ -66,6 +76,9 @@ class CoreBackend(private val core: Guarded<Core>, private val resolver: Content
             for (document in documents) {
                 opened += resolver.openFileDescriptor(document.uri, "r")
                     ?: throw java.io.FileNotFoundException("a picked document could not be opened")
+                if (Documents.isPrivate(context, opened.last())) {
+                    throw SecurityException("todoke does not send its own files")
+                }
             }
             core.call { core ->
                 core.contact(contact).use { handle ->
@@ -81,8 +94,9 @@ class CoreBackend(private val core: Guarded<Core>, private val resolver: Content
         }
     }
 
-    override suspend fun accept(transfer: String, files: List<UInt>) =
+    override suspend fun accept(transfer: String, files: List<UInt>) = receiving.withLock {
         call { core -> core.transfer(transfer).use { it.accept(files.toUIntArray()) } }
+    }
 
     override suspend fun decline(transfer: String) = call { core -> core.transfer(transfer).use { it.decline() } }
 

@@ -33,6 +33,15 @@ object Shortcuts {
                 .setLongLived(true)
                 .build()
         }
+        // Long-lived shortcuts stay cached by the system after they stop
+        // being dynamic: remove those of contacts no longer shown, so a
+        // removed contact leaves the share sheet.
+        val kept = shortcuts.map { it.id }.toSet()
+        val stale = ShortcutManagerCompat.getShortcuts(
+            context,
+            ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED,
+        ).map { it.id }.filter { it !in kept }
+        if (stale.isNotEmpty()) ShortcutManagerCompat.removeLongLivedShortcuts(context, stale)
         ShortcutManagerCompat.removeAllDynamicShortcuts(context)
         shortcuts.forEach { ShortcutManagerCompat.pushDynamicShortcut(context, it) }
     }

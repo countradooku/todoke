@@ -24,6 +24,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assume.assumeNoException
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -88,9 +89,18 @@ class RealCoreTest {
                 val text = a.call { it.pairShowQr() }.use { it.text() }
                 val device = b.call { it.pairScanQr(text) }.use { it.device() }
 
-                val document = File(context.cacheDir, "notes.txt").apply { writeText("hello from the sandbox") }
-                val sent = CoreBackend(b, context.contentResolver)
-                    .send(device, listOf(Picked(Uri.fromFile(document), "trip notes.txt")))
+                val backend = CoreBackend(b, context)
+                // The app's own files are never sent, whatever names them.
+                val own = File(context.filesDir, "notes.txt").apply { writeText("private") }
+                assertThrows(SecurityException::class.java) {
+                    runBlocking { backend.send(device, listOf(Picked(Uri.fromFile(own), "notes.txt"))) }
+                }
+                own.delete()
+                // Outside the app's data (app-specific external storage).
+                val document = File(context.getExternalFilesDir(null), "notes.txt").apply { writeText("hello from the sandbox") }
+                // Kept until the transfer ends: the sender refuses a file that
+                // changes (or goes) while it is offered.
+                val sent = backend.send(device, listOf(Picked(Uri.fromFile(document), "trip notes.txt")))
                 val offer = offered.await()
                 assertEquals(sent, offer.transfer)
                 assertEquals(listOf("trip notes.txt"), offer.entries.map { it.name })
@@ -102,6 +112,7 @@ class RealCoreTest {
                 }
                 a.call { it.transfer(offer.transfer) }.use { it.accept(uintArrayOf()) }
                 completed.await()
+                document.delete()
                 assertEquals("hello from the sandbox", File(receiving.downloads, "trip notes.txt").readText())
             }
         }

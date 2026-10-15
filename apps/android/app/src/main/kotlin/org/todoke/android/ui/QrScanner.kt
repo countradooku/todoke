@@ -38,6 +38,7 @@ import com.google.zxing.common.HybridBinarizer
 import com.google.zxing.qrcode.QRCodeReader
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 import org.todoke.android.R
 
 @Composable
@@ -54,7 +55,20 @@ fun QrScanner(onScanned: (String) -> Unit) {
     val owner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val done = remember { AtomicBoolean(false) }
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    // Read only on the executor's one thread: ZXing readers are not
+    // thread-safe.
+    val reader = remember { QRCodeReader() }
+    // The camera is released as soon as the scanner leaves the screen (the
+    // tab changes, pairing ends), not when the activity goes.
+    val bound = remember { AtomicReference<ProcessCameraProvider?>(null) }
+    val disposed = remember { AtomicBoolean(false) }
+    DisposableEffect(Unit) {
+        onDispose {
+            disposed.set(true)
+            bound.getAndSet(null)?.unbindAll()
+            executor.shutdown()
+        }
+    }
     AndroidView(
         modifier = Modifier.fillMaxWidth().aspectRatio(1f),
         factory = { viewContext ->
@@ -67,7 +81,7 @@ fun QrScanner(onScanned: (String) -> Unit) {
                     .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
                     .build()
                 analysis.setAnalyzer(executor) { image ->
-                    val text = decode(image)
+                    val text = decode(reader, image)
                     if (text != null && text.startsWith("TODOKE:") && done.compareAndSet(false, true)) {
                         ContextCompat.getMainExecutor(viewContext).execute {
                             provider.unbindAll()
@@ -75,19 +89,20 @@ fun QrScanner(onScanned: (String) -> Unit) {
                         }
                     }
                 }
+                if (disposed.get()) return@addListener
                 provider.unbindAll()
                 provider.bindToLifecycle(owner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                bound.set(provider)
             }, ContextCompat.getMainExecutor(viewContext))
             view
         },
     )
 }
 
-private val reader = QRCodeReader()
 private val hints = mapOf(DecodeHintType.POSSIBLE_FORMATS to listOf(BarcodeFormat.QR_CODE))
 
 /** The QR text in `image`'s luminance plane, if any. */
-private fun decode(image: ImageProxy): String? = image.use {
+private fun decode(reader: QRCodeReader, image: ImageProxy): String? = image.use {
     val plane = it.planes[0]
     val buffer = plane.buffer
     val data = ByteArray(buffer.remaining()).also { bytes -> buffer.get(bytes) }

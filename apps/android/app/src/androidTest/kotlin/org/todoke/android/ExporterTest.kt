@@ -6,6 +6,7 @@
 
 package org.todoke.android
 
+import android.os.Build
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -37,16 +38,23 @@ class ExporterTest {
         scratch.deleteRecursively()
     }
 
-    /** A directory as the chosen folder; with `failing`, writing that name fails halfway. */
-    private class DirFolder(private val dir: File, private val failing: String? = null) : Folder {
+    /** A directory as the chosen folder; with `failing`, writing that name
+     * fails halfway with that error; `writing` runs before each write. */
+    private class DirFolder(
+        private val dir: File,
+        private val failing: String? = null,
+        private val error: () -> Exception = { IOException("the provider went away") },
+        private val writing: (String) -> Unit = {},
+    ) : Folder {
         override fun createFile(name: String, mime: String): NewFile {
             val file = free(name).apply { createNewFile() }
             return object : NewFile {
                 override fun write(content: InputStream) {
+                    writing(name)
                     file.outputStream().use { out ->
                         if (name == failing) {
                             out.write(content.read())
-                            throw IOException("the provider went away")
+                            throw error()
                         }
                         content.copyTo(out)
                     }
@@ -58,7 +66,7 @@ class ExporterTest {
             }
         }
 
-        override fun createFolder(name: String): Folder = DirFolder(free(name).apply { mkdir() }, failing)
+        override fun createFolder(name: String): Folder = DirFolder(free(name).apply { mkdir() }, failing, error, writing)
 
         /** `name`, or `name (1)`, `name (2)`…: what the external storage provider does. */
         private fun free(name: String): File =
@@ -125,11 +133,45 @@ class ExporterTest {
         }
         assertTrue(File(received, "done.txt").exists())
 
-        // Waiting for a decision or interrupted: nothing is being written.
-        backend.transfers = listOf(
-            FakeBackend.transfer("t1", TransferState.AWAITING_DECISION, 0, 2),
-            FakeBackend.transfer("t2", TransferState.INTERRUPTED, 1, 2),
-        )
-        assertEquals(1, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
+        // Interrupted: it may resume, and before Android 11 publication is
+        // a copy, so the export waits it out there.
+        backend.transfers = listOf(FakeBackend.transfer("t2", TransferState.INTERRUPTED, 1, 2))
+        val copies = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+        assertEquals(if (copies) 0 else 1, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
+
+        // Waiting for a decision: nothing is being written.
+        backend.transfers = listOf(FakeBackend.transfer("t1", TransferState.AWAITING_DECISION, 0, 2))
+        assertEquals(if (copies) 1 else 0, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
+        assertFalse(File(received, "done.txt").exists())
+    }
+
+    @Test
+    fun aRevokedGrantLeavesNoPartialCopy() {
+        write("a.txt", "kept")
+        val revoked = DirFolder(chosen, failing = "a.txt", error = { SecurityException("the grant was revoked") })
+        assertThrows(SecurityException::class.java) { runBlocking { Exporter(received).exportWhenQuiet(backend, revoked) } }
+        assertEquals(emptyList<String>(), chosen.list()!!.toList())
+        assertEquals("kept", File(received, "a.txt").readText())
+    }
+
+    /** An offer accepted while a file moves waits for that file, and the
+     * export stops before the next one. */
+    @Test
+    fun anAcceptWaitsForTheFileInHandAndStopsTheExport() = runBlocking {
+        write("a.txt", "first")
+        write("b.txt", "second")
+        val exporter = Exporter(received)
+        var lockedDuringWrite = false
+        val folder = DirFolder(chosen, writing = { name ->
+            if (name == "a.txt") {
+                lockedDuringWrite = exporter.receiving.isLocked
+                // The user accepts an offer now.
+                backend.transfers = listOf(FakeBackend.transfer("t1", TransferState.ACCEPTED, 0, 2))
+            }
+        })
+        assertEquals(1, exporter.exportWhenQuiet(backend, folder))
+        assertTrue(lockedDuringWrite)
+        assertEquals(listOf("a.txt"), chosen.list()!!.toList())
+        assertEquals("second", File(received, "b.txt").readText())
     }
 }

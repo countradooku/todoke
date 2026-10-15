@@ -87,4 +87,8 @@
         <item quantity="one">Send %1$d file to…</item>
         <item quantity="other">Send %1$d files to…</item>
     </plurals>
+    <plurals name="share_more">
+        <item quantity="one">and %1$d more</item>
+        <item quantity="other">and %1$d more</item>
+    </plurals>
 </resources>

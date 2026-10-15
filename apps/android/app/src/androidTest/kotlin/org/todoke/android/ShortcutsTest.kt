@@ -5,6 +5,7 @@ package org.todoke.android
 
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -14,6 +15,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.todoke.android.core.Shortcuts
 
+// Sharing shortcuts need the shortcut service (Android 7.1).
+@SdkSuppress(minSdkVersion = 25)
 @RunWith(AndroidJUnit4::class)
 class ShortcutsTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
@@ -42,5 +45,17 @@ class ShortcutsTest {
     fun anUnknownShortcutFindsNobody() {
         assertNull(Shortcuts.contact(context, "a1".repeat(32), contacts))
         assertNull(Shortcuts.contact(context, "0".repeat(32), contacts))
+    }
+
+    /** A contact no longer shown leaves the share sheet, cached or not. */
+    @Test
+    fun removedContactsLeaveTheShareSheet() {
+        Shortcuts.publish(context, contacts)
+        Shortcuts.publish(context, contacts.take(1))
+        val left = ShortcutManagerCompat.getShortcuts(
+            context,
+            ShortcutManagerCompat.FLAG_MATCH_DYNAMIC or ShortcutManagerCompat.FLAG_MATCH_CACHED,
+        )
+        assertEquals(listOf("Pixel 9"), left.map { it.shortLabel.toString() })
     }
 }

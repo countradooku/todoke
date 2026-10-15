@@ -5,6 +5,12 @@
 
 package org.todoke.android
 
+import org.todoke.android.core.Picked
+import org.todoke.android.core.Documents
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import androidx.compose.runtime.produceState
+import android.content.Context
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -59,7 +65,7 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        shared.value = SharedFiles.from(intent)
+        shared.value = SharedFiles.from(this, intent)
         setContent {
             TodokeTheme {
                 Surface(Modifier.fillMaxSize()) { Content() }
@@ -70,7 +76,7 @@ class MainActivity : FragmentActivity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        SharedFiles.from(intent)?.let { shared.value = it }
+        SharedFiles.from(this, intent)?.let { shared.value = it }
     }
 
     @Composable
@@ -97,14 +103,21 @@ class MainActivity : FragmentActivity() {
                 LaunchedEffect(ui.contacts) { Shortcuts.publish(this@MainActivity, ui.contacts) }
                 AppRoot(model, onTransferStarted = { TransferService.start(this@MainActivity) })
                 shared.value?.let { files ->
+                    // Names come from the sharing app's provider: asked off
+                    // the main thread, shown before anything is sent.
+                    val picked by produceState<List<Picked>?>(null, files) {
+                        value = withContext(Dispatchers.IO) { files.picked(this@MainActivity) }
+                    }
                     ShareSheet(
                         contacts = ui.contacts,
-                        count = files.uris.size,
+                        names = picked?.map { it.name },
                         preselected = files.shortcut?.let { Shortcuts.contact(this@MainActivity, it, ui.contacts) },
                         onSend = { contact ->
-                            shared.value = null
-                            model.send(contact, files.picked(this@MainActivity))
-                            TransferService.start(this@MainActivity)
+                            picked?.let { documents ->
+                                shared.value = null
+                                model.send(contact, documents)
+                                TransferService.start(this@MainActivity)
+                            }
                         },
                         onDismiss = { shared.value = null },
                     )
@@ -190,10 +203,12 @@ class MainActivity : FragmentActivity() {
 /** Files another app shared with todoke, and the Direct Share shortcut if
  * one was used. */
 class SharedFiles(val uris: List<Uri>, val shortcut: String?) {
-    fun picked(activity: MainActivity) = uris.map { org.todoke.android.core.Picked(it, org.todoke.android.ui.displayName(activity, it)) }
+    fun picked(activity: MainActivity) = uris.map { Picked(it, org.todoke.android.ui.displayName(activity, it)) }
 
     companion object {
-        fun from(intent: Intent?): SharedFiles? {
+        /** What `intent` shares, keeping only other apps' content URIs
+         * (never a file URI, never one of todoke's own providers). */
+        fun from(context: Context, intent: Intent?): SharedFiles? {
             intent ?: return null
             val uris = when (intent.action) {
                 Intent.ACTION_SEND -> listOfNotNull(IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java))
@@ -201,8 +216,9 @@ class SharedFiles(val uris: List<Uri>, val shortcut: String?) {
                     IntentCompat.getParcelableArrayListExtra(intent, Intent.EXTRA_STREAM, Uri::class.java).orEmpty()
                 else -> return null
             }
-            if (uris.isEmpty()) return null
-            return SharedFiles(uris, intent.getStringExtra(Intent.EXTRA_SHORTCUT_ID))
+            val shareable = uris.filter { Documents.shareable(context, it) }
+            if (shareable.isEmpty()) return null
+            return SharedFiles(shareable, intent.getStringExtra(Intent.EXTRA_SHORTCUT_ID))
         }
     }
 }
