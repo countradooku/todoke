@@ -33,10 +33,9 @@ pub(crate) fn core_config(
                 .to_owned(),
         });
     }
-    if !with_key_store
-        && cfg!(any(target_os = "android", target_os = "ios"))
-        && policy != KeyStoragePolicy::File
-    {
+    // Android has no key store Rust reaches: the app gives one. (iOS and
+    // macOS use the Keychain natively.)
+    if !with_key_store && cfg!(target_os = "android") && policy != KeyStoragePolicy::File {
         return Err(TodokeError::Invalid {
             message: "give a key store (Core::with_key_store), or ask for a file key explicitly"
                 .to_owned(),

@@ -15,8 +15,10 @@ crate = "todoke_ffi"
 [targets.apple]
 enabled = true
 output = "dist/apple"
-# iOS 16 (P17's minimum); macOS too, for the Swift tests on a Mac.
-deployment_target = "16.0"
+# iOS 17 (P17's minimum, docs/adr/0017-ios.md); macOS too, for the Swift tests
+# on a Mac. Pack with IPHONEOS_DEPLOYMENT_TARGET set to the same version, so
+# C dependencies (aws-lc, blake3) target it too rather than the SDK's.
+deployment_target = "17.0"
 include_macos = true
 
 [targets.apple.swift]
