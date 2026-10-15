@@ -11,11 +11,11 @@ import android.net.wifi.WifiManager
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import org.todoke.android.core.AndroidKeyStore
 import org.todoke.android.core.Backend
 import org.todoke.android.core.Channels
@@ -75,49 +75,63 @@ class TodokeApplication : Application() {
 
     fun backendOrNull(): Backend? = (_core.value as? CoreState.Ready)?.backend
 
-    /** Starts the core; call right after the user unlocked when gated. */
+    /** The start in progress, if any (guarded by `this`). */
+    private var starting: Job? = null
+
+    /**
+     * Starts the core, once, and returns when it is ready or could not
+     * start; call right after the user unlocked when gated. The start runs
+     * in the app's scope: a caller that goes away (the screen that asked
+     * leaves when the state changes) cannot strand it half done, and callers
+     * at the same time (the activity, the resume worker) share one start.
+     */
     suspend fun start() {
-        if (_core.value is CoreState.Ready || _core.value is CoreState.Starting) return
+        val job = synchronized(this) {
+            if (_core.value is CoreState.Ready) return
+            starting?.takeIf { it.isActive } ?: scope.launch(Dispatchers.IO) { open() }.also { starting = it }
+        }
+        job.join()
+    }
+
+    private fun open() {
         _core.value = CoreState.Starting
-        _core.value = withContext(Dispatchers.IO) {
-            try {
-                val settings = Settings(
-                    home = File(filesDir, "todoke").path,
-                    downloads = received.path,
-                    lan = true,
-                    allowLoopback = false,
-                    hidden = prefs.hidden,
-                    historyDays = 30u,
-                    keyStorage = KeyStoragePolicy.PLATFORM,
-                )
-                val core = Core(settings, AndroidKeyStore(this@TodokeApplication, prefs.gate))
-                core.setNotifier(TodokeNotifier(this@TodokeApplication))
-                val held = Guarded(core)
-                guarded = held
-                // mDNS discovery: Android drops multicast without this lock.
-                getSystemService(WifiManager::class.java)?.createMulticastLock("todoke-discovery")?.run {
-                    setReferenceCounted(false)
-                    acquire()
-                }
-                // Whatever finished while the app was away, then each
-                // incoming transfer as it ends.
-                val backend = CoreBackend(held, contentResolver)
-                scope.launch {
-                    exportReceived(backend)
-                    held.events().collect {
-                        if (it is CoreEvent.Completed || it is CoreEvent.Ended) exportReceived(backend)
-                    }
-                }
-                CoreState.Ready(backend)
-            } catch (error: TodokeError.Disabled) {
-                CoreState.Disabled(error.message.orEmpty())
-            } catch (error: TodokeError.KeyStore) {
-                CoreState.Locked(prefs.gate)
-            } catch (error: KeyStoreError) {
-                CoreState.Locked(prefs.gate)
-            } catch (error: TodokeError) {
-                CoreState.Failed(error.message.orEmpty())
+        _core.value = try {
+            val settings = Settings(
+                home = File(filesDir, "todoke").path,
+                downloads = received.path,
+                lan = true,
+                allowLoopback = false,
+                hidden = prefs.hidden,
+                historyDays = 30u,
+                keyStorage = KeyStoragePolicy.PLATFORM,
+            )
+            val core = Core(settings, AndroidKeyStore(this@TodokeApplication, prefs.gate))
+            core.setNotifier(TodokeNotifier(this@TodokeApplication))
+            val held = Guarded(core)
+            guarded = held
+            // mDNS discovery: Android drops multicast without this lock.
+            getSystemService(WifiManager::class.java)?.createMulticastLock("todoke-discovery")?.run {
+                setReferenceCounted(false)
+                acquire()
             }
+            // Whatever finished while the app was away, then each
+            // incoming transfer as it ends.
+            val backend = CoreBackend(held, contentResolver)
+            scope.launch {
+                exportReceived(backend)
+                held.events().collect {
+                    if (it is CoreEvent.Completed || it is CoreEvent.Ended) exportReceived(backend)
+                }
+            }
+            CoreState.Ready(backend)
+        } catch (error: TodokeError.Disabled) {
+            CoreState.Disabled(error.message.orEmpty())
+        } catch (error: TodokeError.KeyStore) {
+            CoreState.Locked(prefs.gate)
+        } catch (error: KeyStoreError) {
+            CoreState.Locked(prefs.gate)
+        } catch (error: TodokeError) {
+            CoreState.Failed(error.message.orEmpty())
         }
     }
 
