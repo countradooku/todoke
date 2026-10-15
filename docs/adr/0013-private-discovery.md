@@ -177,12 +177,10 @@ Bluetooth and no USB at all ([ADR 0014](0014-local-links.md)).
   need a decision on what they reveal.
 - **The statistical tests are not a proof:** unlinkability rests on
   HMAC-BLAKE3 being a PRF.
-- **The LAN Hello links a pair's sessions across epochs:** the contact
-  Hello carries the pair's ratchet `generation` in the clear (§4.1), and it
-  grows by one per committed session, so a LAN observer can follow a pair
-  from epoch to epoch whatever its tokens do (found while researching
-  §16 O7). Fix: a spec revision that blinds the generation in the Hello and
-  checks it inside the handshake.
+- **The LAN Hello linked a pair's sessions across epochs** (resolved): the
+  contact Hello carried the pair's ratchet `generation` in the clear. The
+  Hello no longer carries it ([ADR 0016](0016-hello-generation.md), §16
+  O12).
 - **The benchmark ran on one machine** (Apple M5 Pro); x86_64 and phone
   numbers are still to measure.
 - **Multi-device** waits on O4 (above); BLE is out by decision (ADR 0014).

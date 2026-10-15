@@ -228,7 +228,7 @@ internal algorithms and encodings MUST come from a conforming library, not a new
 implementation here. Let `code_offer = CodeOfferRequest || CodeOffer`, using their
 bodies above. Set `CI = "todoke/v1/cpace-ci\0" || code_offer || ClientHello || ServerHello`,
 `sid = client_nonce || server_nonce`, `ADa = "todoke/v1/cpace-a\0"`, and
-`ADb = "todoke/v1/cpace-b\0"`; Hello bytes mean the 66-byte bodies below.
+`ADb = "todoke/v1/cpace-b\0"`; Hello bytes mean the 58-byte bodies below.
 The 64-byte ISK feeds:
 
 ```
@@ -271,8 +271,8 @@ unframed bytes. This is not the encrypted transport envelope of §5.
 
 | Prelude kind | Message | Body layout / bound |
 | --- | --- | --- |
-| 0x01 | ClientHello | 66 bytes, table below |
-| 0x02 | ServerHello | 66 bytes, table below |
+| 0x01 | ClientHello | 58 bytes, table below |
+| 0x02 | ServerHello | 58 bytes, table below |
 | 0x03 | CodeShareA | 49 bytes, §3.2 |
 | 0x04 | CodeShareB | 49 bytes, §3.2 |
 | 0x05 | NoiseHandshake | table below and exact inner layouts in §4.2 |
@@ -288,16 +288,22 @@ ClientHello and ServerHello each have this layout:
 | hybrid_suite | 2 | 0x0001; assigned profile, production gates in §16 |
 | mode | 1 | 1 QR/IKpsk2, 2 code/XXpsk3, 3 contact/KKpsk2 |
 | flags | 1 | 0 |
-| generation | 8 | u64; 0 for new pairing, persisted generation for contact |
 | locator | 16 | QR/code pairing_id; contact rendezvous token[..16] (§9) |
 | client_nonce | 16 | Random initiator nonce, echoed by ServerHello |
 | server_nonce | 16 | Zero in ClientHello; fresh random in ServerHello |
 
-The responder MUST echo version/suite/mode/generation/locator/client_nonce exactly.
-Hello fields are untrusted hints until the full transcript is authenticated.
-Contact locators MAY use current/adjacent epochs; the resolved full pair and generation
-MUST match authenticated state. A mismatch MUST NOT trigger automatic re-pairing,
-previous-PSK trials, suite fallback, or deletion of a contact.
+Total: 58 bytes. The responder MUST echo version/suite/mode/locator/client_nonce
+exactly. Hello fields are untrusted hints until the full transcript is authenticated.
+A Hello carries no ratchet generation: a contact locator is derived from the
+current generation's pair secret (§9), so the locator alone resolves the full pair
+and its generation, and the handshake then requires that generation's PSK. A
+counter on the wire would only link a pair's sessions across epochs. Contact
+locators MAY use current/adjacent epochs; a locator that resolves to no committed
+pair, or to more than one, is an unknown peer. Nothing about the pair's state is
+sent back, and an unresolved or failing contact Hello MUST NOT trigger automatic
+re-pairing, previous-PSK trials, suite fallback, or deletion of a contact.
+Divergent generations are found locally from the ratchet journal (§4.4); a stale
+generation restored from a backup resolves to no pair (§16 O3).
 
 `NoiseHandshake` body:
 
@@ -1794,4 +1800,4 @@ limits, and policies above are v1 design decisions; open gates do not weaken the
 | O9 | What platform-specific filesystem publication, secret storage, preview isolation, collision mapping, and quota policies satisfy the core invariants on all targets? | No secure file-receipt/platform claim until implementation and adversarial OS tests. |
 | O10 | What independent implementation reproduces the hybrid handshakes, and what content encryption/Bao, state-machine, crash, identity/revocation, discovery-adapter, and relay transcripts establish full interoperability? | The six standalone fixture families and new reference handshake transcripts establish reproducibility, not independent full-protocol interoperability. |
 | O11 | Should the unused static ML-KEM credential in QR/DeviceBinding be removed before v1 release? | Retain its existing bytes and validation for now; signatures/pins authenticate the public credential only. It MUST NOT be used as an HFS ephemeral key or represented as a static-KEM possession proof. Any removal requires an explicit wire-format revision and regenerated affected fixtures. |
-| O12 | The contact Hello carries the pair's ratchet `generation` in the clear (§4.1). It grows by one per committed session, so a passive LAN or relay observer can link a pair's sessions across epochs whatever its discovery tokens do. The locator already depends on the generation's pair secret. What blinded form keeps a mismatch diagnosable without the cleartext counter? | Discovery unlinkability across epochs (§9) holds against observers who never see a Hello. A fix is a wire-format revision with regenerated handshake fixtures. |
+| O12 (resolved) | The contact Hello carried the pair's ratchet `generation` in the clear, linking a pair's sessions across epochs for a passive LAN or relay observer. Resolved in §4.1: the Hello has no generation field (58-byte bodies). The locator already resolves the pair and generation, so the counter added no diagnosis: divergence is found from the ratchet journal (§4.4), and a restored stale generation is O3's. See [ADR 0016](../docs/adr/0016-hello-generation.md). | Handshake fixtures were regenerated for the 58-byte Hellos. A pair's failed attempts within one epoch still share a locator. |

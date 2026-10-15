@@ -183,8 +183,9 @@ over AWDL), feeding the same byte stream.
   services on that interface. The host is an authenticated contact, and
   the link lasts only for the transfer. Fix: app-scoped joins where
   platforms add them.
-- **The contact Hello's cleartext generation** links a pair's sessions on
-  any link (§16 O12). Fix: a wire-format revision.
+- **The contact Hello's cleartext generation** linked a pair's sessions on
+  any link (§16 O12). Resolved by [ADR 0016](0016-hello-generation.md): the
+  Hello no longer carries it.
 - **Unconfirmed platform behavior** to settle in the device lab: whether
   iPhone ↔ iPhone and iPhone ↔ Android Wi-Fi Aware work for apps (Apple's
   page centres on accessories; its forums report Android failures), whether
