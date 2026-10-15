@@ -7,7 +7,7 @@ val packed = providers.gradleProperty("todoke.android").get()
 
 android {
     namespace = "org.todoke.ffi"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         // Android 7 (P16's minimum).
@@ -17,7 +17,10 @@ android {
 
     sourceSets {
         getByName("main") {
-            java.srcDirs("$packed/kotlin", "../kotlin/src/main/kotlin")
+            // Kotlin sources: AGP's built-in Kotlin compiles only `kotlin`
+            // source directories (a `java` one with .kt files yields an
+            // empty classes.jar).
+            kotlin.srcDirs("$packed/kotlin", "../kotlin/src/main/kotlin")
             jniLibs.srcDirs("$packed/jniLibs")
         }
     }
