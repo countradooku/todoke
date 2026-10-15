@@ -4,7 +4,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use todoke_proto::session::{
-    Hello, NoiseHandshakeRecord, PreludeRecord, SessionMode, encode_prelude_record,
+    HELLO_LEN, Hello, NoiseHandshakeRecord, PreludeRecord, SessionMode, encode_prelude_record,
     prelude_record_len,
 };
 
@@ -22,11 +22,11 @@ fuzz_target!(|data: &[u8]| {
         assert_eq!(client.encode().as_slice(), data);
     }
     // A server hello needs the client hello it echoes: split the input.
-    if data.len() >= 132 {
-        let (first, second) = data.split_at(66);
+    if data.len() >= 2 * HELLO_LEN {
+        let (first, second) = data.split_at(HELLO_LEN);
         if let Ok(client) = Hello::decode_client(first) {
-            if let Ok(server) = Hello::decode_server(&second[..66], &client) {
-                assert_eq!(server.encode().as_slice(), &second[..66]);
+            if let Ok(server) = Hello::decode_server(&second[..HELLO_LEN], &client) {
+                assert_eq!(server.encode().as_slice(), &second[..HELLO_LEN]);
                 assert_eq!(server.mode(), client.mode());
             }
         }

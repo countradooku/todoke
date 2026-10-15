@@ -284,7 +284,7 @@ async fn contact_sessions_run_over_the_winning_link() -> TestResult {
 
 /// A `ClientHello` as anyone who saw (or guessed) a locator can send it.
 fn forged_hello(locator: [u8; 16]) -> AnyResult<Vec<u8>> {
-    let hello = Hello::client(SessionMode::Contact, 1, locator, [0x5e; 16])?;
+    let hello = Hello::client(SessionMode::Contact, locator, [0x5e; 16])?;
     Ok(encode_prelude_record(
         PreludeKind::ClientHello,
         &hello.encode(),
@@ -354,6 +354,22 @@ async fn stale_tables_and_old_locators_are_refused() -> TestResult {
         incoming.claim(&bob.table()?, wall()?).await,
         Err(ConnectError::UnknownPeer)
     ));
+    // Bob claiming with his old table still finds Alice, but responding
+    // with it after the commit is refused: its generation is not the
+    // store's, so the claimed locator is not tied to the current PSK.
+    let (_held, link) = forged_link(old_locator, 42).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_old, wall()?).await?;
+    let (bob_local, bob_store) = bob.parts()?;
+    assert!(matches!(
+        claimed
+            .respond(&bob_old, bob_store, &bob_local, wall()?)
+            .await,
+        Err(ConnectError::StaleTable)
+    ));
+    assert!(!bob_manager.is_busy(&alice.key()));
     // Bob's own old table is refused once the epoch moves on.
     let (_held, link) = forged_link(old_locator, 41).await?;
     let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
@@ -1041,7 +1057,7 @@ async fn an_incoming_attempt_waits_at_most_the_simultaneous_wait() -> TestResult
 async fn pairing_streams_go_to_the_pairing_flow() -> TestResult {
     let bob = Device::new(0x42)?;
     let manager = bob.manager();
-    let hello = Hello::client(SessionMode::Qr, 0, [0x77; 16], [0x5e; 16])?;
+    let hello = Hello::client(SessionMode::Qr, [0x77; 16], [0x5e; 16])?;
     let (mut near, far) = crate::sim::link(Path::new(MS), address(80), address(99), 80);
     write_all(
         &mut near,
@@ -1276,38 +1292,39 @@ fn link_information_is_kept_and_addresses_are_not_shown() {
     assert!(shown.contains("12345"), "{shown}");
 }
 
-/// R3: the responder's store decides after the claim: a Hello for another
-/// pair generation is refused locally (§4.4), and so is a contact that
-/// became unavailable after the table was built; both free the slot.
+/// A contact whose ratchet is pending or uncertain is not in a rebuilt
+/// table: its Hello is an unknown peer, and nothing is sent back (§4.1,
+/// §4.4: no locator of a pending generation is advertised or accepted).
+#[tokio::test(start_paused = true)]
+async fn contacts_with_a_pending_ratchet_are_unknown_peers() -> TestResult {
+    let (alice, mut bob) = paired().await?;
+    let bob_manager = bob.manager();
+    let locator = alice.table()?.locator(&bob.key()).ok_or("locator")?;
+    bob.store.mark_ratchet_uncertain(&alice.key())?;
+    let (mut held, link) = forged_link(locator, 43).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    assert!(matches!(
+        incoming.claim(&bob.table()?, wall()?).await,
+        Err(ConnectError::UnknownPeer)
+    ));
+    let mut byte = [0];
+    let read = core::future::poll_fn(|cx| Pin::new(&mut held).poll_read(cx, &mut byte)).await?;
+    assert_eq!(read, 0, "nothing may be sent to an unknown peer");
+    Ok(())
+}
+
+/// R3: the responder's store decides after the claim: a contact that became
+/// unavailable after the table was built is refused, and the slot is freed.
+/// (A Hello from another pair generation never gets this far: it names no
+/// generation, and its locator resolves to nobody, §4.1.)
 #[tokio::test(start_paused = true)]
 async fn the_responder_store_decides_after_the_claim() -> TestResult {
     let (alice, mut bob) = paired().await?;
     let bob_manager = bob.manager();
     let (alice_table, bob_table) = (alice.table()?, bob.table()?);
     let locator = alice_table.locator(&bob.key()).ok_or("locator")?;
-    let hello = Hello::client(SessionMode::Contact, 99, locator, [0x5e; 16])?;
-    let (mut near, far) = crate::sim::link(Path::new(MS), address(110), address(99), 110);
-    write_all(
-        &mut near,
-        &encode_prelude_record(PreludeKind::ClientHello, &hello.encode())?,
-    )
-    .await?;
-    let Incoming::Contact(incoming) = bob_manager.accept(far).await? else {
-        return Err("expected a contact Hello".into());
-    };
-    let claimed = incoming.claim(&bob_table, wall()?).await?;
-    let (bob_local, bob_store) = bob.parts()?;
-    let refused = claimed
-        .respond(&bob_table, bob_store, &bob_local, wall()?)
-        .await;
-    assert!(
-        matches!(
-            refused,
-            Err(ConnectError::Session(SessionError::GenerationMismatch))
-        ),
-        "{refused:?}"
-    );
-    assert!(!bob_manager.is_busy(&alice.key()));
     let (_held, link) = forged_link(locator, 111).await?;
     let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
         return Err("expected a contact Hello".into());

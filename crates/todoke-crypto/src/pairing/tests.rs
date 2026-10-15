@@ -69,7 +69,6 @@ impl Pairing {
     fn hello(&self) -> AnyResult<Hello> {
         Ok(Hello::client(
             SessionMode::Qr,
-            0,
             *self.payload.pairing_id(),
             CLIENT_NONCE,
         )?)
@@ -187,7 +186,7 @@ fn paired_devices_then_run_a_contact_session() -> TestResult {
     let initiator_authority = p.scanner_store.session_authority(&p.displayer.key())?;
     let plan = initiator_authority.initiator_plan([0xb7; 16])?;
     let responder_authority = p.displayer_store.session_authority(&p.scanner.key())?;
-    let hello = Hello::client(SessionMode::Contact, 1, [0xb7; 16], CLIENT_NONCE)?;
+    let hello = Hello::client(SessionMode::Contact, [0xb7; 16], CLIENT_NONCE)?;
     let responder_plan = responder_authority.responder_plan(&hello)?;
     let mut harness = Harness::new(
         Side::initiator(p.scanner.local()?, initiator_authority),
@@ -371,12 +370,7 @@ fn a_man_in_the_middle_cannot_impersonate_the_displayer() -> TestResult {
         };
         let mallory_payload = mallory_offers.create_qr(&mallory.local()?, wall()?, MONO)?;
         let reservation = mallory_offers.reserve(
-            &Hello::client(
-                SessionMode::Qr,
-                0,
-                *mallory_payload.pairing_id(),
-                CLIENT_NONCE,
-            )?,
+            &Hello::client(SessionMode::Qr, *mallory_payload.pairing_id(), CLIENT_NONCE)?,
             wall()?,
             MONO,
         )?;

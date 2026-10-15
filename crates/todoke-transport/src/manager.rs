@@ -488,7 +488,12 @@ impl TransportManager {
 
 /// Refuses a table built for another epoch than `now`'s, or at another pair
 /// generation for `peer` than the store's (§9: discovery state from earlier
-/// generations must not stay in use).
+/// generations must not stay in use). The Hello names no generation (§4.1):
+/// the table's, matched here, is what ties the claimed locator to the PSK
+/// the handshake uses. A re-pairing restarts at generation 1, so a table
+/// kept across one could pass this check with the new PSK; the handshake
+/// then fails authentication, and the runtime rebuilds its table on every
+/// pairing anyway.
 fn check_table<S: Sealer, B: BlobStorage>(
     table: &DiscoveryTable,
     store: &ContactStore<S, B>,
@@ -728,8 +733,7 @@ impl<L: Link> ClaimedIncoming<L> {
     ///
     /// # Errors
     ///
-    /// [`ConnectError::StaleTable`]; [`ConnectError::Session`], including
-    /// [`SessionError::GenerationMismatch`] (reported locally only, §4.4).
+    /// [`ConnectError::StaleTable`] or [`ConnectError::Session`].
     pub async fn respond<K: KeyStore, S: Sealer, B: BlobStorage>(
         self,
         table: &DiscoveryTable,

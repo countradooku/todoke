@@ -39,6 +39,10 @@ struct Pair {
     server_hello: Vec<u8>,
 }
 
+/// The KK fixture's pair generation (public fixture state; no Hello carries
+/// it since §16 O12).
+const FIXTURE_GENERATION: u64 = 7;
+
 /// Both drivers for a fixture, with the fixture's nonces and scripted
 /// randomness; returns the Hello records too.
 fn fixture_pair(file: &str) -> AnyResult<Pair> {
@@ -56,13 +60,13 @@ fn fixture_pair(file: &str) -> AnyResult<Pair> {
         ),
         SessionMode::Contact => (
             InitiatorPlan::contact(
-                client.generation(),
+                FIXTURE_GENERATION,
                 *client.locator(),
                 psk(&vector)?.0,
                 *resp_static.public_key(),
             ),
             ResponderPlan::contact(
-                client.generation(),
+                FIXTURE_GENERATION,
                 psk(&vector)?.0,
                 *init_static.public_key(),
             ),
@@ -149,6 +153,16 @@ fn drivers_reproduce_committed_prelude_records() -> TestResult {
         );
         assert_eq!(initiator.role, Role::Initiator);
         assert_eq!(responder.role, Role::Responder);
+        // The generation comes from the plans: no Hello carries it.
+        let generation = if file.contains("kk") {
+            FIXTURE_GENERATION
+        } else {
+            0
+        };
+        assert_eq!(
+            (initiator.generation, responder.generation),
+            (generation, generation)
+        );
         assert_eq!(
             initiator.peer_static,
             *responder_public(&vector)?.public_key()
@@ -237,7 +251,7 @@ fn code_mode_binds_the_code_transcript_into_the_prologue() -> TestResult {
 
 /// §3.2/§4.2.6: the code-mode prologue is exactly
 /// `"todoke/v1/noise-prologue\0" || CodeOfferRequest (10) || CodeOffer (34)
-/// || ClientHello (66) || ServerHello (66) || CodeShareA (49) || CodeShareB
+/// || ClientHello (58) || ServerHello (58) || CodeShareA (49) || CodeShareB
 /// (49)`, written out here from the spec sizes.
 #[test]
 fn code_prologue_is_the_spec_concatenation() -> TestResult {
@@ -249,7 +263,7 @@ fn code_prologue_is_the_spec_concatenation() -> TestResult {
     expected.extend_from_slice(&server.encode());
     expected.extend_from_slice(&[0x32; 49]);
     expected.extend_from_slice(&[0x33; 49]);
-    assert_eq!(expected.len(), 25 + 44 + 66 + 66 + 49 + 49);
+    assert_eq!(expected.len(), 25 + 44 + 58 + 58 + 49 + 49);
     assert_eq!(initiator.prologue(&server)?, expected);
     assert_eq!(responder.prologue(&server)?, expected);
     run_to_end(&mut initiator, &mut responder, body(&server_hello)?)?;
@@ -265,9 +279,9 @@ fn code_prologue_is_the_spec_concatenation() -> TestResult {
 fn plan_and_hello_must_agree() -> TestResult {
     let key = NoiseStaticKey::generate()?;
     let psk = || PairingPsk::from_bytes(Zeroizing::new([1; 32]));
-    let qr = Hello::client(SessionMode::Qr, 0, [1; 16], [2; 16])?;
-    let contact = Hello::client(SessionMode::Contact, 5, [1; 16], [2; 16])?;
-    let code = Hello::client(SessionMode::Code, 0, [1; 16], [2; 16])?;
+    let qr = Hello::client(SessionMode::Qr, [1; 16], [2; 16])?;
+    let contact = Hello::client(SessionMode::Contact, [1; 16], [2; 16])?;
+    let code = Hello::client(SessionMode::Code, [1; 16], [2; 16])?;
     let mismatch = |hello: Hello, plan: ResponderPlan| {
         HandshakeDriver::responder(GATE, hello, plan, &key, [3; 16], Entropy::Os, T).map(|_| ())
     };
@@ -275,10 +289,8 @@ fn plan_and_hello_must_agree() -> TestResult {
         mismatch(qr, ResponderPlan::code_with_psk(psk(), transcript())),
         Err(SessionError::Usage)
     );
-    assert_eq!(
-        mismatch(contact, ResponderPlan::contact(6, psk().0, [9; 32])),
-        Err(SessionError::GenerationMismatch)
-    );
+    // Any stored generation answers a contact Hello, which names none.
+    assert!(mismatch(contact, ResponderPlan::contact(6, psk().0, [9; 32])).is_ok());
     assert_eq!(
         mismatch(contact, ResponderPlan::qr(psk())),
         Err(SessionError::Usage)
@@ -304,7 +316,7 @@ fn plan_and_hello_must_agree() -> TestResult {
 
 #[test]
 fn client_hello_reader_rejects_other_records() -> TestResult {
-    let hello = Hello::client(SessionMode::Qr, 0, [1; 16], [2; 16])?.encode();
+    let hello = Hello::client(SessionMode::Qr, [1; 16], [2; 16])?.encode();
     let mut record = vec![PreludeKind::ClientHello.to_u8()];
     record.extend_from_slice(&hello);
     assert!(read_client_hello(&record).is_ok());
@@ -369,6 +381,77 @@ fn out_of_order_and_late_records_poison_the_attempt() -> TestResult {
     // An unfinished driver cannot produce a Split.
     let pair = fixture_pair("handshake-kkpsk2.json")?;
     assert!(pair.initiator.finish().is_err());
+    Ok(())
+}
+
+/// Two sides at different generations hold different PSKs: the KK
+/// handshake fails when the PSK is mixed in, at message 2, with the
+/// generic authentication error. Nothing on the wire says why (§4.1).
+#[test]
+fn divergent_generations_fail_authentication() -> TestResult {
+    let (init_static, resp_static) = (NoiseStaticKey::generate()?, NoiseStaticKey::generate()?);
+    let (mut initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
+        InitiatorPlan::contact(
+            7,
+            [0x51; 16],
+            Zeroizing::new([0x61; 32]),
+            *resp_static.public_key(),
+        ),
+        &init_static,
+        [0x52; 16],
+        Entropy::Os,
+        T,
+    )?;
+    let hello = read_client_hello(body(&client_hello)?)?;
+    let (mut responder, server_hello) = HandshakeDriver::responder(
+        GATE,
+        hello,
+        ResponderPlan::contact(8, Zeroizing::new([0x62; 32]), *init_static.public_key()),
+        &resp_static,
+        [0x53; 16],
+        Entropy::Os,
+        T,
+    )?;
+    assert_eq!(
+        run_to_end(&mut initiator, &mut responder, body(&server_hello)?),
+        Err(SessionError::Authentication)
+    );
+    Ok(())
+}
+
+/// The split's generation is the plans', never read from a Hello: two
+/// sides at generation 8 with that generation's PSK finish at 8.
+#[test]
+fn the_split_generation_comes_from_the_plans() -> TestResult {
+    let (init_static, resp_static) = (NoiseStaticKey::generate()?, NoiseStaticKey::generate()?);
+    let (mut initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
+        InitiatorPlan::contact(
+            8,
+            [0x51; 16],
+            Zeroizing::new([0x63; 32]),
+            *resp_static.public_key(),
+        ),
+        &init_static,
+        [0x52; 16],
+        Entropy::Os,
+        T,
+    )?;
+    let hello = read_client_hello(body(&client_hello)?)?;
+    let (mut responder, server_hello) = HandshakeDriver::responder(
+        GATE,
+        hello,
+        ResponderPlan::contact(8, Zeroizing::new([0x63; 32]), *init_static.public_key()),
+        &resp_static,
+        [0x53; 16],
+        Entropy::Os,
+        T,
+    )?;
+    run_to_end(&mut initiator, &mut responder, body(&server_hello)?)?;
+    let (a, b) = (initiator.finish()?, responder.finish()?);
+    assert_eq!((a.generation, b.generation), (8, 8));
+    assert_eq!(a.handshake_hash, b.handshake_hash);
     Ok(())
 }
 
@@ -553,7 +636,7 @@ fn code_pairing_feeds_cpace_exactly_the_spec_inputs() -> TestResult {
     ci.extend_from_slice(&inputs.code_offer);
     ci.extend_from_slice(&initiator.client.encode());
     ci.extend_from_slice(&server.encode());
-    assert_eq!(ci.len(), 19 + 44 + 66 + 66);
+    assert_eq!(ci.len(), 19 + 44 + 58 + 58);
     let mut sid = inputs.client_nonce.to_vec();
     sid.extend_from_slice(&inputs.server_nonce);
     let (ad_a, ad_b) = (b"todoke/v1/cpace-a\x00", b"todoke/v1/cpace-b\x00");
@@ -591,7 +674,7 @@ fn code_pairing_feeds_cpace_exactly_the_spec_inputs() -> TestResult {
     pre_noise.extend_from_slice(&server.encode());
     pre_noise.extend_from_slice(&expected_a[3..]);
     pre_noise.extend_from_slice(&expected_b[3..]);
-    assert_eq!(pre_noise.len(), 44 + 66 + 66 + 49 + 49);
+    assert_eq!(pre_noise.len(), 44 + 58 + 58 + 49 + 49);
     let psk = hkdf_one_block(
         blake3::hash(&pre_noise).as_bytes(),
         isk.as_bytes(),

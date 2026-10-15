@@ -24,7 +24,7 @@ pub const PRELUDE_MAX_LEN: usize = 8192;
 pub const PRELUDE_MAX_BODY_LEN: usize = PRELUDE_MAX_LEN - 1;
 
 /// `ClientHello` / `ServerHello` body length (§4.1).
-pub const HELLO_LEN: usize = 66;
+pub const HELLO_LEN: usize = 58;
 /// Hello magic, ASCII `TDKE`.
 pub const HELLO_MAGIC: [u8; 4] = *b"TDKE";
 /// The only protocol version (§4.1, §6). Exact equality, no version list.
@@ -264,11 +264,12 @@ impl SessionMode {
 }
 
 /// `ClientHello` / `ServerHello` body (§4.1). Untrusted until the transcript
-/// authenticates it.
+/// authenticates it. It carries no ratchet generation: a contact's locator
+/// is derived from its generation's pair secret, so it already names both,
+/// and a counter on the wire would link the pair's sessions (§16 O12).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct Hello {
     mode: SessionMode,
-    generation: u64,
     locator: [u8; 16],
     client_nonce: [u8; 16],
     server_nonce: [u8; 16],
@@ -279,17 +280,14 @@ impl Hello {
     ///
     /// # Errors
     ///
-    /// [`DecodeError::ZeroIdentifier`] for a zero locator or client nonce,
-    /// [`DecodeError::Range`] for a nonzero generation in a pairing mode.
+    /// [`DecodeError::ZeroIdentifier`] for a zero locator or client nonce.
     pub fn client(
         mode: SessionMode,
-        generation: u64,
         locator: [u8; 16],
         client_nonce: [u8; 16],
     ) -> Result<Self, DecodeError> {
         let hello = Self {
             mode,
-            generation,
             locator,
             client_nonce,
             server_nonce: [0; 16],
@@ -317,8 +315,8 @@ impl Hello {
     ///
     /// # Errors
     ///
-    /// Any layout violation, a nonzero server nonce, a zero locator or client
-    /// nonce, or a nonzero generation in a pairing mode.
+    /// Any layout violation, a nonzero server nonce, or a zero locator or
+    /// client nonce.
     pub fn decode_client(bytes: &[u8]) -> Result<Self, DecodeError> {
         let hello = Self::decode(bytes)?;
         if hello.server_nonce != [0; 16] {
@@ -353,9 +351,6 @@ impl Hello {
         if self.locator == [0; 16] || self.client_nonce == [0; 16] {
             return Err(DecodeError::ZeroIdentifier);
         }
-        if self.mode != SessionMode::Contact && self.generation != 0 {
-            return Err(DecodeError::Range);
-        }
         Ok(())
     }
 
@@ -378,20 +373,18 @@ impl Hello {
         if flags != 0 {
             return Err(DecodeError::Reserved);
         }
-        let (generation, rest) = rest.split_first_chunk::<8>().ok_or(DecodeError::Length)?;
         let (locator, rest) = rest.split_first_chunk::<16>().ok_or(DecodeError::Length)?;
         let (client_nonce, rest) = rest.split_first_chunk::<16>().ok_or(DecodeError::Length)?;
         let server_nonce: [u8; 16] = rest.try_into().map_err(|_| DecodeError::Length)?;
         Ok(Self {
             mode,
-            generation: u64::from_be_bytes(*generation),
             locator: *locator,
             client_nonce: *client_nonce,
             server_nonce,
         })
     }
 
-    /// The exact 66-byte body.
+    /// The exact 58-byte body.
     #[must_use]
     pub fn encode(&self) -> [u8; HELLO_LEN] {
         let mut out = [0; HELLO_LEN];
@@ -400,10 +393,9 @@ impl Hello {
         out[6..8].copy_from_slice(&HYBRID_SUITE.to_be_bytes());
         out[8] = self.mode.to_u8();
         out[9] = 0;
-        out[10..18].copy_from_slice(&self.generation.to_be_bytes());
-        out[18..34].copy_from_slice(&self.locator);
-        out[34..50].copy_from_slice(&self.client_nonce);
-        out[50..66].copy_from_slice(&self.server_nonce);
+        out[10..26].copy_from_slice(&self.locator);
+        out[26..42].copy_from_slice(&self.client_nonce);
+        out[42..58].copy_from_slice(&self.server_nonce);
         out
     }
 
@@ -411,12 +403,6 @@ impl Hello {
     #[must_use]
     pub fn mode(&self) -> SessionMode {
         self.mode
-    }
-
-    /// Pair generation: 0 for a new pairing, the persisted value for a contact.
-    #[must_use]
-    pub fn generation(&self) -> u64 {
-        self.generation
     }
 
     /// Pairing ID or contact rendezvous-token prefix (§9).
@@ -445,7 +431,6 @@ impl fmt::Debug for Hello {
         let redacted = Redacted(self.locator.len());
         f.debug_struct("Hello")
             .field("mode", &self.mode)
-            .field("generation", &self.generation)
             .field("locator", &redacted)
             .field("client_nonce", &redacted)
             .field("server_nonce", &redacted)

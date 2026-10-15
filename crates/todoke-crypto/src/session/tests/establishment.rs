@@ -65,16 +65,10 @@ fn contact_run(
     let bob_local = c.bob.local()?;
     let bob_key = c.bob.key();
     let alice_key = c.alice.key();
-    let generation = c
-        .alice_store
-        .contact(&bob_key)
-        .ok_or("contact")?
-        .generation();
     let initiator_authority = c.alice_store.session_authority(&bob_key)?;
     let plan = initiator_authority.initiator_plan(LOCATOR)?;
     let responder_authority = c.bob_store.session_authority(&alice_key)?;
-    let hello =
-        todoke_proto::session::Hello::client(SessionMode::Contact, generation, LOCATOR, [1; 16])?;
+    let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])?;
     let responder_plan = responder_authority.responder_plan(&hello)?;
     let initiator = Side::initiator(alice_local, initiator_authority);
     let mut responder = Side::responder(bob_local, responder_authority, responder_plan);
@@ -129,8 +123,7 @@ fn application_frames_flow_once_the_gate_is_open() -> TestResult {
     let initiator_authority = c.alice_store.session_authority(&bob_key)?;
     let plan = initiator_authority.initiator_plan(LOCATOR)?;
     let responder_authority = c.bob_store.session_authority(&alice_key)?;
-    let hello =
-        todoke_proto::session::Hello::client(SessionMode::Contact, GENERATION, LOCATOR, [1; 16])?;
+    let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])?;
     let responder_plan = responder_authority.responder_plan(&hello)?;
     let mut harness = Harness::new(
         Side::initiator(alice_local, initiator_authority),
@@ -421,25 +414,19 @@ fn persistence_failure_at_each_step() -> TestResult {
     Ok(())
 }
 
-/// Wrong generation in the Hello: reported locally, nothing retried, and
-/// the stored pairing is unchanged on both sides.
+/// A contact Hello names no generation: the responder plans with its stored
+/// one (the PSK then decides), a pairing-mode Hello is refused, and the
+/// stored pairing is unchanged on both sides.
 #[test]
-fn divergent_generation_is_reported_and_changes_nothing() -> TestResult {
+fn contact_hellos_take_the_stored_generation() -> TestResult {
     let mut c = contacts()?;
     let bob_key = c.bob.key();
     let alice_key = c.alice.key();
     let authority = c.bob_store.session_authority(&alice_key)?;
-    let stale = todoke_proto::session::Hello::client(
-        SessionMode::Contact,
-        GENERATION - 1,
-        LOCATOR,
-        [1; 16],
-    )?;
-    assert_eq!(
-        authority.responder_plan(&stale).map(|_| ()),
-        Err(SessionError::GenerationMismatch)
-    );
-    let qr = todoke_proto::session::Hello::client(SessionMode::Qr, 0, LOCATOR, [1; 16])?;
+    let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])?;
+    let plan = authority.responder_plan(&hello)?;
+    assert!(format!("{plan:?}").contains(&format!("generation: {GENERATION}")));
+    let qr = todoke_proto::session::Hello::client(SessionMode::Qr, LOCATOR, [1; 16])?;
     assert_eq!(
         authority.responder_plan(&qr).map(|_| ()),
         Err(SessionError::Usage)
@@ -678,8 +665,7 @@ fn session_lifetime_is_computed_from_the_session_start_time() -> TestResult {
     let initiator_authority = alice_store.session_authority(&bob_key)?;
     let plan = initiator_authority.initiator_plan(LOCATOR)?;
     let responder_authority = bob_store.session_authority(&alice_key)?;
-    let hello =
-        todoke_proto::session::Hello::client(SessionMode::Contact, GENERATION, LOCATOR, [1; 16])?;
+    let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])?;
     let responder_plan = responder_authority.responder_plan(&hello)?;
     // Both identities were built long ago, at WALL.
     let mut initiator = Side::initiator(alice.local()?, initiator_authority);
@@ -825,12 +811,7 @@ fn contact_store_write_failures_surface_as_storage_errors() -> TestResult {
         let initiator_authority = alice_store.session_authority(&bob_key)?;
         let plan = initiator_authority.initiator_plan(LOCATOR)?;
         let responder_authority = bob_store.session_authority(&alice_key)?;
-        let hello = todoke_proto::session::Hello::client(
-            SessionMode::Contact,
-            GENERATION,
-            LOCATOR,
-            [1; 16],
-        )?;
+        let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])?;
         let responder_plan = responder_authority.responder_plan(&hello)?;
         let mut harness = Harness::new(
             Side::initiator(alice.local()?, initiator_authority),

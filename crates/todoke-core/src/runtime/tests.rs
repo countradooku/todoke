@@ -949,7 +949,6 @@ async fn answered(forged: Forged, origin: super::running::Origin) -> AnyResult<b
                     )?;
                     let hello = todoke_proto::session::Hello::client(
                         todoke_proto::session::SessionMode::Qr,
-                        0,
                         *payload.pairing_id(),
                         [0x5e; 16],
                     )?;

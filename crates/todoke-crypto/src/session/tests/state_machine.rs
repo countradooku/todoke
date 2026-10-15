@@ -141,13 +141,8 @@ fn run(ops: &[Op]) -> Result<(), TestCaseError> {
         let responder_authority = bob_store
             .session_authority(&alice_key)
             .map_err(|error| TestCaseError::fail(error.to_string()))?;
-        let hello = todoke_proto::session::Hello::client(
-            SessionMode::Contact,
-            GENERATION,
-            LOCATOR,
-            [1; 16],
-        )
-        .map_err(|error| TestCaseError::fail(error.to_string()))?;
+        let hello = todoke_proto::session::Hello::client(SessionMode::Contact, LOCATOR, [1; 16])
+            .map_err(|error| TestCaseError::fail(error.to_string()))?;
         let responder_plan = responder_authority
             .responder_plan(&hello)
             .map_err(|error| TestCaseError::fail(error.to_string()))?;

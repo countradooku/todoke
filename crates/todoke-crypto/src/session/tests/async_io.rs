@@ -657,8 +657,8 @@ fn code_offer_exchange_refusals() -> TestResult {
     // stream with it.
     let bob_local = bob.local()?;
     let (alice_end, bob_end) = duplex(4096);
-    let hello = todoke_proto::session::Hello::client(SessionMode::Code, 0, [0xa1; 16], [1; 16])?;
-    let mut record = vec![0, 67, 1];
+    let hello = todoke_proto::session::Hello::client(SessionMode::Code, [0xa1; 16], [1; 16])?;
+    let mut record = vec![0, u8::try_from(todoke_proto::session::HELLO_LEN + 1)?, 1];
     record.extend_from_slice(&hello.encode());
     let mut writer = alice_end;
     block_on(futures_write_all(&mut writer, &record))??;
@@ -675,8 +675,8 @@ fn code_offer_exchange_refusals() -> TestResult {
 /// A code-mode `ClientHello` record for `pairing_id`, sent on a stream
 /// that skipped the `CodeOfferRequest`/`CodeOffer` exchange.
 fn bare_code_hello(pairing_id: [u8; 16]) -> AnyResult<Vec<u8>> {
-    let hello = todoke_proto::session::Hello::client(SessionMode::Code, 0, pairing_id, [1; 16])?;
-    let mut record = vec![0, 67, 1];
+    let hello = todoke_proto::session::Hello::client(SessionMode::Code, pairing_id, [1; 16])?;
+    let mut record = vec![0, u8::try_from(todoke_proto::session::HELLO_LEN + 1)?, 1];
     record.extend_from_slice(&hello.encode());
     Ok(record)
 }
@@ -1494,7 +1494,7 @@ fn slow_authority_steps_count_against_the_establishment_deadline() -> TestResult
 fn incoming_session_debug_redacts_the_locator() -> TestResult {
     use todoke_proto::session::{Hello, PreludeKind, encode_prelude_record};
     let (mut peer, listener) = duplex(4096);
-    let hello = Hello::client(SessionMode::Contact, GENERATION, LOCATOR, [0xc4; 16])?;
+    let hello = Hello::client(SessionMode::Contact, LOCATOR, [0xc4; 16])?;
     let record = encode_prelude_record(PreludeKind::ClientHello, &hello.encode())?;
     let written = Pin::new(&mut peer).poll_write(&mut Context::from_waker(Waker::noop()), &record);
     assert!(matches!(written, Poll::Ready(Ok(n)) if n == record.len()));
@@ -1854,7 +1854,7 @@ fn a_stream_beginning_with_another_record_is_refused() -> TestResult {
     use todoke_proto::session::{Hello, PreludeKind};
     let offers = PairingOffers::new();
     let timer = ManualTimer::at(START);
-    let hello = Hello::client(SessionMode::Qr, 0, [0xa1; 16], [1; 16])?;
+    let hello = Hello::client(SessionMode::Qr, [0xa1; 16], [1; 16])?;
     let offer = todoke_proto::pairing::CodeOffer::new(
         &todoke_proto::pairing::CodeOfferRequest::new(TOKEN)?,
         [0xa1; 16],
@@ -1922,12 +1922,12 @@ fn the_hello_after_a_code_offer_must_name_that_offer() -> TestResult {
     let bob = Device::new()?;
     let bob_local = bob.local()?;
     for (hello, accepted) in [
-        (Hello::client(SessionMode::Qr, 0, id, [1; 16])?, false),
+        (Hello::client(SessionMode::Qr, id, [1; 16])?, false),
         (
-            Hello::client(SessionMode::Code, 0, [0x99; 16], [1; 16])?,
+            Hello::client(SessionMode::Code, [0x99; 16], [1; 16])?,
             false,
         ),
-        (Hello::client(SessionMode::Code, 0, id, [1; 16])?, true),
+        (Hello::client(SessionMode::Code, id, [1; 16])?, true),
     ] {
         let (client, server) = duplex(4096);
         let mut writer = client;
@@ -1996,7 +1996,7 @@ fn the_entrant_accepts_only_a_usable_offer_for_its_request() -> TestResult {
         )?;
         prelude(PreludeKind::CodeOffer, &offer.encode())
     };
-    let server_hello = Hello::client(SessionMode::Code, 0, id, [1; 16])?.server_reply([2; 16])?;
+    let server_hello = Hello::client(SessionMode::Code, id, [1; 16])?.server_reply([2; 16])?;
     // A store that already used offer 0xb2.
     let mut burned_store = empty_store()?;
     burned_store.journal_pairing(

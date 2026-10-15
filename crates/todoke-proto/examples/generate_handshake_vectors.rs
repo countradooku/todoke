@@ -356,8 +356,8 @@ fn build_peer(
 
 fn hello(profile: Profile, responder: bool) -> Vec<u8> {
     let mut body = b"TDKE\0\x01\0\x01".to_vec();
+    // mode, flags; no generation since §16 O12 (58-byte bodies).
     body.extend_from_slice(&[profile.mode, 0]);
-    body.extend_from_slice(&(if profile.mode == 3 { 7_u64 } else { 0 }).to_be_bytes());
     body.extend_from_slice(&[0xa1; 16]);
     body.extend_from_slice(&[0xa5; 16]);
     body.extend_from_slice(&[if responder { 0xa6 } else { 0 }; 16]);
@@ -381,7 +381,7 @@ fn fixture_prologue(profile: Profile) -> (Vec<u8>, Value) {
         "scope": if profile.mode == 2 {
             "Noise-only synthetic prologue and PSK; NOT a valid code prelude or CPace conformance vector"
         } else {
-            "Exact todoke Hello body encodings; locator and generation are public fixture state"
+            "Exact todoke Hello body encodings (58 bytes, no generation); the locator is public fixture state"
         },
         "prologue_hex": hex::encode(&prologue)
     });
