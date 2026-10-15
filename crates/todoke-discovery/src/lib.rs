@@ -11,7 +11,7 @@
 //! | --- | --- | --- |
 //! | [`Sighting`] | Checks one resolved mDNS instance: service type, 16-hex label, exactly one `v1=` TXT string with a valid record, addresses the LAN policy allows | §9, §10 |
 //! | [`Directory`] | Matches sightings against the current discovery table, keeps only useful ones within fixed bounds, expires them after 120 seconds, rate-limits matching | §9 |
-//! | [`Advertiser`] | One paired record at a time, rotating over contacts; the instance label renewed every epoch; stranger mode only on explicit enable, 300 seconds, rotating every 60 | §9 |
+//! | [`Advertiser`] | One paired record at a time, rotating over contacts; the instance label renewed every epoch; stranger mode only on explicit enable, 300 seconds, rotating every 60 (random for code pairing, the QR's token for each minute while a QR is shown) | §9 |
 //! | `Mdns` | The `mdns-sd` responder and browser for `_todoke._tcp.local.`, without logging, on private and link-local interfaces only | §9 |
 //!
 //! The tokens and locators come from `todoke_crypto::discovery`; nothing

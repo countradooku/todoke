@@ -108,7 +108,9 @@ these:
 8. **Rotation over contacts, one record at a time** (§9's SHOULD), three
    seconds per contact, with an optional priority contact on every other
    slot; a new random instance label every epoch. Stranger mode: explicit
-   enable, 300 seconds, new token and label every 60.
+   enable, 300 seconds, new token and label every 60 (a random token for
+   code pairing; while a QR is shown, the QR's token for each minute,
+   §9).
 9. **tokio** (features `net`, `time`, `rt`) for sockets and timers; links
    are `futures-io` pipes as the session layer takes them. Nothing is built
    for sockets on wasm32.

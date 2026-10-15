@@ -3,7 +3,7 @@ use core::time::Duration;
 use todoke_proto::discovery::EPOCH_SECONDS;
 
 use super::*;
-use crate::support::{WALL, paired, time};
+use crate::support::{WALL, paired, qr_stranger, time};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -161,6 +161,55 @@ async fn stranger_mode_is_explicit_short_and_rotating() -> TestResult {
             .stranger,
         None
     );
+    Ok(())
+}
+
+/// §9: while a QR is shown, the stranger token is the QR's token for the
+/// current minute, which its scanner recognises: the same all minute, a
+/// new one under a new label at each minute boundary; stranger mode still
+/// ends after 300 seconds, and early once the wall clock leaves the
+/// offer's minutes.
+#[test]
+fn a_shown_qr_advertises_its_token_for_each_minute() -> TestResult {
+    let (key, tokens, table) = qr_stranger(WALL)?;
+    let mut advertiser = Advertiser::new();
+    let mut random = Counter(0);
+    let start = SECOND * 50;
+    let minute_start = WALL / 60 * 60;
+    assert!(advertiser.enable_qr_stranger(tokens.clone(), time(WALL)?, start, &mut random));
+    let mut plan = |advertiser: &mut Advertiser, wall: u64, mono: Duration| {
+        time(wall).map(|wall| {
+            advertiser
+                .plan(&table, None, wall, mono, &mut random)
+                .stranger
+        })
+    };
+    let first = plan(&mut advertiser, WALL, start)?.ok_or("stranger")?;
+    assert_eq!(first.record.mode(), DiscoveryMode::Stranger);
+    assert!(key.matches(first.record.token(), time(WALL)?));
+    // Unchanged until the minute ends, however long that is in `mono`.
+    let same = plan(&mut advertiser, minute_start + 59, start + SECOND * 59)?;
+    assert_eq!(same, Some(first));
+    let next = plan(&mut advertiser, minute_start + 60, start + SECOND * 60)?.ok_or("next")?;
+    assert_ne!(next.label, first.label);
+    assert_ne!(next.record.token(), first.record.token());
+    assert_eq!(
+        Some(*next.record.token()),
+        tokens.at(time(minute_start + 60)?)
+    );
+    assert!(key.matches(next.record.token(), time(minute_start + 60)?));
+    // The lifetime still ends it.
+    assert_eq!(
+        plan(&mut advertiser, WALL + 300, start + STRANGER_LIFETIME)?,
+        None
+    );
+    assert!(!advertiser.stranger_enabled());
+    // A wall clock outside the offer's minutes ends it too, and cannot
+    // start it.
+    assert!(advertiser.enable_qr_stranger(tokens.clone(), time(WALL)?, start, &mut Counter(99)));
+    assert_eq!(plan(&mut advertiser, WALL + 3600, start + SECOND)?, None);
+    assert!(!advertiser.stranger_enabled());
+    assert!(!advertiser.enable_qr_stranger(tokens, time(WALL - 3600)?, start, &mut Counter(99)));
     Ok(())
 }
 

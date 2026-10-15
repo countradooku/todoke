@@ -27,6 +27,7 @@ const PAIR_SECRET_INFO: &[u8] = b"todoke/v1/pair-secret\0";
 const DISCOVERY_KEY_INFO: &[u8] = b"todoke/v1/discovery-key\0";
 const RENDEZVOUS_INFO: &[u8] = b"todoke/v1/rendezvous\0";
 const PAIRING_RENDEZVOUS_INFO: &[u8] = b"todoke/v1/pairing-rendezvous\0";
+const QR_STRANGER_INFO: &[u8] = b"todoke/v1/qr-stranger\0";
 const CONTENT_KEY_INFO: &[u8] = b"todoke/v1/content-key\0";
 const CONTENT_NONCE_INFO: &[u8] = b"todoke/v1/content-nonce\0";
 const CONTENT_AAD_DOMAIN: &[u8] = b"todoke/v1/content-aad\0";
@@ -172,6 +173,25 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
         PAIRING_RENDEZVOUS_INFO,
         &mut pairing_rendezvous,
     )?;
+    let stranger_key = Zeroizing::new({
+        let mut key = [0; 32];
+        hkdf_sha256(&PAIRING_ID, psk.as_slice(), QR_STRANGER_INFO, &mut key)?;
+        key
+    });
+    // The offer's first minute, its last second, the next minute, and the
+    // expiry (§9).
+    let mut stranger_tokens = Vec::new();
+    for unix_seconds in [CREATED_AT, 1_760_000_039, 1_760_000_040, EXPIRES_AT] {
+        let minute = unix_seconds / 60;
+        let mac = Zeroizing::new(discovery_mac(stranger_key.as_slice(), minute)?);
+        stranger_tokens.push(json!({
+            "unix_seconds": unix_seconds,
+            "minute": minute,
+            "minute_be_hex": hex::encode(minute.to_be_bytes()),
+            "hmac_blake3_hex": hex::encode(mac.as_slice()),
+            "token_hex": hex::encode(&mac[..8])
+        }));
+    }
     Ok(json!({
         "fixture_notice": PUBLIC_FIXTURE_NOTICE,
         "protocol_version": 1,
@@ -192,7 +212,10 @@ fn qr_vector(device_key: &[u8; 32]) -> Result<Value> {
         "base45": base45,
         "qr_text": format!("TODOKE:{base45}"),
         "pairing_rendezvous_info_hex": hex::encode(PAIRING_RENDEZVOUS_INFO),
-        "pairing_rendezvous_token_hex": hex::encode(pairing_rendezvous)
+        "pairing_rendezvous_token_hex": hex::encode(pairing_rendezvous),
+        "qr_stranger_info_hex": hex::encode(QR_STRANGER_INFO),
+        "qr_stranger_key_hex": hex::encode(stranger_key.as_slice()),
+        "qr_stranger_tokens": stranger_tokens
     }))
 }
 
@@ -798,6 +821,25 @@ mod tests {
                 assert_ne!(case["rendezvous_token_hex"], other["rendezvous_token_hex"]);
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn qr_stranger_tokens_rotate_each_minute() -> Result<()> {
+        let qr = qr_vector(&[0x77; 32])?;
+        let tokens = qr["qr_stranger_tokens"]
+            .as_array()
+            .ok_or("missing stranger tokens")?;
+        let token = |index: usize| tokens[index]["token_hex"].clone();
+        assert_eq!(tokens.len(), 4);
+        // One minute, then the next, then the expiry's (§9).
+        assert_eq!(token(0), token(1));
+        assert_ne!(token(1), token(2));
+        assert_ne!(token(2), token(3));
+        assert_ne!(
+            qr["qr_stranger_key_hex"],
+            qr["pairing_rendezvous_token_hex"]
+        );
         Ok(())
     }
 

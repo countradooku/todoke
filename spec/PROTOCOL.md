@@ -168,6 +168,10 @@ durably before application traffic. A successfully used or uncertain committed Q
 MUST NOT be replayed after restart; generate a new one. Pairing pins the responder's
 three full keys from the QR against its authenticated DeviceBinding.
 
+On a local network the scanner finds the displayer by the stranger token derived
+from the QR (§9) and sends the QR's `ClientHello` to no other device, so pairings
+shown side by side do not reach each other's displayers.
+
 ### 3.2 Human code pairing
 
 The displayer/responder creates a uniformly random 10-digit ASCII decimal code
@@ -1181,13 +1185,32 @@ The application `DiscoveryRecord` embedded in BLE or mDNS is:
 | version | 1 | 1 |
 | mode | 1 | 0 paired, 1 stranger |
 | epoch | 8 | u64; current epoch |
-| token | 8 | Paired token or uniform random stranger token |
+| token | 8 | Paired token or stranger token (below) |
 | flags | 1 | 0; reserved |
 
 Total: 19 bytes. Stranger mode requires explicit local enablement, expires after
 300 seconds, and advertises no identity. Its token MUST rotate every 60 seconds;
 it is never a password, PSK, or peer-authentication credential. A stranger must use
 QR or code pairing. Enumeration/matching is untrusted and rate-limited.
+
+While a QR offer (§3.1) is shown, its stranger token is derived from the offer, so
+that only the scanner of that QR can recognize the displayer:
+
+```
+qr_stranger_key = HKDF(pairing_id, one_time_psk, "todoke/v1/qr-stranger\0", 32)
+minute = floor(unix_time / 60)
+stranger_token = HMAC-BLAKE3(qr_stranger_key, minute:u64)[..8]
+```
+
+The token changes at every minute boundary, which is its 60-second rotation, and
+the instance label rotates with it. Without the QR it is indistinguishable from
+random; anyone who has seen the QR can already race to pair (§3.1). A scanner tests
+the minutes within the §1 120-second skew of its own (-2..+2, bounded at zero) and
+MUST send the QR's `ClientHello` only to advertisements whose token matches. A match is a candidate
+filter, not authentication: a copied token or a collision still goes through the
+full authenticated handshake, which pins the QR's keys. Code pairing (§3.2) keeps a
+uniform random stranger token: a token derived from the low-entropy code would be an
+offline dictionary oracle.
 
 mDNS uses service `_todoke._tcp.local.`, an ephemeral instance name of 16 lowercase
 hex characters from 8 random bytes, SRV port 1..65535, and exactly one TXT string
