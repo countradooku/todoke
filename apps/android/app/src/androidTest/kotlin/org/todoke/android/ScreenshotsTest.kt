@@ -10,6 +10,7 @@
 package org.todoke.android
 
 import android.graphics.Bitmap
+import android.os.Build
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.getValue
@@ -25,6 +26,8 @@ import androidx.compose.ui.test.captureToImage
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
+import org.junit.Assume.assumeTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -74,11 +77,18 @@ class ScreenshotsTest {
         strangers = listOf(Stranger("9f".repeat(8)))
     }
 
+    /** Screenshots need Android 8 (window capture) and a test output
+     * directory, which older releases do not get. */
+    @Before
+    fun screenshotsCanBeTaken() {
+        assumeTrue(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
+        assumeTrue(InstrumentationRegistry.getArguments().getString("additionalTestOutputDir") != null)
+    }
+
     private fun save(name: String, bitmap: Bitmap) {
         // The runner names the directory; the app's own files go when the
         // test run uninstalls it.
-        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir")
-            ?: error("no additionalTestOutputDir: run through the connected test task")
+        val output = InstrumentationRegistry.getArguments().getString("additionalTestOutputDir") ?: return
         val dir = File(output, "screenshots").apply { mkdirs() }
         File(dir, "$name-${if (dark) "dark" else "light"}.png").outputStream().use {
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)
