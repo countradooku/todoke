@@ -4,10 +4,11 @@
 all-features = true
 exclude-dev = false
 # The desktop app's GUI toolkit (gpui-kit) brings a large tree with its own
-# duplicates, licenses, and advisories; deny-desktop.toml holds that policy
-# and checks the whole graph, the desktop included. Everything else is held
-# to this file.
-exclude = ["todoke-desktop"]
+# duplicates, licenses, and advisories; so does the binding generator of the
+# mobile and web libraries (BoltFFI's runtime always enables `url`, hence
+# ICU's Unicode-3.0 crates). deny-desktop.toml holds that policy and checks
+# the whole graph, both included. Everything else is held to this file.
+exclude = ["todoke-desktop", "todoke-ffi"]
 
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]

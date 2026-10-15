@@ -332,6 +332,36 @@ version = "1.7.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.boltffi]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.boltffi_ast]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.boltffi_binding]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.boltffi_core]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.boltffi_macros]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.boltffi_scan]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.borsh]]
 version = "1.8.1"
 criteria = "safe-to-deploy"
@@ -2522,6 +2552,11 @@ version = "2.1.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.rustc_lexer]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.rusticata-macros]]
 version = "4.1.0"
 criteria = "safe-to-deploy"
@@ -3146,6 +3181,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "0.1.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.unicode-xid]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.untrusted]]
 version = "0.9.0"

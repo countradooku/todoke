@@ -1,0 +1,209 @@
+name: Bindings
+
+# The Swift, Kotlin, and TypeScript bindings of todoke-ffi (BoltFFI;
+# docs/adr/0012-bindings.md): generated, built, packaged (Swift package,
+# Android AAR, npm package), and smoke-tested in each language; the
+# generated glue under Miri and sanitizers. Nothing is published.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  swift:
+    name: Swift (XCTest on macOS, and the iOS package)
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the Apple targets
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      # The host's slice, with development sessions: the tests start cores.
+      - name: Pack the test package
+        working-directory: crates/todoke-ffi
+        run: boltffi --overlay boltffi.test.toml pack apple
+      - name: Run the Swift smoke tests
+        run: swift test --package-path crates/todoke-ffi/swift
+      # The shipped package: every iOS slice, the simulator, and macOS;
+      # release builds keep sessions disabled (PROTOCOL §16).
+      - name: Pack the Swift package
+        working-directory: crates/todoke-ffi
+        run: boltffi pack apple --release
+      - name: Keep the Swift package
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: todoke-swift-package
+          path: |
+            crates/todoke-ffi/dist/apple/Package.swift
+            crates/todoke-ffi/dist/apple/Todoke.xcframework.zip
+            crates/todoke-ffi/dist/apple/Sources/
+            crates/todoke-ffi/dist/apple/FFI/
+          if-no-files-found: error
+          retention-days: 14
+
+  kotlin:
+    name: Kotlin (JUnit on a desktop JVM, glue under sanitizers)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup show
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      - name: Set up Gradle (pinned; no cache)
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: "9.8.1"
+          cache-disabled: true
+      # JDK 21 is on the runner (JAVA_HOME_21_X64).
+      - name: Run the Kotlin smoke tests
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          out="$RUNNER_TEMP/kotlin"
+          bash scripts/ci/ffi-jni.sh "$out"
+          gradle -p crates/todoke-ffi/kotlin test \
+            -Ptodoke.generated="$out/generated" -Ptodoke.natives="$out/natives"
+      # The generated C glue under AddressSanitizer and UBSan, inside the
+      # JVM: the sanitizer runtime is preloaded; the JVM's own signal use is
+      # left to it.
+      - name: Run them again with the glue sanitized
+        env:
+          SANITIZE: "1"
+          ASAN_OPTIONS: detect_leaks=0:handle_segv=0:allow_user_segv_handler=1:abort_on_error=1
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          out="$RUNNER_TEMP/kotlin-sanitized"
+          bash scripts/ci/ffi-jni.sh "$out"
+          LD_PRELOAD="$(cc -print-file-name=libasan.so)" gradle --no-daemon \
+            -p crates/todoke-ffi/kotlin test --rerun-tasks \
+            -Ptodoke.generated="$out/generated" -Ptodoke.natives="$out/natives"
+
+  android:
+    name: Android AAR
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the Android targets
+        run: |
+          rustup show
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      - name: Set up Gradle (pinned; no cache)
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: "9.8.1"
+          cache-disabled: true
+      # The runner's default NDK (ANDROID_NDK_HOME); release builds keep
+      # sessions disabled (PROTOCOL §16).
+      - name: Pack the libraries and Kotlin for every ABI
+        working-directory: crates/todoke-ffi
+        run: boltffi pack android --release
+      - name: Build the AAR
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          gradle -p crates/todoke-ffi/android assembleRelease \
+            -Ptodoke.android="$PWD/crates/todoke-ffi/dist/android"
+          ls -l crates/todoke-ffi/android/build/outputs/aar/
+      - name: Keep the AAR
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: todoke-android-aar
+          path: crates/todoke-ffi/android/build/outputs/aar/*.aar
+          if-no-files-found: error
+          retention-days: 14
+
+  typescript:
+    name: TypeScript (npm package, Node tests)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+      - name: Install the pinned toolchain and the WASM target
+        run: |
+          rustup show
+          rustup target add wasm32-unknown-unknown
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      # The TypeScript compiler and BoltFFI runtime the pack type-checks
+      # against, from the lockfile.
+      - name: Install the pinned TypeScript tools
+        working-directory: crates/todoke-ffi
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Pack the npm package
+        working-directory: crates/todoke-ffi
+        run: PATH="$PWD/node_modules/.bin:$PATH" boltffi --overlay boltffi.test.toml pack wasm
+      - name: Run the TypeScript smoke tests
+        working-directory: crates/todoke-ffi
+        run: npm test
+
+  miri:
+    name: Miri (the generated glue)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      MIRI_TOOLCHAIN: nightly-2026-08-20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Miri
+        run: rustup toolchain install "$MIRI_TOOLCHAIN" --profile minimal --component miri,rust-src
+      # The C entry points (buffers, records decoded from foreign bytes,
+      # errors) and the binding's own logic; neither reaches the C crypto.
+      - name: Run the ABI and unit tests under Miri
+        run: cargo +"$MIRI_TOOLCHAIN" miri test --locked -p todoke-ffi --lib --test abi
+
+  sanitizers:
+    name: AddressSanitizer (the binding, two cores end to end)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      SANITIZER_TOOLCHAIN: nightly-2026-08-20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the nightly toolchain
+        run: rustup toolchain install "$SANITIZER_TOOLCHAIN" --profile minimal --component rust-src
+      - name: Run todoke-ffi's tests with AddressSanitizer
+        env:
+          RUSTFLAGS: -Zsanitizer=address
+          RUSTDOCFLAGS: -Zsanitizer=address
+          ASAN_OPTIONS: detect_leaks=0:abort_on_error=1
+        run: >-
+          cargo +"$SANITIZER_TOOLCHAIN" test --locked -Zbuild-std
+          --target x86_64-unknown-linux-gnu -p todoke-ffi --lib --tests
