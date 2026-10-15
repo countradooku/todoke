@@ -164,8 +164,9 @@ pub struct Settings {
     pub downloads: String,
     /// Use the local network.
     pub lan: bool,
-    /// Reach devices on this machine too (two profiles in tests only;
-    /// never in an app).
+    /// Reach devices on this machine too: two profiles in one test, never
+    /// an app. Refused unless the library was built for tests (the
+    /// `test-support` feature).
     pub allow_loopback: bool,
     /// Start hidden from contacts.
     pub hidden: bool,
@@ -421,24 +422,6 @@ impl From<api::HistoryEntry> for HistoryItem {
 pub struct Stranger {
     /// Its advertisement: pass it to `Core::pair_enter_code`.
     pub stranger: String,
-}
-
-/// A pairing code to show (ten digits, two groups of five).
-#[data]
-#[derive(Clone, PartialEq, Eq)]
-pub struct CodeOffer {
-    /// The code.
-    pub code: String,
-    /// When it expires (Unix seconds).
-    pub expires_at: u64,
-}
-
-impl core::fmt::Debug for CodeOffer {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("CodeOffer")
-            .field("expires_at", &self.expires_at)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Something the core reports.

@@ -30,7 +30,6 @@ todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0", def
 # The binding's boundary under random command sequences: a core runs, which
 # needs development sessions (PROTOCOL §16), in a scratch profile.
 todoke-ffi = { path = "../crates/todoke-ffi", version = "0.1.0", features = ["unaudited-dev"] }
-tokio = { version = "=1.53.3", default-features = false, features = ["rt"] }
 
 [[bin]]
 name = "proto_device_binding"

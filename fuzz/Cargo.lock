@@ -1966,7 +1966,6 @@ dependencies = [
  "todoke-fs",
  "todoke-proto",
  "todoke-transport",
- "tokio",
 ]
 
 [[package]]

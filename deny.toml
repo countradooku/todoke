@@ -4,11 +4,10 @@
 all-features = true
 exclude-dev = false
 # The desktop app's GUI toolkit (gpui-kit) brings a large tree with its own
-# duplicates, licenses, and advisories; so does the binding generator of the
-# mobile and web libraries (BoltFFI's runtime always enables `url`, hence
-# ICU's Unicode-3.0 crates). deny-desktop.toml holds that policy and checks
-# the whole graph, both included. Everything else is held to this file.
-exclude = ["todoke-desktop", "todoke-ffi"]
+# duplicates, licenses, and advisories: deny-desktop.toml holds that policy
+# and checks the whole graph, the desktop included. Everything else,
+# todoke-ffi included, is held to this file.
+exclude = ["todoke-desktop"]
 
 [advisories]
 db-urls = ["https://github.com/RustSec/advisory-db"]
@@ -67,6 +66,28 @@ exceptions = [
     { crate = "ring@0.17.14", allow = ["ISC"] },
     # Fuzz harness only (fuzz/ workspace): bundles LLVM libFuzzer. Never shipped.
     { crate = "libfuzzer-sys@0.4.13", allow = ["NCSA"] },
+    # ICU4X's Unicode data and its zero-copy helpers, linked into the mobile
+    # and web libraries (todoke-ffi) only because BoltFFI's runtime always
+    # enables `url` (url -> idna -> ICU); see docs/adr/0012-bindings.md.
+    # Unicode-3.0 requires retaining its notice.
+    { crate = "icu_collections@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_locale_core@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_normalizer_data@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_properties_data@2.3.0", allow = ["Unicode-3.0"] },
+    { crate = "icu_provider@2.3.1", allow = ["Unicode-3.0"] },
+    { crate = "litemap@0.8.3", allow = ["Unicode-3.0"] },
+    { crate = "potential_utf@0.1.6", allow = ["Unicode-3.0"] },
+    { crate = "tinystr@0.8.4", allow = ["Unicode-3.0"] },
+    { crate = "writeable@0.6.4", allow = ["Unicode-3.0"] },
+    { crate = "yoke@0.8.3", allow = ["Unicode-3.0"] },
+    { crate = "yoke-derive@0.8.4", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom@0.1.8", allow = ["Unicode-3.0"] },
+    { crate = "zerofrom-derive@0.1.8", allow = ["Unicode-3.0"] },
+    { crate = "zerotrie@0.2.5", allow = ["Unicode-3.0"] },
+    { crate = "zerovec@0.11.8", allow = ["Unicode-3.0"] },
+    { crate = "zerovec-derive@0.11.6", allow = ["Unicode-3.0"] },
 ]
 
 [bans]

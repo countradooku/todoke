@@ -49,7 +49,11 @@ impl From<boltffi::UnexpectedFfiCallbackError> for KeyStoreError {
 /// This is the one secret that crosses the boundary, and only here: the
 /// app keeps it encrypted under a hardware key and hands it back to the
 /// core. Implementations must not log it, copy it elsewhere, or keep it
-/// in memory after the call.
+/// in memory after the call. `profile` names the profile (a random ID kept
+/// beside its state): one app may hold several, each with its own key.
+///
+/// The core calls these on its own thread while `Core::with_key_store`
+/// blocks its caller: they must not wait for that caller's thread.
 #[export]
 pub trait KeyStore: Send + Sync {
     /// What protects a key stored here.
@@ -60,14 +64,14 @@ pub trait KeyStore: Send + Sync {
     /// # Errors
     ///
     /// The store is unavailable now: never "no key".
-    fn load(&self) -> Result<Option<Vec<u8>>, KeyStoreError>;
+    fn load(&self, profile: String) -> Result<Option<Vec<u8>>, KeyStoreError>;
 
     /// Stores `key`; never replaces a stored one.
     ///
     /// # Errors
     ///
     /// [`KeyStoreError::AlreadyExists`] if a key is stored.
-    fn store(&self, key: Vec<u8>) -> Result<(), KeyStoreError>;
+    fn store(&self, profile: String, key: Vec<u8>) -> Result<(), KeyStoreError>;
 }
 
 /// An offer to notify (no file names: lock screens show notifications).
@@ -103,8 +107,9 @@ impl From<&Offer> for OfferNotice {
 }
 
 /// The app's notifications, called from a thread of the core's (never the
-/// UI thread) while the app may be in the background. Deciding an offer
-/// happens in the app, never in a notification.
+/// UI thread) while the app may be in the background; a slow one delays
+/// the events behind it. Deciding an offer happens in the app, never in a
+/// notification.
 #[export]
 pub trait Notifier: Send + Sync {
     /// An offer awaits a decision.
@@ -113,6 +118,9 @@ pub trait Notifier: Send + Sync {
     fn offer_gone(&self, transfer: String);
     /// A transfer finished; `text` is for people.
     fn transfer_finished(&self, transfer: String, text: String);
+    /// Events were lost: read `Core::offers` and settle the notifications
+    /// shown (offers that went meanwhile are not reported one by one).
+    fn missed(&self);
 }
 
 /// What kind of radio a link uses.

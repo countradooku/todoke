@@ -1,7 +1,8 @@
 # Overlay for the binding tests on a developer machine or a CI runner:
-# only the host's slice, and development sessions (the core starts).
+# only the host's slice, development sessions (the core starts), and
+# loopback (two cores on one machine find each other).
 [cargo]
-global_args = ["--features", "unaudited-dev"]
+global_args = ["--locked", "--features", "unaudited-dev,test-support"]
 
 [targets.apple]
 ios_architectures = []
@@ -12,6 +13,11 @@ output = "target-tests/apple"
 
 [targets.android]
 output = "target-tests/android"
+
+# The Kotlin tests on a desktop JVM load the JNI library from
+# java.library.path.
+[targets.android.kotlin]
+desktop_loader = "system"
 
 [targets.wasm]
 output = "target-tests/wasm"

@@ -35,23 +35,32 @@ impl ContactHandle {
     }
 
     /// Offers files and folders (absolute paths the app may read) to this
-    /// contact; folders go with their contents.
+    /// contact; folders go with their contents. Blocks while the core hashes
+    /// them: call it off the UI thread.
     ///
     /// # Errors
     ///
     /// The core's answer: a path that cannot be read, the contact out of
     /// reach.
-    pub async fn send(&self, paths: Vec<String>) -> Result<TransferHandle, TodokeError> {
+    pub fn send(&self, paths: Vec<String>) -> Result<TransferHandle, TodokeError> {
         if paths.is_empty() {
             return Err(TodokeError::Invalid {
                 message: "nothing to send".to_owned(),
+            });
+        }
+        if paths
+            .iter()
+            .any(|path| !std::path::Path::new(path).is_absolute())
+        {
+            return Err(TodokeError::Invalid {
+                message: "paths to send must be absolute".to_owned(),
             });
         }
         let request = Request::Send {
             contact: self.device.clone(),
             paths: paths.into_iter().map(Into::into).collect(),
         };
-        match self.shared.request(request).await? {
+        match self.shared.request(request)? {
             Response::Offered { transfer, .. } => Ok(TransferHandle {
                 shared: Arc::clone(&self.shared),
                 id: transfer,
@@ -80,8 +89,8 @@ impl TransferHandle {
     ///
     /// [`TodokeError::State`] when the core no longer lists it (finished
     /// transfers are in the history).
-    pub async fn info(&self) -> Result<Transfer, TodokeError> {
-        match self.shared.request(Request::Transfers).await? {
+    pub fn info(&self) -> Result<Transfer, TodokeError> {
+        match self.shared.request(Request::Transfers)? {
             Response::Transfers(transfers) => transfers
                 .into_iter()
                 .find(|transfer| transfer.transfer == self.id)
@@ -99,14 +108,12 @@ impl TransferHandle {
     /// # Errors
     ///
     /// The core's answer: no such offer, an expired one.
-    pub async fn accept(&self, files: Vec<u32>) -> Result<(), TodokeError> {
+    pub fn accept(&self, files: Vec<u32>) -> Result<(), TodokeError> {
         let files = (!files.is_empty()).then_some(files);
-        self.shared
-            .done(Request::Accept {
-                transfer: self.id.clone(),
-                files,
-            })
-            .await
+        self.shared.done(Request::Accept {
+            transfer: self.id.clone(),
+            files,
+        })
     }
 
     /// Declines the offer.
@@ -114,12 +121,10 @@ impl TransferHandle {
     /// # Errors
     ///
     /// The core's answer.
-    pub async fn decline(&self) -> Result<(), TodokeError> {
-        self.shared
-            .done(Request::Decline {
-                transfer: self.id.clone(),
-            })
-            .await
+    pub fn decline(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::Decline {
+            transfer: self.id.clone(),
+        })
     }
 
     /// Cancels the transfer.
@@ -127,12 +132,10 @@ impl TransferHandle {
     /// # Errors
     ///
     /// The core's answer.
-    pub async fn cancel(&self) -> Result<(), TodokeError> {
-        self.shared
-            .done(Request::Cancel {
-                transfer: self.id.clone(),
-            })
-            .await
+    pub fn cancel(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::Cancel {
+            transfer: self.id.clone(),
+        })
     }
 }
 

@@ -82,3 +82,7 @@ __pycache__/
 /crates/todoke-ffi/target-tests/
 /crates/todoke-ffi/swift/.build/
 /crates/todoke-ffi/node_modules/
+/crates/todoke-ffi/kotlin/.gradle/
+/crates/todoke-ffi/kotlin/build/
+/crates/todoke-ffi/android/.gradle/
+/crates/todoke-ffi/android/build/

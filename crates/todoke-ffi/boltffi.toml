@@ -3,7 +3,8 @@
 experimental = []
 
 [cargo]
-global_args = []
+# Builds from Cargo.lock as committed, never a resolution of their own.
+global_args = ["--locked"]
 
 [cargo.command_args]
 
@@ -44,8 +45,9 @@ min_sdk = 24
 
 [targets.android.kotlin]
 package = "org.todoke.ffi"
-# The same bindings load on a desktop JVM, for the Kotlin tests.
-desktop_loader = "bundled"
+# No desktop loader in the AAR (Android loads the library itself); the test
+# overlay loads it on a desktop JVM, from java.library.path.
+desktop_loader = "none"
 api_style = "top_level"
 error_style = "throwing"
 factory_style = "constructors"
@@ -58,7 +60,8 @@ enabled = false
 [targets.android.pack]
 
 [targets.android.link]
-extra_args = []
+# 16 KB pages (Android 15 devices may use them): segments aligned for both.
+extra_args = ["-Wl,-z,max-page-size=16384"]
 
 [targets.wasm]
 enabled = true

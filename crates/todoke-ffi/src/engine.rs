@@ -1,6 +1,14 @@
-//! The core as an app holds it: one object that starts the core, sends it
-//! requests, streams its events, and hands out contact and transfer
-//! handles.
+//! The core as an app holds it: one object that starts the core, answers
+//! commands, hands out event subscriptions, and hands out contact and
+//! transfer handles.
+//!
+//! Commands block until the core answers (on the calling thread; most
+//! answer at once, offering a large folder hashes it first): call them off
+//! the UI thread, as the platform's async wrappers do (Swift
+//! `Task.detached`, Kotlin `Dispatchers.IO`). They are not `async` on
+//! purpose: `BoltFFI` 0.31.1's Swift glue can poll a Rust future after a
+//! cancelled task freed it (docs/adr/0012-bindings.md), so no Rust future
+//! crosses the boundary.
 
 #![allow(
     clippy::needless_pass_by_value,
@@ -10,37 +18,35 @@
 
 use std::sync::{Arc, Mutex};
 
-use boltffi::{EventSubscription, StreamProducer, export};
+use boltffi::export;
 use todoke_core::api::{Request, Response};
 
+use crate::code::CodeOffer;
 use crate::error::TodokeError;
+use crate::events::{Events, Subscribers};
 use crate::handles::{ContactHandle, TransferHandle, valid_id};
 use crate::hooks::{KeyStore, Notifier, RadioLink};
 use crate::qr::QrOffer;
-use crate::types::{
-    CodeOffer, Contact, CoreEvent, HistoryItem, Offer, Settings, Status, Stranger, Transfer,
-};
+use crate::types::{Contact, HistoryItem, Offer, Settings, Status, Stranger, Transfer};
 
-/// Events buffered per subscriber before the oldest are dropped (the app
-/// then sees [`CoreEvent::Missed`] from the core's own stream, or reads
-/// the offers and transfers again).
-const EVENT_BUFFER: usize = 1024;
+/// The app's notifier, shared with the event thread.
+pub(crate) type NotifierSlot = Arc<Mutex<Option<Arc<dyn Notifier>>>>;
 
 /// What the core, its handles, and the event thread share.
 pub(crate) struct Shared {
     #[cfg(not(target_family = "wasm"))]
     core: todoke_core::runtime::Core,
-    pub(crate) events: Arc<StreamProducer<CoreEvent>>,
-    notifier: Arc<Mutex<Option<Arc<dyn Notifier>>>>,
+    pub(crate) subscribers: Arc<Subscribers>,
+    notifier: NotifierSlot,
 }
 
 impl Shared {
-    /// Sends `request` and returns the answer, or the core's error.
-    pub(crate) async fn request(&self, request: Request) -> Result<Response, TodokeError> {
+    /// Sends `request` and waits for the answer, or the core's error.
+    pub(crate) fn request(&self, request: Request) -> Result<Response, TodokeError> {
         #[cfg(not(target_family = "wasm"))]
         {
-            match self.core.request(request).await {
-                Response::Error { code, message } => Err(TodokeError::from_core(code, message)),
+            match crate::block::block_on(self.core.request(request)) {
+                Response::Error { code, message } => Err(TodokeError::from_core(code, &message)),
                 response => Ok(response),
             }
         }
@@ -52,8 +58,8 @@ impl Shared {
     }
 
     /// Sends `request`, which answers `Done`.
-    pub(crate) async fn done(&self, request: Request) -> Result<(), TodokeError> {
-        match self.request(request).await? {
+    pub(crate) fn done(&self, request: Request) -> Result<(), TodokeError> {
+        match self.request(request)? {
             Response::Done => Ok(()),
             _ => Err(TodokeError::unexpected()),
         }
@@ -67,8 +73,9 @@ fn unsupported() -> TodokeError {
     }
 }
 
-/// The running core of one profile. It stops when the app releases it
-/// (and every handle it gave out).
+/// The running core of one profile. It stops when the app releases it and
+/// every handle it gave out (its subscriptions then end); that release
+/// joins the core's thread (a moment): do it off the UI thread too.
 pub struct Core {
     shared: Arc<Shared>,
 }
@@ -91,49 +98,68 @@ impl Core {
         }
         #[cfg(not(target_family = "wasm"))]
         {
-            let config = crate::config::core_config(settings)?;
-            let source = crate::keys::source(&config.state_dir, key_store, config.key_storage);
+            let config = crate::config::core_config(settings, key_store.is_some())?;
+            let source = crate::keys::source(&config.state_dir, key_store, config.key_storage)?;
             let core = todoke_core::runtime::Core::start(config, Box::new(source))
                 .map_err(crate::config::start_error)?;
-            let events = Arc::new(StreamProducer::new(EVENT_BUFFER));
-            let notifier: Arc<Mutex<Option<Arc<dyn Notifier>>>> = Arc::new(Mutex::new(None));
-            crate::forward::spawn(core.subscribe(), Arc::clone(&events), Arc::clone(&notifier))
-                .map_err(|_| TodokeError::Internal {
-                    message: "the event thread could not start".to_owned(),
-                })?;
+            let subscribers = Arc::new(Subscribers::default());
+            let notifier: NotifierSlot = Arc::new(Mutex::new(None));
+            crate::forward::spawn(
+                core.subscribe(),
+                Arc::clone(&subscribers),
+                Arc::clone(&notifier),
+            )
+            .map_err(|_| TodokeError::Internal {
+                message: "the event thread could not start".to_owned(),
+            })?;
             Ok(Self {
                 shared: Arc::new(Shared {
                     core,
-                    events,
+                    subscribers,
                     notifier,
                 }),
             })
+        }
+    }
+
+    fn handle_for(&self, contact: String) -> ContactHandle {
+        ContactHandle {
+            shared: Arc::clone(&self.shared),
+            device: contact,
         }
     }
 }
 
 #[export]
 impl Core {
-    /// Starts the core for the profile in `settings.home`, keeping the
-    /// storage key where the platform keeps it natively (the macOS
-    /// Keychain) or in a private file, as `settings.key_storage` allows.
-    /// Blocks while the profile opens: call it off the UI thread.
+    /// Starts the core for the profile in `settings.home` with no key store
+    /// of the app's: the storage key in the macOS Keychain (natively,
+    /// nothing crosses), or with `KeyStoragePolicy::File` a private file.
+    /// On Android and iOS, use [`Core::with_key_store`] (or ask for a file
+    /// explicitly). Blocks while the profile opens: call it off the UI
+    /// thread.
     ///
     /// # Errors
     ///
     /// [`TodokeError::Disabled`] in builds without development sessions;
-    /// [`TodokeError::Profile`] when the profile cannot be opened.
+    /// [`TodokeError::Invalid`] for settings that cannot be used;
+    /// [`TodokeError::Profile`] or [`TodokeError::KeyStore`] when the
+    /// profile cannot be opened.
     pub fn new(settings: Settings) -> Result<Self, TodokeError> {
         Self::start(&settings, None)
     }
 
     /// Starts the core with the app's key store for the storage key
-    /// (Android's Keystore, iOS's Keychain and Secure Enclave).
+    /// (Android's Keystore, iOS's Keychain and Secure Enclave). The key
+    /// then lives only there (`settings.key_storage` must be
+    /// `KeyStoragePolicy::Platform`). The key store is called on the
+    /// core's thread while this blocks: it must not wait for the thread
+    /// that calls this (the UI thread, for one).
     ///
     /// # Errors
     ///
-    /// As [`Core::new`]; [`TodokeError::Profile`] when the key store
-    /// refuses and the policy needs it.
+    /// As [`Core::new`]; [`TodokeError::KeyStore`] when the key store
+    /// refuses or fails.
     pub fn with_key_store(
         settings: Settings,
         key_store: Arc<dyn KeyStore>,
@@ -151,8 +177,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn status(&self) -> Result<Status, TodokeError> {
-        match self.shared.request(Request::Status).await? {
+    pub fn status(&self) -> Result<Status, TodokeError> {
+        match self.shared.request(Request::Status)? {
             Response::Status(status) => Ok(status.into()),
             _ => Err(TodokeError::unexpected()),
         }
@@ -163,8 +189,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn contacts(&self) -> Result<Vec<Contact>, TodokeError> {
-        match self.shared.request(Request::Contacts).await? {
+    pub fn contacts(&self) -> Result<Vec<Contact>, TodokeError> {
+        match self.shared.request(Request::Contacts)? {
             Response::Contacts(contacts) => Ok(contacts.into_iter().map(Contact::from).collect()),
             _ => Err(TodokeError::unexpected()),
         }
@@ -182,10 +208,7 @@ impl Core {
                 message: "not a device fingerprint".to_owned(),
             });
         }
-        Ok(ContactHandle {
-            shared: Arc::clone(&self.shared),
-            device,
-        })
+        Ok(self.handle_for(device))
     }
 
     /// Transfers in progress or awaiting a decision.
@@ -193,8 +216,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn transfers(&self) -> Result<Vec<Transfer>, TodokeError> {
-        match self.shared.request(Request::Transfers).await? {
+    pub fn transfers(&self) -> Result<Vec<Transfer>, TodokeError> {
+        match self.shared.request(Request::Transfers)? {
             Response::Transfers(transfers) => {
                 Ok(transfers.into_iter().map(Transfer::from).collect())
             }
@@ -219,14 +242,14 @@ impl Core {
         })
     }
 
-    /// Offers awaiting this user's decision (what an app that starts late
-    /// has not seen as events).
+    /// Offers awaiting this user's decision (what an app that starts late,
+    /// or that missed events, has not seen).
     ///
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn offers(&self) -> Result<Vec<Offer>, TodokeError> {
-        match self.shared.request(Request::Offers).await? {
+    pub fn offers(&self) -> Result<Vec<Offer>, TodokeError> {
+        match self.shared.request(Request::Offers)? {
             Response::Offers(offers) => Ok(offers.into_iter().map(Offer::from).collect()),
             _ => Err(TodokeError::unexpected()),
         }
@@ -237,8 +260,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn history(&self) -> Result<Vec<HistoryItem>, TodokeError> {
-        match self.shared.request(Request::History).await? {
+    pub fn history(&self) -> Result<Vec<HistoryItem>, TodokeError> {
+        match self.shared.request(Request::History)? {
             Response::History(entries) => Ok(entries.into_iter().map(HistoryItem::from).collect()),
             _ => Err(TodokeError::unexpected()),
         }
@@ -249,8 +272,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn clear_history(&self) -> Result<(), TodokeError> {
-        self.shared.done(Request::ClearHistory).await
+    pub fn clear_history(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::ClearHistory)
     }
 
     /// Shows a QR pairing offer (this device responds; it is visible to
@@ -259,13 +282,15 @@ impl Core {
     /// # Errors
     ///
     /// The core refused (an offer already shows; sessions disabled).
-    pub async fn pair_show_qr(&self) -> Result<QrOffer, TodokeError> {
-        match self.shared.request(Request::PairShowQr).await? {
-            Response::Qr { text, expires_at } => {
-                QrOffer::new(text, expires_at).ok_or_else(|| TodokeError::Internal {
+    pub fn pair_show_qr(&self) -> Result<QrOffer, TodokeError> {
+        match self.shared.request(Request::PairShowQr)? {
+            Response::Qr { text, expires_at } => QrOffer::new(text, expires_at).ok_or_else(|| {
+                // Not shown, so not offered either.
+                let _ = self.shared.done(Request::StopPairing);
+                TodokeError::Internal {
                     message: "the offer does not fit a QR code".to_owned(),
-                })
-            }
+                }
+            }),
             _ => Err(TodokeError::unexpected()),
         }
     }
@@ -275,19 +300,12 @@ impl Core {
     /// # Errors
     ///
     /// [`TodokeError::Pairing`] when the offer is wrong, used, or expired.
-    pub async fn pair_scan_qr(&self, text: String) -> Result<ContactHandle, TodokeError> {
+    pub fn pair_scan_qr(&self, text: String) -> Result<ContactHandle, TodokeError> {
         let text = zeroize::Zeroizing::new(text);
-        match self
-            .shared
-            .request(Request::PairScanQr {
-                text: text.as_str().to_owned(),
-            })
-            .await?
-        {
-            Response::Paired { contact } => Ok(ContactHandle {
-                shared: Arc::clone(&self.shared),
-                device: contact,
-            }),
+        match self.shared.request(Request::PairScanQr {
+            text: text.as_str().to_owned(),
+        })? {
+            Response::Paired { contact } => Ok(self.handle_for(contact)),
             _ => Err(TodokeError::unexpected()),
         }
     }
@@ -297,9 +315,9 @@ impl Core {
     /// # Errors
     ///
     /// The core refused.
-    pub async fn pair_show_code(&self) -> Result<CodeOffer, TodokeError> {
-        match self.shared.request(Request::PairShowCode).await? {
-            Response::Code { code, expires_at } => Ok(CodeOffer { code, expires_at }),
+    pub fn pair_show_code(&self) -> Result<CodeOffer, TodokeError> {
+        match self.shared.request(Request::PairShowCode)? {
+            Response::Code { code, expires_at } => Ok(CodeOffer::new(code, expires_at)),
             _ => Err(TodokeError::unexpected()),
         }
     }
@@ -309,8 +327,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn strangers(&self) -> Result<Vec<Stranger>, TodokeError> {
-        match self.shared.request(Request::Strangers).await? {
+    pub fn strangers(&self) -> Result<Vec<Stranger>, TodokeError> {
+        match self.shared.request(Request::Strangers)? {
             Response::Strangers(strangers) => Ok(strangers
                 .into_iter()
                 .map(|stranger| Stranger {
@@ -326,24 +344,17 @@ impl Core {
     /// # Errors
     ///
     /// [`TodokeError::Pairing`] for a wrong code (five end the offer).
-    pub async fn pair_enter_code(
+    pub fn pair_enter_code(
         &self,
         code: String,
         stranger: String,
     ) -> Result<ContactHandle, TodokeError> {
         let code = zeroize::Zeroizing::new(code);
-        match self
-            .shared
-            .request(Request::PairEnterCode {
-                code: code.as_str().to_owned(),
-                stranger,
-            })
-            .await?
-        {
-            Response::Paired { contact } => Ok(ContactHandle {
-                shared: Arc::clone(&self.shared),
-                device: contact,
-            }),
+        match self.shared.request(Request::PairEnterCode {
+            code: code.as_str().to_owned(),
+            stranger,
+        })? {
+            Response::Paired { contact } => Ok(self.handle_for(contact)),
             _ => Err(TodokeError::unexpected()),
         }
     }
@@ -353,8 +364,8 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn stop_pairing(&self) -> Result<(), TodokeError> {
-        self.shared.done(Request::StopPairing).await
+    pub fn stop_pairing(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::StopPairing)
     }
 
     /// Hides this device from contacts, or shows it again.
@@ -362,28 +373,42 @@ impl Core {
     /// # Errors
     ///
     /// The core stopped.
-    pub async fn set_hidden(&self, hidden: bool) -> Result<(), TodokeError> {
-        self.shared.done(Request::SetHidden { hidden }).await
+    pub fn set_hidden(&self, hidden: bool) -> Result<(), TodokeError> {
+        self.shared.done(Request::SetHidden { hidden })
     }
 
-    /// The core's events from now on.
-    #[ffi_stream(item = CoreEvent)]
-    pub fn events(&self) -> Arc<EventSubscription<CoreEvent>> {
-        self.shared.events.subscribe()
+    /// A subscription to the core's events from now on.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::State`] beyond 16 subscriptions at once.
+    pub fn subscribe(&self) -> Result<Events, TodokeError> {
+        Ok(Events {
+            queue: self.shared.subscribers.subscribe()?,
+        })
     }
 
     /// Notifications go to `notifier` from now on (replacing one set).
     pub fn set_notifier(&self, notifier: Arc<dyn Notifier>) {
-        if let Ok(mut slot) = self.shared.notifier.lock() {
-            *slot = Some(notifier);
-        }
+        let previous = self
+            .shared
+            .notifier
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.replace(notifier));
+        // Released after the lock: releasing calls into the app.
+        drop(previous);
     }
 
     /// No notifications from now on.
     pub fn clear_notifier(&self) {
-        if let Ok(mut slot) = self.shared.notifier.lock() {
-            *slot = None;
-        }
+        let previous = self
+            .shared
+            .notifier
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        drop(previous);
     }
 
     /// Offers a radio link for sessions.

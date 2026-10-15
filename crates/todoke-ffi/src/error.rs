@@ -70,9 +70,11 @@ pub enum TodokeError {
 }
 
 impl TodokeError {
-    /// The error the core answered with.
+    /// The error the core answered with; its message is escaped (it may
+    /// name a local path).
     #[must_use]
-    pub fn from_core(code: ErrorCode, message: String) -> Self {
+    pub fn from_core(code: ErrorCode, message: &str) -> Self {
+        let message = todoke_core::api::escape(message);
         match code {
             ErrorCode::Invalid => Self::Invalid { message },
             ErrorCode::Ambiguous => Self::Ambiguous { message },

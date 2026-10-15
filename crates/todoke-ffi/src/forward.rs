@@ -1,22 +1,24 @@
-//! The event thread: the core's events, converted, to every stream the app
-//! subscribed and to its notifier.
+//! The event thread: the core's events, converted, to every subscription
+//! and to the app's notifier. It ends when the core stops (its event
+//! channel closes), and then ends every subscription.
 
 use std::collections::BTreeSet;
-use std::sync::{Arc, Mutex};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
 
-use boltffi::StreamProducer;
 use todoke_core::api::Event;
 use tokio::sync::broadcast::{Receiver, error::RecvError};
 
+use crate::engine::NotifierSlot;
+use crate::events::Subscribers;
 use crate::hooks::{Notifier, OfferNotice};
 use crate::types::{CoreEvent, TransferState};
 
-/// Starts the thread; it ends when the core stops (its event channel
-/// closes).
+/// Starts the thread.
 pub(crate) fn spawn(
     mut events: Receiver<Event>,
-    streams: Arc<StreamProducer<CoreEvent>>,
-    notifier: Arc<Mutex<Option<Arc<dyn Notifier>>>>,
+    subscribers: Arc<Subscribers>,
+    notifier: NotifierSlot,
 ) -> std::io::Result<()> {
     std::thread::Builder::new()
         .name("todoke-ffi-events".into())
@@ -26,14 +28,20 @@ pub(crate) fn spawn(
                 let event = match events.blocking_recv() {
                     Ok(event) => CoreEvent::from(event),
                     Err(RecvError::Lagged(missed)) => CoreEvent::Missed { events: missed },
-                    Err(RecvError::Closed) => return,
+                    Err(RecvError::Closed) => break,
                 };
+                match &event {
+                    CoreEvent::Missed { events } => subscribers.each(|queue| queue.lost(*events)),
+                    other => subscribers.each(|queue| queue.push(other.clone())),
+                }
                 let current = notifier.lock().ok().and_then(|slot| slot.clone());
                 if let Some(current) = current {
-                    notify(&*current, &event, &mut shown);
+                    // A notifier that panics loses this event, not the thread.
+                    let _ =
+                        catch_unwind(AssertUnwindSafe(|| notify(&*current, &event, &mut shown)));
                 }
-                streams.push(event);
             }
+            subscribers.each(crate::events::Queue::stop);
         })?;
     Ok(())
 }
@@ -53,6 +61,13 @@ pub(crate) fn notify(notifier: &dyn Notifier, event: &CoreEvent, shown: &mut BTr
             }
             return;
         }
+        // Events were lost: the app reads the offers again and settles the
+        // notifications it shows; what was shown is forgotten here.
+        CoreEvent::Missed { .. } => {
+            shown.clear();
+            notifier.missed();
+            return;
+        }
         CoreEvent::Completed { transfer } => (transfer, "Files received".to_owned()),
         CoreEvent::Delivered { transfer } => (
             transfer,
@@ -61,7 +76,7 @@ pub(crate) fn notify(notifier: &dyn Notifier, event: &CoreEvent, shown: &mut BTr
         CoreEvent::Ended {
             transfer, reason, ..
         } => (transfer, ending(*reason).to_owned()),
-        CoreEvent::Paired { .. } | CoreEvent::Missed { .. } => return,
+        CoreEvent::Paired { .. } => return,
     };
     let (transfer, text) = ended;
     if shown.remove(transfer) {
@@ -110,6 +125,11 @@ mod tests {
                 log.push(format!("finished {transfer}: {text}"));
             }
         }
+        fn missed(&self) {
+            if let Ok(mut log) = self.0.lock() {
+                log.push("missed".to_owned());
+            }
+        }
     }
 
     fn offer(transfer: &str) -> Offer {
@@ -155,6 +175,13 @@ mod tests {
                 reason: TransferState::Rejected,
                 message: "no".into(),
             },
+            // After a gap the app settles its notifications itself, and an
+            // offer shown before it is not reported again here.
+            CoreEvent::OfferReceived { offer: offer("t3") },
+            CoreEvent::Missed { events: 4 },
+            CoreEvent::Completed {
+                transfer: "t3".into(),
+            },
         ] {
             notify(&recorder, &event, &mut shown);
         }
@@ -168,6 +195,9 @@ mod tests {
                 "offer t2 1 files 1 folders",
                 "gone t2",
                 "finished t2: The transfer was declined",
+                "offer t3 1 files 1 folders",
+                "missed",
+                "finished t3: Files received",
             ]
         );
         assert!(log.iter().all(|line| !line.contains("secret")));

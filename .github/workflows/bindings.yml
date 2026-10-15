@@ -50,6 +50,11 @@ jobs:
       - name: Pack the Swift package
         working-directory: crates/todoke-ffi
         run: boltffi pack apple --release
+      - name: Check that the shipped package starts no core
+        env:
+          TODOKE_SWIFT_PACKAGE: ../dist/apple
+          TODOKE_RELEASE: "1"
+        run: swift test --package-path crates/todoke-ffi/swift
       - name: Keep the Swift package
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -63,9 +68,11 @@ jobs:
           retention-days: 14
 
   kotlin:
-    name: Kotlin (JUnit on a desktop JVM, glue under sanitizers)
+    name: Kotlin (JUnit on a desktop JVM, the release check, sanitizers)
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
+    env:
+      SANITIZER_TOOLCHAIN: nightly-2026-08-20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -87,10 +94,23 @@ jobs:
           bash scripts/ci/ffi-jni.sh "$out"
           gradle -p crates/todoke-ffi/kotlin test \
             -Ptodoke.generated="$out/generated" -Ptodoke.natives="$out/natives"
-      # The generated C glue under AddressSanitizer and UBSan, inside the
-      # JVM: the sanitizer runtime is preloaded; the JVM's own signal use is
-      # left to it.
-      - name: Run them again with the glue sanitized
+      # The library as shipped refuses to start (PROTOCOL §16).
+      - name: Check that a release library starts no core
+        env:
+          RELEASE: "1"
+          TODOKE_RELEASE: "1"
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          out="$RUNNER_TEMP/kotlin-release"
+          bash scripts/ci/ffi-jni.sh "$out"
+          gradle -p crates/todoke-ffi/kotlin test --rerun-tasks \
+            -Ptodoke.generated="$out/generated" -Ptodoke.natives="$out/natives"
+      # todoke-ffi (Rust, nightly) and the generated C glue under
+      # AddressSanitizer, the glue under UBSan too, inside the JVM: clang's
+      # ASan runtime is preloaded; the JVM's own signal use is left to it.
+      - name: Install the nightly toolchain for the sanitizers
+        run: rustup toolchain install "$SANITIZER_TOOLCHAIN" --profile minimal --component rust-src
+      - name: Run them again under the sanitizers
         env:
           SANITIZE: "1"
           ASAN_OPTIONS: detect_leaks=0:handle_segv=0:allow_user_segv_handler=1:abort_on_error=1
@@ -99,7 +119,7 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_21_X64"
           out="$RUNNER_TEMP/kotlin-sanitized"
           bash scripts/ci/ffi-jni.sh "$out"
-          LD_PRELOAD="$(cc -print-file-name=libasan.so)" gradle --no-daemon \
+          LD_PRELOAD="$(cat "$out/asan-runtime")" gradle --no-daemon \
             -p crates/todoke-ffi/kotlin test --rerun-tasks \
             -Ptodoke.generated="$out/generated" -Ptodoke.natives="$out/natives"
 
@@ -127,6 +147,22 @@ jobs:
       - name: Pack the libraries and Kotlin for every ABI
         working-directory: crates/todoke-ffi
         run: boltffi pack android --release
+      # Android 15 devices may use 16 KB pages: every LOAD segment of every
+      # library must be aligned to at least 16 KB.
+      - name: Check the libraries' 16 KB alignment
+        working-directory: crates/todoke-ffi
+        run: |
+          shopt -s globstar
+          found=0
+          for library in dist/android/jniLibs/**/*.so; do
+            found=1
+            aligns="$(readelf -lW "$library" | awk '$1 == "LOAD" { print $NF }')"
+            [[ -n "$aligns" ]] || { echo "$library: no LOAD segments" >&2; exit 1; }
+            for align in $aligns; do
+              (( align >= 16384 )) || { echo "$library: a LOAD segment aligned to $align" >&2; exit 1; }
+            done
+          done
+          [[ "$found" == 1 ]] || { echo "no libraries packed" >&2; exit 1; }
       - name: Build the AAR
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64"
@@ -207,3 +243,4 @@ jobs:
         run: >-
           cargo +"$SANITIZER_TOOLCHAIN" test --locked -Zbuild-std
           --target x86_64-unknown-linux-gnu -p todoke-ffi --lib --tests
+          --features test-support,unaudited-dev

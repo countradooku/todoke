@@ -24,5 +24,7 @@ android {
 }
 
 dependencies {
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    // Part of the API (Guarded.callSuspending, the events Flow): apps
+    // compile against it too.
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 }

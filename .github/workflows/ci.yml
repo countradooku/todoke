@@ -43,9 +43,14 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings -W clippy::pedantic
       - name: Clippy, the desktop app's mock core and screenshot tool
         run: cargo clippy -p todoke-desktop --all-targets --features mock --locked -- -D warnings -W clippy::pedantic
+      - name: Clippy, the binding with its test support
+        run: cargo clippy -p todoke-ffi --all-targets --features test-support,unaudited-dev --locked -- -D warnings -W clippy::pedantic
       - name: Test, including documentation
         # Every crate's results, even after one fails.
         run: cargo test --workspace --locked --no-fail-fast
+      # Two cores over loopback, which only the binding's test support allows.
+      - name: Test the binding end to end
+        run: cargo test -p todoke-ffi --features test-support,unaudited-dev --locked --no-fail-fast
       # The workspace's tests enable the development gates; built alone,
       # the core and the shipped binary must refuse to start sessions.
       - name: Check that release builds keep sessions disabled

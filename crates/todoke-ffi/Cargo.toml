@@ -39,6 +39,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 # as for the desktop app and the daemon. Without it the core refuses to
 # start (TodokeError::Disabled).
 unaudited-dev = ["todoke-core/unaudited-dev"]
+# Loopback discovery (`Settings::allow_loopback`), so two cores on one
+# machine find each other: the binding tests only. Without it a core asked
+# for loopback refuses to start (TodokeError::Invalid).
+test-support = []
 
 [dependencies]
 todoke-core.workspace = true
@@ -64,3 +68,9 @@ todoke-core = { workspace = true, features = ["unaudited-dev"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 getrandom.workspace = true
 
+# Two cores on one machine find each other over loopback, which only a
+# test-support build allows: `cargo test -p todoke-ffi --features
+# test-support,unaudited-dev`.
+[[test]]
+name = "two_cores"
+required-features = ["test-support", "unaudited-dev"]
