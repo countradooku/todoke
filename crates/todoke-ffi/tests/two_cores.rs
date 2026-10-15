@@ -111,6 +111,7 @@ fn wait_for<T>(
 
 #[test]
 fn two_cores_pair_offer_accept_and_receive() -> TestResult {
+    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("a")?, Scratch::new("b")?);
     let a = Core::new(settings(&a_home.0))?;
     let a_events = a.subscribe()?;
@@ -171,6 +172,7 @@ fn two_cores_pair_offer_accept_and_receive() -> TestResult {
 
 #[test]
 fn malformed_requests_are_typed_errors() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("errors")?;
     let core = Core::new(settings(&home.0))?;
     assert!(matches!(
@@ -198,6 +200,7 @@ fn malformed_requests_are_typed_errors() -> TestResult {
 /// key.
 #[test]
 fn key_store_policy_and_wiped_keys() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("keys")?;
     // A key store with a policy that allows a file: refused.
     for policy in [KeyStoragePolicy::File, KeyStoragePolicy::Auto] {
@@ -220,6 +223,7 @@ fn key_store_policy_and_wiped_keys() -> TestResult {
 /// Subscriptions are bounded in number, and each ends when closed.
 #[test]
 fn subscriptions_are_bounded() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("subscriptions")?;
     let core = Core::new(settings(&home.0))?;
     let mut held = Vec::new();
@@ -246,6 +250,7 @@ fn subscriptions_are_bounded() -> TestResult {
 /// A subscription ends when its core stops, even one taken just before.
 #[test]
 fn subscriptions_end_when_the_core_stops() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("stop")?;
     let core = Core::new(settings(&home.0))?;
     let events = core.subscribe()?;
@@ -317,26 +322,29 @@ impl Notifier for Panicky {
     }
 }
 
-/// Held while two cores pair. A scanner dials the first strangers it
-/// finds nearby, and an offer allows one attempt (PROTOCOL §3.1): tests
-/// pairing at once over loopback would dial each other's displayers and
-/// burn their offers.
-fn pairing() -> MutexGuard<'static, ()> {
-    static PAIRING: Mutex<()> = Mutex::new(());
-    PAIRING.lock().unwrap_or_else(PoisonError::into_inner)
+/// Held for the whole of every test: one test's cores at a time on the
+/// LAN, as in the Swift and Kotlin suites. A scanner dials the first
+/// strangers it finds nearby, and an offer allows one attempt (PROTOCOL
+/// §3.1): tests pairing at once would dial each other's displayers and
+/// burn their offers, and cores starting and stopping beside a pairing
+/// made it fail on macOS CI.
+fn serial() -> MutexGuard<'static, ()> {
+    static SERIAL: Mutex<()> = Mutex::new(());
+    SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// B pairs with A by QR, one pairing at a time. A scanner gives up when
-/// the first strangers it sees (perhaps a dropped core's record still
-/// cached) do not answer before A appears; that is the core's discovery,
-/// not the binding, so a refused pairing is tried again with a new offer.
+/// B pairs with A by QR. A scanner gives up when the first strangers it
+/// sees (perhaps a dropped core's record still cached) do not answer
+/// before A appears; that is the core's discovery, not the binding, so a
+/// refused pairing is tried again, after a moment, with a new offer.
 fn pair(a: &Core, b: &Core) -> Result<ContactHandle, TodokeError> {
-    let _pairing = pairing();
     let mut attempts = 0;
     loop {
         attempts += 1;
         match b.pair_scan_qr(a.pair_show_qr()?.text()) {
-            Err(TodokeError::Pairing { .. }) if attempts < 3 => {}
+            Err(TodokeError::Pairing { .. }) if attempts < 3 => {
+                std::thread::sleep(Duration::from_secs(1));
+            }
             result => return result,
         }
     }
@@ -358,6 +366,7 @@ fn paired(
 /// or its place.
 #[test]
 fn notifications_survive_a_panicking_notifier() -> TestResult {
+    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("notify-a")?, Scratch::new("notify-b")?);
     let (a, b, a_contact) = paired(&a_home, &b_home)?;
     let told = Arc::new(Told::default());
@@ -407,6 +416,7 @@ fn notifications_survive_a_panicking_notifier() -> TestResult {
 /// is not there, a path with a NUL.
 #[test]
 fn sending_checks_its_paths() -> TestResult {
+    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("paths-a")?, Scratch::new("paths-b")?);
     let (a, b, a_contact) = paired(&a_home, &b_home)?;
     let file = b_home.0.join("there.txt");
@@ -442,6 +452,7 @@ fn sending_checks_its_paths() -> TestResult {
 /// Handles to things the core does not know answer with typed errors.
 #[test]
 fn unknown_handles_are_typed_errors() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("unknown")?;
     let core = Core::new(settings(&home.0))?;
     let stranger = core.contact("ab".repeat(32))?;
@@ -466,6 +477,7 @@ fn unknown_handles_are_typed_errors() -> TestResult {
 /// ID; another profile in the same store gets its own ID and key.
 #[test]
 fn key_stores_hold_one_key_per_profile() -> TestResult {
+    let _serial = serial();
     let (first, second) = (Scratch::new("profile-1")?, Scratch::new("profile-2")?);
     let store = Arc::new(Memory::default());
     let start = |home: &Scratch| {
@@ -512,6 +524,7 @@ impl KeyStore for Canned {
 /// file.
 #[test]
 fn failing_key_stores_stop_the_start() -> TestResult {
+    let _serial = serial();
     let refused = KeyStoreError::Refused {
         message: "denied".into(),
     };
@@ -546,6 +559,7 @@ fn failing_key_stores_stop_the_start() -> TestResult {
 /// look for its key under another name).
 #[test]
 fn an_unnamed_profile_does_not_start() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("unnamed")?;
     let mut asked = settings(&home.0);
     asked.key_storage = KeyStoragePolicy::Platform;
@@ -582,6 +596,7 @@ impl RadioLink for Link {
 /// offered is closed rather than left open in the app.
 #[test]
 fn radio_links_are_refused_and_closed() -> TestResult {
+    let _serial = serial();
     let home = Scratch::new("link")?;
     let core = Core::new(settings(&home.0))?;
     let link = Arc::new(Link::default());
