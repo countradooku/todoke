@@ -562,7 +562,6 @@ fn the_preparer_refuses_swapped_paths() -> TestResult {
 #[test]
 fn the_preparer_hashes_handed_over_files() -> TestResult {
     use std::io::Read as _;
-    use todoke_transfer::SourceError;
     let dir = TempDir::new()?;
     let path = dir.path().join("doc");
     std::fs::write(&path, b"handed over")?;
@@ -579,6 +578,7 @@ fn the_preparer_hashes_handed_over_files() -> TestResult {
     // A directory handle is no file to send.
     #[cfg(unix)]
     {
+        use todoke_transfer::SourceError;
         let directory = std::fs::File::open(dir.path())?;
         assert_eq!(
             hasher.prepare_file(directory).map(|_| ()),

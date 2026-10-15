@@ -1935,7 +1935,9 @@ version = "0.1.0"
 dependencies = [
  "boltffi",
  "qrcode",
+ "rustix",
  "todoke-core",
+ "todoke-fs",
  "todoke-sys-macos",
  "tokio",
  "zeroize",
