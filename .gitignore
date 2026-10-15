@@ -46,6 +46,10 @@ proptest-regressions/
 /apps/android/screenshots/
 
 # iOS / Xcode (apps/ios)
+# The Swift package the app links (scripts/bindings.sh makes the link).
+/apps/ios/Bindings
+/apps/ios/screenshots/
+/apps/ios/build/
 /apps/ios/**/xcuserdata/
 /apps/ios/**/DerivedData/
 /apps/ios/**/.build/

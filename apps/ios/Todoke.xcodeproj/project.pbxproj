@@ -1,0 +1,813 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0348BAD6292E8ED1D74E1DDE /* Todoke in Frameworks */ = {isa = PBXBuildFile; productRef = B58FD721B63111E9120586A2 /* Todoke */; };
+		DC79EEF46765FC73143469E1 /* Todoke in Frameworks */ = {isa = PBXBuildFile; productRef = 5B4A9EF5D830ACF5F056D460 /* Todoke */; };
+		FC5BC270E50FACF7478B63FD /* TodokeShare.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 610B9D27ACB25F0E999A3479 /* TodokeShare.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A17B1F1C89D1967405E48E50 /* TodokeWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = 80C4FB955E9D0950719595F4 /* TodokeWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		9568E0D4363A47C934D93D2B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 02718D340DBF143923A63E6D;
+			remoteInfo = TodokeShare;
+		};
+		92926AFF9FABC65593C54B33 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4862E1059F9C44D08E030AE5;
+			remoteInfo = TodokeWidgets;
+		};
+		B3B7A25248B0064DB4A2B3E2 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 874E7FD7A39CF1D6319F589D;
+			remoteInfo = TodokeApp;
+		};
+		53E7AF89D02BE4F804F6EF05 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 874E7FD7A39CF1D6319F589D;
+			remoteInfo = TodokeApp;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		CFFF27C96089B93150F3553B /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				FC5BC270E50FACF7478B63FD /* TodokeShare.appex in Embed Foundation Extensions */,
+				A17B1F1C89D1967405E48E50 /* TodokeWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		BB465C21171B72C498B5CB7D /* todoke.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = todoke.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		610B9D27ACB25F0E999A3479 /* TodokeShare.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = TodokeShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		80C4FB955E9D0950719595F4 /* TodokeWidgets.appex */ = {isa = PBXFileReference; explicitFileType = wrapper.app-extension; includeInIndex = 0; path = TodokeWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		494619FCC6EACEFEA80496F8 /* TodokeTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TodokeTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		DC89D746EE476A971FF428E7 /* TodokeUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TodokeUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		50884924D767CBA4E80B3CC0 /* Todoke */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Todoke;
+			sourceTree = "<group>";
+		};
+		6D9A4E876BE19EAEF425C09B /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		DEAEF924170EB98772F2435C /* ShareExtension */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ShareExtension;
+			sourceTree = "<group>";
+		};
+		5D7ED5425E0F0CDB0C6BF018 /* Widgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Widgets;
+			sourceTree = "<group>";
+		};
+		AF2FE42487CA284123DFDE1E /* Tests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		6DFBD2C0E32491AF9D5C9E3F /* UITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = UITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		323C2F6D0965558226BCB439 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				0348BAD6292E8ED1D74E1DDE /* Todoke in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		72F878DC8A5EB7CBC714A6B7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B7EB946DA6919C5B1C0CB943 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		37821936054C44DA7C0C8BA1 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DC79EEF46765FC73143469E1 /* Todoke in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		2E13DDB59AEEA1CB9956B778 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		EDA6D6223944636B9C5B54AA = {
+			isa = PBXGroup;
+			children = (
+				50884924D767CBA4E80B3CC0 /* Todoke */,
+				6D9A4E876BE19EAEF425C09B /* Shared */,
+				DEAEF924170EB98772F2435C /* ShareExtension */,
+				5D7ED5425E0F0CDB0C6BF018 /* Widgets */,
+				AF2FE42487CA284123DFDE1E /* Tests */,
+				6DFBD2C0E32491AF9D5C9E3F /* UITests */,
+				FBDC4F23F93125BBEEAE800C /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		FBDC4F23F93125BBEEAE800C /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				BB465C21171B72C498B5CB7D /* todoke.app */,
+				610B9D27ACB25F0E999A3479 /* TodokeShare.appex */,
+				80C4FB955E9D0950719595F4 /* TodokeWidgets.appex */,
+				494619FCC6EACEFEA80496F8 /* TodokeTests.xctest */,
+				DC89D746EE476A971FF428E7 /* TodokeUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		874E7FD7A39CF1D6319F589D /* TodokeApp */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 9054E81F927AE55CFD3CCE3F /* Build configuration list for PBXNativeTarget "TodokeApp" */;
+			buildPhases = (
+				77E550D5128E003B1BEFD6CD /* Sources */,
+				323C2F6D0965558226BCB439 /* Frameworks */,
+				580FDE8B041F0E10C28DC195 /* Resources */,
+				CFFF27C96089B93150F3553B /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				7793E1E0984B6AD0FD9C35FF /* PBXTargetDependency */,
+				E6A8CA26578E9468F970937A /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				50884924D767CBA4E80B3CC0 /* Todoke */,
+				6D9A4E876BE19EAEF425C09B /* Shared */,
+			);
+			name = TodokeApp;
+			packageProductDependencies = (
+				B58FD721B63111E9120586A2 /* Todoke */,
+			);
+			productName = TodokeApp;
+			productReference = BB465C21171B72C498B5CB7D /* todoke.app */;
+			productType = "com.apple.product-type.application";
+		};
+		02718D340DBF143923A63E6D /* TodokeShare */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D085FE99177F64266052E20D /* Build configuration list for PBXNativeTarget "TodokeShare" */;
+			buildPhases = (
+				77CCEE419D8144D0DDDC7BEC /* Sources */,
+				72F878DC8A5EB7CBC714A6B7 /* Frameworks */,
+				4135BCEF677684FE950DD6E9 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DEAEF924170EB98772F2435C /* ShareExtension */,
+				6D9A4E876BE19EAEF425C09B /* Shared */,
+			);
+			name = TodokeShare;
+			packageProductDependencies = ();
+			productName = TodokeShare;
+			productReference = 610B9D27ACB25F0E999A3479 /* TodokeShare.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		4862E1059F9C44D08E030AE5 /* TodokeWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DC318B54A0374C14B32DEEEA /* Build configuration list for PBXNativeTarget "TodokeWidgets" */;
+			buildPhases = (
+				FFD8AA8C538BD15DA19F638B /* Sources */,
+				B7EB946DA6919C5B1C0CB943 /* Frameworks */,
+				AE3CCAE20D3D50CCF12111A3 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				5D7ED5425E0F0CDB0C6BF018 /* Widgets */,
+				6D9A4E876BE19EAEF425C09B /* Shared */,
+			);
+			name = TodokeWidgets;
+			packageProductDependencies = ();
+			productName = TodokeWidgets;
+			productReference = 80C4FB955E9D0950719595F4 /* TodokeWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C3769DB3E0FDCF115F76F98F /* TodokeTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 012B0CBF391BD3DCE675A8F2 /* Build configuration list for PBXNativeTarget "TodokeTests" */;
+			buildPhases = (
+				5BF12ECC4ACAF85D4EFADFE5 /* Sources */,
+				37821936054C44DA7C0C8BA1 /* Frameworks */,
+				6D4841EACB09A94C46C85760 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				5C365DEBB7586F9A7C780EE9 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AF2FE42487CA284123DFDE1E /* Tests */,
+			);
+			name = TodokeTests;
+			packageProductDependencies = (
+				5B4A9EF5D830ACF5F056D460 /* Todoke */,
+			);
+			productName = TodokeTests;
+			productReference = 494619FCC6EACEFEA80496F8 /* TodokeTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		DD95D3662F7C82C72F16CD63 /* TodokeUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 26C16765524743047E408C76 /* Build configuration list for PBXNativeTarget "TodokeUITests" */;
+			buildPhases = (
+				BFFD2201015EF75D204072DB /* Sources */,
+				2E13DDB59AEEA1CB9956B778 /* Frameworks */,
+				B224996DEFB0F94463A06F8D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				D5DE139D38C1C22B7CE00513 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				6DFBD2C0E32491AF9D5C9E3F /* UITests */,
+			);
+			name = TodokeUITests;
+			packageProductDependencies = ();
+			productName = TodokeUITests;
+			productReference = DC89D746EE476A971FF428E7 /* TodokeUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		98F54143AB4E86B28C3AFEE0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					874E7FD7A39CF1D6319F589D = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					02718D340DBF143923A63E6D = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					4862E1059F9C44D08E030AE5 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					C3769DB3E0FDCF115F76F98F = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 874E7FD7A39CF1D6319F589D;
+					};
+					DD95D3662F7C82C72F16CD63 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = 874E7FD7A39CF1D6319F589D;
+					};
+				};
+			};
+			buildConfigurationList = 2E29A72255823F1771826D29 /* Build configuration list for PBXProject "Todoke" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = EDA6D6223944636B9C5B54AA;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				5896047EEAE44FC0E9857DDD /* XCLocalSwiftPackageReference "Bindings" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = FBDC4F23F93125BBEEAE800C /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				874E7FD7A39CF1D6319F589D /* TodokeApp */,
+				02718D340DBF143923A63E6D /* TodokeShare */,
+				4862E1059F9C44D08E030AE5 /* TodokeWidgets */,
+				C3769DB3E0FDCF115F76F98F /* TodokeTests */,
+				DD95D3662F7C82C72F16CD63 /* TodokeUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		580FDE8B041F0E10C28DC195 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4135BCEF677684FE950DD6E9 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AE3CCAE20D3D50CCF12111A3 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		6D4841EACB09A94C46C85760 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B224996DEFB0F94463A06F8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		77E550D5128E003B1BEFD6CD /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		77CCEE419D8144D0DDDC7BEC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		FFD8AA8C538BD15DA19F638B /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		5BF12ECC4ACAF85D4EFADFE5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BFFD2201015EF75D204072DB /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		7793E1E0984B6AD0FD9C35FF /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 02718D340DBF143923A63E6D /* TodokeShare */;
+			targetProxy = 9568E0D4363A47C934D93D2B /* PBXContainerItemProxy */;
+		};
+		E6A8CA26578E9468F970937A /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4862E1059F9C44D08E030AE5 /* TodokeWidgets */;
+			targetProxy = 92926AFF9FABC65593C54B33 /* PBXContainerItemProxy */;
+		};
+		5C365DEBB7586F9A7C780EE9 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 874E7FD7A39CF1D6319F589D /* TodokeApp */;
+			targetProxy = B3B7A25248B0064DB4A2B3E2 /* PBXContainerItemProxy */;
+		};
+		D5DE139D38C1C22B7CE00513 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 874E7FD7A39CF1D6319F589D /* TodokeApp */;
+			targetProxy = 53E7AF89D02BE4F804F6EF05 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		60676797C93DF94D0A9F7311 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		75B756078950DECBDE00E2BF /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = minimal;
+				SWIFT_VERSION = 5.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		F97CDA22F511BDB72F7394E8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/App.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/App-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "todoke scans the QR code another device shows to pair with it.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "todoke asks for Face ID before it opens its keys.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "todoke finds your devices on this network and sends files to them directly.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIFileSharingEnabled = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios;
+				PRODUCT_MODULE_NAME = TodokeApp;
+				PRODUCT_NAME = todoke;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		B6BAC843B130B1E0998FB3CD /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/App.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_PREVIEWS = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/App-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "todoke scans the QR code another device shows to pair with it.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "todoke asks for Face ID before it opens its keys.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "todoke finds your devices on this network and sends files to them directly.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIFileSharingEnabled = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios;
+				PRODUCT_MODULE_NAME = TodokeApp;
+				PRODUCT_NAME = todoke;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		6CA6A8D0824FE0D24D04A8AD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/Share.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Share-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		64BAC11EAA5671A11089E2D5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Config/Share.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Share-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.share;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		438B2DE6B4D6D5FDACBA90C7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Widgets-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		BBF78D79E19A4D83E2BCE809 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Config/Widgets.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Config/Widgets-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = todoke;
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks";
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		B3B88C8F53215034A389CB32 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/todoke.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/todoke";
+			};
+			name = Debug;
+		};
+		EE237EE6A3490FB5EFA51B6F /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/todoke.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/todoke";
+			};
+			name = Release;
+		};
+		D8116D46CB5A568E0031A3A8 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = TodokeApp;
+			};
+			name = Debug;
+		};
+		A8499743251975ADB7DBCD90 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.todoke.ios.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_TARGET_NAME = TodokeApp;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		2E29A72255823F1771826D29 /* Build configuration list for PBXProject "Todoke" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				60676797C93DF94D0A9F7311 /* Debug */,
+				75B756078950DECBDE00E2BF /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		9054E81F927AE55CFD3CCE3F /* Build configuration list for PBXNativeTarget "TodokeApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F97CDA22F511BDB72F7394E8 /* Debug */,
+				B6BAC843B130B1E0998FB3CD /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		D085FE99177F64266052E20D /* Build configuration list for PBXNativeTarget "TodokeShare" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				6CA6A8D0824FE0D24D04A8AD /* Debug */,
+				64BAC11EAA5671A11089E2D5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DC318B54A0374C14B32DEEEA /* Build configuration list for PBXNativeTarget "TodokeWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				438B2DE6B4D6D5FDACBA90C7 /* Debug */,
+				BBF78D79E19A4D83E2BCE809 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		012B0CBF391BD3DCE675A8F2 /* Build configuration list for PBXNativeTarget "TodokeTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B3B88C8F53215034A389CB32 /* Debug */,
+				EE237EE6A3490FB5EFA51B6F /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		26C16765524743047E408C76 /* Build configuration list for PBXNativeTarget "TodokeUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				D8116D46CB5A568E0031A3A8 /* Debug */,
+				A8499743251975ADB7DBCD90 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		5896047EEAE44FC0E9857DDD /* XCLocalSwiftPackageReference "Bindings" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Bindings;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B58FD721B63111E9120586A2 /* Todoke */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Todoke;
+		};
+		5B4A9EF5D830ACF5F056D460 /* Todoke */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = Todoke;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = 98F54143AB4E86B28C3AFEE0 /* Project object */;
+}
