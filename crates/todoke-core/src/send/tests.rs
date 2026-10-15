@@ -15,6 +15,20 @@ fn names(walked: &Walked) -> Vec<(Option<usize>, String, bool)> {
         .collect()
 }
 
+/// A directory handle, as an app could hand one over (Windows opens
+/// directories only with `FILE_FLAG_BACKUP_SEMANTICS`).
+fn open_dir(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    options.open(path)
+}
+
 /// Files handed over open: each under its own name (NFC), regular files
 /// only, names other systems cannot use skipped and counted, two with one
 /// name refused, and nothing left is `Empty`. Hashing starts from the
@@ -39,7 +53,7 @@ fn open_files_are_offered_under_their_names() -> TestResult {
         open(&a, "CON")?,
         OpenFile {
             name: "folder".into(),
-            file: std::fs::File::open(&scratch.0)?,
+            file: open_dir(&scratch.0)?,
         },
     ])?;
     assert_eq!(walked.skipped, 3);
