@@ -143,3 +143,38 @@ impl TransferHandle {
 pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::valid_id;
+
+    /// An ID is 1 to 128 hex digits, either case; anything else is refused
+    /// before it reaches the core (which checks the exact length).
+    #[test]
+    fn ids_are_short_hex() {
+        for id in [
+            "0",
+            "abc",
+            "ABCDEF",
+            "aBcD09",
+            &"f".repeat(64),
+            &"0".repeat(128),
+        ] {
+            assert!(valid_id(id), "{id}");
+        }
+        for id in [
+            "",
+            &"0".repeat(129),
+            "0x12",
+            "12 34",
+            " 12",
+            "12\n",
+            "g0",
+            "١٢",
+            "ａｂ",
+            "12\0",
+        ] {
+            assert!(!valid_id(id), "{id:?}");
+        }
+    }
+}

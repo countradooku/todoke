@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { Core, KeyStoragePolicy } from "../../target-tests/wasm/pkg/node.js";
+import { Core, KeyProtection, KeyStoragePolicy } from "../../target-tests/wasm/pkg/node.js";
 
 const settings = {
   home: "/todoke",
@@ -29,4 +29,23 @@ test("a core does not start in the browser yet", () => {
 
 test("malformed settings are refused too", () => {
   assert.equal(Core.new({ ...settings, home: "relative" }), null);
+});
+
+test("a core with a key store does not start either, and no key crosses", () => {
+  const asked: string[] = [];
+  const keyStore = {
+    protection: () => KeyProtection.StrongBox,
+    load: (profile: string) => {
+      asked.push(`load ${profile}`);
+      return null;
+    },
+    store: (profile: string) => {
+      asked.push(`store ${profile}`);
+    },
+  };
+  assert.equal(
+    Core.withKeyStore({ ...settings, keyStorage: KeyStoragePolicy.Platform }, keyStore),
+    null,
+  );
+  assert.deepEqual(asked, []);
 });

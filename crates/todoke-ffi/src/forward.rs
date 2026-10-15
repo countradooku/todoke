@@ -203,4 +203,90 @@ mod tests {
         assert!(log.iter().all(|line| !line.contains("secret")));
         assert!(shown.is_empty());
     }
+
+    /// Each ending has its own text; a delivery says the receipt was
+    /// verified; endings of transfers never shown as offers (this device's
+    /// sends) notify without an `offer_gone`.
+    #[test]
+    fn endings_are_told_in_words() {
+        let recorder = Recorder::default();
+        let mut shown = BTreeSet::new();
+        let ended = |reason| CoreEvent::Ended {
+            transfer: "t".into(),
+            reason,
+            message: "why".into(),
+        };
+        for event in [
+            CoreEvent::Delivered {
+                transfer: "t".into(),
+            },
+            ended(TransferState::Cancelled),
+            ended(TransferState::Interrupted),
+            ended(TransferState::Unconfirmed),
+            ended(TransferState::Failed),
+            // A reason the core does not end with still reads as a failure.
+            ended(TransferState::Transferring),
+        ] {
+            notify(&recorder, &event, &mut shown);
+        }
+        let log = recorder.0.lock().map(|log| log.clone()).unwrap_or_default();
+        assert_eq!(
+            log,
+            [
+                "finished t: Files delivered; the receipt is verified",
+                "finished t: The transfer was cancelled",
+                "finished t: The transfer paused; it resumes when you reconnect",
+                "finished t: Sent; delivery is unconfirmed",
+                "finished t: The transfer failed",
+                "finished t: The transfer failed",
+            ]
+        );
+    }
+
+    /// Pairing is no notification, and progress on a transfer whose offer
+    /// was not shown (or already went) notifies nothing.
+    #[test]
+    fn pairing_and_unshown_progress_are_silent() {
+        let recorder = Recorder::default();
+        let mut shown = BTreeSet::new();
+        let progress = |transfer: &str| CoreEvent::Progress {
+            transfer: transfer.into(),
+            way: crate::types::Way::Outgoing,
+            done: 1,
+            total: 2,
+            bytes_per_second: 1,
+        };
+        for event in [
+            CoreEvent::Paired {
+                contact: "ab".repeat(32),
+            },
+            progress("t1"),
+            CoreEvent::OfferReceived { offer: offer("t2") },
+            progress("t2"),
+            progress("t2"),
+        ] {
+            notify(&recorder, &event, &mut shown);
+        }
+        let log = recorder.0.lock().map(|log| log.clone()).unwrap_or_default();
+        assert_eq!(log, ["offer t2 1 files 1 folders", "gone t2"]);
+        assert!(shown.is_empty());
+    }
+
+    /// The notice carries the sender and the counts, and nothing named.
+    #[test]
+    fn an_offer_notice_has_counts_not_names() {
+        let notice = OfferNotice::from(&offer("t1"));
+        assert_eq!(
+            notice,
+            OfferNotice {
+                transfer: "t1".into(),
+                from: "ab".repeat(32),
+                from_name: "Device ABAB ABAB".into(),
+                files: 1,
+                folders: 1,
+                total_bytes: 2,
+            }
+        );
+        assert!(!format!("{notice:?}").contains("secret"));
+    }
 }

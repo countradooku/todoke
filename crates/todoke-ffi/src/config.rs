@@ -81,7 +81,7 @@ fn absolute(path: &str, what: &str) -> Result<PathBuf, TodokeError> {
 )]
 pub(crate) fn start_error(error: todoke_core::runtime::StartError) -> TodokeError {
     use todoke_core::runtime::StartError;
-    let message = error.to_string();
+    let message = todoke_core::api::escape(&error.to_string());
     match error {
         StartError::Disabled => TodokeError::Disabled { message },
         // The key store refused or failed: the app's own concern.
@@ -144,5 +144,85 @@ mod tests {
             cfg!(feature = "test-support")
         );
         Ok(())
+    }
+
+    /// Every setting reaches the core's configuration as given.
+    #[test]
+    fn every_setting_reaches_the_core() -> Result<(), TodokeError> {
+        let home = if cfg!(windows) { "C:\\h" } else { "/h" };
+        let mut asked = settings(home);
+        asked.lan = true;
+        asked.hidden = false;
+        asked.history_days = 0;
+        asked.key_storage = KeyStoragePolicy::Auto;
+        let config = core_config(&asked, false)?;
+        assert_eq!(config.downloads_dir, PathBuf::from(&asked.downloads));
+        assert!(config.lan.enabled);
+        assert!(!config.lan.allow_loopback);
+        assert!(!config.hidden);
+        assert_eq!(config.history_days, 0);
+        assert_eq!(config.key_storage, KeyStorage::Auto);
+        // The longest history the core keeps is accepted.
+        asked.history_days = MAX_HISTORY_DAYS;
+        asked.key_storage = KeyStoragePolicy::Platform;
+        let config = core_config(&asked, false)?;
+        assert_eq!(config.history_days, MAX_HISTORY_DAYS);
+        assert_eq!(config.key_storage, KeyStorage::Platform);
+        if cfg!(feature = "test-support") {
+            asked.allow_loopback = true;
+            assert!(core_config(&asked, false)?.lan.allow_loopback);
+        }
+        Ok(())
+    }
+
+    /// Both directories must be absolute and named.
+    #[test]
+    fn directories_must_be_absolute() {
+        let home = if cfg!(windows) { "C:\\h" } else { "/h" };
+        for (home, downloads) in [("", "/d"), (home, ""), (home, "downloads"), (home, "./d")] {
+            let mut asked = settings(home);
+            asked.downloads = downloads.to_owned();
+            assert!(
+                matches!(core_config(&asked, false), Err(TodokeError::Invalid { .. })),
+                "{home:?} {downloads:?}"
+            );
+        }
+    }
+
+    /// Why a core did not start, as the app acts on it: the key store's
+    /// failure is its own kind.
+    #[test]
+    fn start_errors_keep_their_kind() {
+        use todoke_core::profile::ProfileError;
+        use todoke_core::runtime::StartError;
+        let cases = [
+            (StartError::Disabled, "Disabled"),
+            (StartError::Profile(ProfileError::StorageKey), "KeyStore"),
+            (StartError::Profile(ProfileError::Random), "Profile"),
+            (
+                StartError::Profile(ProfileError::Corrupt("the identity")),
+                "Profile",
+            ),
+            (
+                StartError::Profile(ProfileError::Io(std::io::ErrorKind::PermissionDenied)),
+                "Profile",
+            ),
+            (StartError::Quarantine("in use".into()), "Profile"),
+            (StartError::Io(std::io::ErrorKind::AddrInUse), "Internal"),
+            (StartError::Thread, "Internal"),
+        ];
+        for (error, kind) in cases {
+            let message = error.to_string();
+            let mapped = start_error(error);
+            let named = match &mapped {
+                TodokeError::Disabled { .. } => "Disabled",
+                TodokeError::KeyStore { .. } => "KeyStore",
+                TodokeError::Profile { .. } => "Profile",
+                TodokeError::Internal { .. } => "Internal",
+                _ => "other",
+            };
+            assert_eq!(named, kind, "{message}");
+            assert_eq!(mapped.message(), message);
+        }
     }
 }

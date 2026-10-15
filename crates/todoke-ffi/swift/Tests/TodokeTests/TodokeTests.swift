@@ -61,6 +61,56 @@ final class WipedKeyStore: KeyStore {
     func store(profile: String, key: Data) throws { throw KeyStoreError.alreadyExists }
 }
 
+/// A key store whose answers are fixed: a key of any length, or an error
+/// it declares or not.
+final class CannedKeyStore: KeyStore {
+    let loaded: () throws -> Data?
+    let stored: () throws -> Void
+
+    init(load: @escaping () throws -> Data?, store: @escaping () throws -> Void) {
+        loaded = load
+        stored = store
+    }
+
+    func protection() -> KeyProtection { .secureEnclave }
+    func load(profile: String) throws -> Data? { try loaded() }
+    func store(profile: String, key: Data) throws { try stored() }
+}
+
+/// An error a key store does not declare.
+struct Oops: Error {}
+
+/// What the notifier was told, in order.
+final class RecordingNotifier: Notifier {
+    private let lock = NSLock()
+    private var lines: [String] = []
+
+    var log: [String] {
+        lock.lock(); defer { lock.unlock() }
+        return lines
+    }
+
+    private func record(_ line: String) {
+        lock.lock(); defer { lock.unlock() }
+        lines.append(line)
+    }
+
+    func offerReceived(notice: OfferNotice) {
+        record("offer \(notice.transfer) from \(notice.from) \(notice.files) files \(notice.folders) folders \(notice.totalBytes) bytes")
+    }
+    func offerGone(transfer: String) { record("gone \(transfer)") }
+    func transferFinished(transfer: String, text: String) { record("finished \(transfer): \(text)") }
+    func missed() { record("missed") }
+}
+
+/// A radio link that records being closed.
+final class RecordingLink: RadioLink {
+    private(set) var closed = false
+    func kind() -> LinkKind { .awdl }
+    func send(bytes: Data) throws { throw LinkError.closed }
+    func close() { closed = true }
+}
+
 /// The first event `pick` accepts, within a minute.
 func waitFor<T>(_ events: Events, _ pick: (CoreEvent) throws -> T?) throws -> T {
     let deadline = Date().addingTimeInterval(60)
@@ -202,6 +252,86 @@ final class TodokeTests: XCTestCase {
         handle = nil
         // The last reference went: the profile is free.
         _ = try Core(settings: home.settings())
+    }
+
+    /// The notifier hears of an offer by its sender and counts, never a
+    /// file name, then of its notification going and the transfer ending.
+    func testNotifierHearsOffersWithoutNames() throws {
+        let (homeA, homeB) = (try Scratch("notify-a"), try Scratch("notify-b"))
+        let a = try Core(settings: homeA.settings())
+        let b = try Core(settings: homeB.settings())
+        let told = RecordingNotifier()
+        a.setNotifier(notifier: told)
+        let events = try a.subscribe()
+        let contact = try b.pairScanQr(text: try a.pairShowQr().text())
+
+        let file = homeB.url.appendingPathComponent("secret-plan.txt")
+        try Data("plans".utf8).write(to: file)
+        let sent = try contact.send(paths: [file.path])
+        let offered: Offer = try waitFor(events) { event in
+            if case .offerReceived(let offer) = event { return offer }
+            return nil
+        }
+        try a.transfer(id: offered.transfer).accept(files: [])
+        let finished = "finished \(sent.id()): Files received"
+        let deadline = Date().addingTimeInterval(60)
+        while !told.log.contains(finished) && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(told.log, [
+            "offer \(sent.id()) from \(try b.status().device) 1 files 0 folders 5 bytes",
+            "gone \(sent.id())",
+            finished,
+        ])
+        XCTAssertFalse(told.log.contains { $0.contains("secret") })
+        a.clearNotifier()
+    }
+
+    /// A key store that refuses, fails with an error it does not declare,
+    /// or hands back something that is not a key stops the start with a
+    /// key store error.
+    func testFailingKeyStoresStopTheStart() throws {
+        let stores = [
+            CannedKeyStore(load: { nil }, store: { throw KeyStoreError.refused(message: "no") }),
+            CannedKeyStore(load: { nil }, store: { throw Oops() }),
+            CannedKeyStore(load: { throw Oops() }, store: {}),
+            CannedKeyStore(load: { throw KeyStoreError.unavailable(message: "locked") }, store: {}),
+            CannedKeyStore(load: { Data(count: 0) }, store: {}),
+            CannedKeyStore(load: { Data(repeating: 7, count: 31) }, store: {}),
+            CannedKeyStore(load: { Data(repeating: 7, count: 33) }, store: {}),
+        ]
+        for store in stores {
+            let home = try Scratch("failing")
+            XCTAssertThrowsError(
+                try Core(withKeyStore: home.settings(keyStorage: .platform), keyStore: store)
+            ) { error in
+                guard case TodokeError.keyStore = error else { return XCTFail("\(error)") }
+            }
+        }
+    }
+
+    /// A profile reopened with its key store finds its key under the same
+    /// ID: the same identity, no second key.
+    func testAProfileReopensWithItsKey() throws {
+        let home = try Scratch("reopen")
+        let keys = MemoryKeyStore()
+        var core: Core? = try Core(withKeyStore: home.settings(keyStorage: .platform), keyStore: keys)
+        let device = try core!.status().device
+        core = nil
+        core = try Core(withKeyStore: home.settings(keyStorage: .platform), keyStore: keys)
+        XCTAssertEqual(try core!.status().device, device)
+        XCTAssertEqual(keys.profiles.count, 1)
+    }
+
+    /// Radio links are refused for now, and the one offered is closed.
+    func testRadioLinksAreRefusedAndClosed() throws {
+        let home = try Scratch("link")
+        let core = try Core(settings: home.settings())
+        let link = RecordingLink()
+        XCTAssertThrowsError(try core.attachLink(link: link)) { error in
+            guard case TodokeError.disabled = error else { return XCTFail("\(error)") }
+        }
+        XCTAssertTrue(link.closed)
     }
 
     /// The release package (TODOKE_RELEASE=1) keeps sessions disabled

@@ -93,6 +93,40 @@ class BindingsTest {
         override fun store(profile: String, key: ByteArray): Unit = throw KeyStoreError.AlreadyExists
     }
 
+    /** A key store whose answers are fixed: a key of any length, or an error, declared or not. */
+    private class CannedKeyStore(
+        private val loaded: () -> ByteArray?,
+        private val stored: () -> Unit,
+    ) : KeyStore {
+        override fun protection() = KeyProtection.TEE
+
+        override fun load(profile: String): ByteArray? = loaded()
+
+        override fun store(profile: String, key: ByteArray) = stored()
+    }
+
+    /** What the notifier was told, in order. */
+    private class RecordingNotifier : Notifier {
+        val log: MutableList<String> = java.util.Collections.synchronizedList(mutableListOf())
+
+        override fun offerReceived(notice: OfferNotice) {
+            log += "offer ${notice.transfer} from ${notice.from} ${notice.files} files " +
+                "${notice.folders} folders ${notice.totalBytes} bytes"
+        }
+
+        override fun offerGone(transfer: String) {
+            log += "gone $transfer"
+        }
+
+        override fun transferFinished(transfer: String, text: String) {
+            log += "finished $transfer: $text"
+        }
+
+        override fun missed() {
+            log += "missed"
+        }
+    }
+
     @Test
     fun versionIsKnown() {
         assertTrue(Core.version().isNotEmpty())
@@ -250,6 +284,101 @@ class BindingsTest {
         closer.join(10_000)
         assertTrue(closed.get())
         assertTrue(interruptedAfter, "the interrupt was lost")
+    }
+
+    /**
+     * The notifier hears of an offer by its sender and counts, never a file
+     * name, then of its notification going and the transfer ending.
+     */
+    @Test
+    fun notifierHearsOffersWithoutNames() = runBlocking(Dispatchers.IO) {
+        val (homeA, homeB) = home("notify-a") to home("notify-b")
+        Guarded(Core(settings(homeA))).use { a ->
+            Guarded(Core(settings(homeB))).use { b ->
+                val told = RecordingNotifier()
+                a.call { it.setNotifier(told) }
+                val offered = async(start = CoroutineStart.UNDISPATCHED) {
+                    withTimeout(60_000) {
+                        a.events().filterIsInstance<CoreEvent.OfferReceived>().first().offer
+                    }
+                }
+                val text = a.call { it.pairShowQr() }.use { it.text() }
+                val contact = b.call { it.pairScanQr(text) }
+                val file = File(homeB, "secret-plan.txt").apply { writeText("plans") }
+                val sent = contact.send(listOf(file.absolutePath))
+                val offer = offered.await()
+                a.call { it.transfer(offer.transfer) }.use { it.accept(uintArrayOf()) }
+                val finished = "finished ${sent.id()}: Files received"
+                withTimeout(60_000) {
+                    while (finished !in told.log.toList()) kotlinx.coroutines.delay(20)
+                }
+                val device = b.call { it.status() }.device
+                assertEquals(
+                    listOf(
+                        "offer ${sent.id()} from $device 1 files 0 folders 5 bytes",
+                        "gone ${sent.id()}",
+                        finished,
+                    ),
+                    told.log.toList(),
+                )
+                assertTrue(told.log.none { it.contains("secret") })
+                a.call { it.clearNotifier() }
+                sent.close()
+                contact.close()
+            }
+        }
+    }
+
+    /**
+     * A key store that refuses, throws something it does not declare, or
+     * hands back something that is not a key stops the start with a key
+     * store error.
+     */
+    @Test
+    fun failingKeyStoresStopTheStart() = runBlocking(Dispatchers.IO) {
+        val stores = listOf(
+            CannedKeyStore({ null }, { throw KeyStoreError.Refused("no") }),
+            CannedKeyStore({ null }, { throw IllegalStateException("undeclared") }),
+            CannedKeyStore({ throw IllegalStateException("undeclared") }, {}),
+            CannedKeyStore({ throw KeyStoreError.Unavailable("locked") }, {}),
+            CannedKeyStore({ ByteArray(0) }, {}),
+            CannedKeyStore({ ByteArray(31) { 7 } }, {}),
+            CannedKeyStore({ ByteArray(33) { 7 } }, {}),
+        )
+        for (store in stores) {
+            assertFailsWith<TodokeError.KeyStore> {
+                Core(settings(home("failing"), KeyStoragePolicy.PLATFORM), store)
+            }
+        }
+    }
+
+    /** A profile reopened with its key store finds its key: the same identity, no second key. */
+    @Test
+    fun aProfileReopensWithItsKey() = runBlocking(Dispatchers.IO) {
+        val home = home("reopen-keys")
+        val keys = MemoryKeyStore()
+        val device = Core(settings(home, KeyStoragePolicy.PLATFORM), keys).use { it.status().device }
+        Core(settings(home, KeyStoragePolicy.PLATFORM), keys).use {
+            assertEquals(device, it.status().device)
+        }
+        assertEquals(1, keys.keys.size)
+    }
+
+    /** Radio links are refused for now, and the one offered is closed. */
+    @Test
+    fun radioLinksAreRefusedAndClosed() = runBlocking(Dispatchers.IO) {
+        val closed = AtomicBoolean(false)
+        val link = object : RadioLink {
+            override fun kind() = LinkKind.USB
+
+            override fun send(bytes: ByteArray): Unit = throw LinkError.Closed
+
+            override fun close() = closed.set(true)
+        }
+        Core(settings(home("link"))).use { core ->
+            assertFailsWith<TodokeError.Disabled> { core.attachLink(link) }
+        }
+        assertTrue(closed.get())
     }
 
     /** A library built without development sessions starts no core. */

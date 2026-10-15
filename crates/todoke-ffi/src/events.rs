@@ -106,7 +106,8 @@ impl Queue {
                         events: core::mem::take(&mut state.missed),
                     });
                 }
-                let take = max.clamp(1, MAX_BATCH).saturating_sub(batch.len()).max(1);
+                // A gap counts toward `max`: after it, only what fits.
+                let take = max.clamp(1, MAX_BATCH).saturating_sub(batch.len());
                 let take = take.min(state.events.len());
                 batch.extend(state.events.drain(..take));
                 return Ok(batch);
@@ -171,9 +172,10 @@ pub struct Events {
 
 #[export]
 impl Events {
-    /// The next events, at most `max`: waits up to `timeout_ms` for one
-    /// (empty after that). A [`CoreEvent::Missed`] first says events were
-    /// lost: read the offers and transfers again.
+    /// The next events, at most `max` (0 reads one, more than 1024 reads
+    /// 1024): waits up to `timeout_ms` for one (empty after that). A
+    /// [`CoreEvent::Missed`] first says events were lost (it counts toward
+    /// `max`): read the offers and transfers again.
     ///
     /// # Errors
     ///
@@ -259,6 +261,164 @@ mod tests {
         assert!(subscribers.subscribe().is_err());
         drop(held);
         assert!(subscribers.subscribe().is_ok());
+        Ok(())
+    }
+
+    /// Events the core lost and events the queue dropped are reported
+    /// together, once, before anything else.
+    #[test]
+    fn core_lag_and_overflow_make_one_missed() -> Result<(), TodokeError> {
+        let queue = Queue::default();
+        queue.lost(5);
+        for n in 0..(QUEUE as u64 + 2) {
+            queue.push(completed(n));
+        }
+        queue.lost(1);
+        let first = queue.next(4, Duration::ZERO)?;
+        assert_eq!(first[0], CoreEvent::Missed { events: 8 });
+        assert_eq!(first[1..], [completed(2), completed(3), completed(4)]);
+        // Reported once: the next read goes on where the last stopped.
+        assert_eq!(queue.next(1, Duration::ZERO)?, [completed(5)]);
+        Ok(())
+    }
+
+    /// A gap with nothing queued after it is still reported (the app must
+    /// read the offers again), and only once.
+    #[test]
+    fn a_gap_alone_is_reported_once() -> Result<(), TodokeError> {
+        let queue = Queue::default();
+        queue.lost(3);
+        assert_eq!(
+            queue.next(10, Duration::ZERO)?,
+            [CoreEvent::Missed { events: 3 }]
+        );
+        assert_eq!(queue.next(10, Duration::ZERO)?, []);
+        Ok(())
+    }
+
+    /// A gap before the core stopped is reported before the end.
+    #[test]
+    fn a_gap_is_reported_before_the_end() -> Result<(), TodokeError> {
+        let queue = Queue::default();
+        queue.lost(2);
+        queue.stop();
+        assert_eq!(
+            queue.next(10, Duration::ZERO)?,
+            [CoreEvent::Missed { events: 2 }]
+        );
+        assert!(matches!(
+            queue.next(10, Duration::ZERO),
+            Err(TodokeError::State { .. })
+        ));
+        Ok(())
+    }
+
+    /// A read returns at most 1024 events however many are asked for,
+    /// `Missed` included; asking for none reads one.
+    #[test]
+    fn reads_are_bounded() -> Result<(), TodokeError> {
+        let events = Events {
+            queue: Arc::new(Queue::default()),
+        };
+        for n in 0..=(QUEUE as u64) {
+            events.queue.push(completed(n));
+        }
+        let first = events.next(u32::MAX, 0)?;
+        assert_eq!(first.len(), MAX_BATCH);
+        assert_eq!(first[0], CoreEvent::Missed { events: 1 });
+        assert_eq!(first[1], completed(1));
+        assert_eq!(events.next(2000, 0)?.len(), MAX_BATCH);
+        assert_eq!(events.next(0, 0)?, [completed(2048)]);
+        Ok(())
+    }
+
+    /// `max` bounds the batch even when it starts with `Missed`.
+    #[test]
+    fn a_gap_counts_toward_max() -> Result<(), TodokeError> {
+        let queue = Queue::default();
+        queue.lost(1);
+        queue.push(completed(1));
+        assert_eq!(
+            queue.next(1, Duration::ZERO)?,
+            [CoreEvent::Missed { events: 1 }]
+        );
+        assert_eq!(queue.next(1, Duration::ZERO)?, [completed(1)]);
+        Ok(())
+    }
+
+    /// A read waiting for events returns as soon as the subscription is
+    /// stopped, or the core stops, not when its timeout ends.
+    #[test]
+    fn a_waiting_read_is_ended_by_stop() -> Result<(), TodokeError> {
+        for core_stops in [false, true] {
+            let events = Events {
+                queue: Arc::new(Queue::default()),
+            };
+            let queue = Arc::clone(&events.queue);
+            let ender = std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_millis(20));
+                if core_stops {
+                    queue.stop();
+                } else {
+                    queue.close();
+                }
+            });
+            let started = Instant::now();
+            assert!(matches!(
+                events.next(10, 60_000),
+                Err(TodokeError::State { .. })
+            ));
+            assert!(started.elapsed() < Duration::from_secs(30));
+            ender.join().map_err(|_| TodokeError::unexpected())?;
+        }
+        Ok(())
+    }
+
+    /// Stopping drops what was queued, later events are not kept, and every
+    /// read fails from then on.
+    #[test]
+    fn a_stopped_subscription_keeps_nothing() -> Result<(), TodokeError> {
+        let events = Events {
+            queue: Arc::new(Queue::default()),
+        };
+        events.queue.push(completed(1));
+        events.stop();
+        events.queue.push(completed(2));
+        events.queue.lost(3);
+        let queued = events
+            .queue
+            .state
+            .lock()
+            .map_err(|_| TodokeError::unexpected())?
+            .events
+            .len();
+        assert_eq!(queued, 0);
+        for _ in 0..2 {
+            assert!(matches!(events.next(10, 0), Err(TodokeError::State { .. })));
+        }
+        Ok(())
+    }
+
+    /// A stopped subscription gives its place up at once, while the app
+    /// still holds it; a released one stops getting events.
+    #[test]
+    fn a_stopped_subscription_frees_its_place_while_held() -> Result<(), TodokeError> {
+        let subscribers = Subscribers::default();
+        let held: Vec<Events> = (0..MAX_SUBSCRIPTIONS)
+            .map(|_| subscribers.subscribe().map(|queue| Events { queue }))
+            .collect::<Result<_, _>>()?;
+        assert!(subscribers.subscribe().is_err());
+        held[0].stop();
+        let replacement = subscribers.subscribe()?;
+        assert!(subscribers.subscribe().is_err());
+        // The event thread delivers to the live ones only.
+        let reached = std::cell::Cell::new(0);
+        drop(replacement);
+        subscribers.each(|_| reached.set(reached.get() + 1));
+        assert_eq!(reached.take(), MAX_SUBSCRIPTIONS - 1);
+        drop(held);
+        subscribers.each(|_| reached.set(reached.get() + 1));
+        assert_eq!(reached.get(), 0);
         Ok(())
     }
 }

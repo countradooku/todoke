@@ -46,3 +46,19 @@ impl CodeOffer {
         self.expires_at
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Printing a code offer never prints the code.
+    #[test]
+    fn debug_hides_the_code() {
+        let offer = CodeOffer::new("48213 90577".to_owned(), 7);
+        let printed = format!("{offer:?}");
+        assert!(!printed.contains("48213") && !printed.contains("90577"));
+        assert!(printed.contains("expires_at: 7"));
+        assert_eq!(offer.code(), "48213 90577");
+        assert_eq!(offer.expires_at(), 7);
+    }
+}

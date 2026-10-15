@@ -7,7 +7,10 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings};
-use todoke_ffi::{Core, Events, KeyStore, KeyStoreError, TodokeError};
+use todoke_ffi::{
+    ContactHandle, Core, Events, KeyStore, KeyStoreError, LinkError, LinkKind, Notifier,
+    OfferNotice, RadioLink, TodokeError,
+};
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -265,5 +268,301 @@ fn subscriptions_end_when_the_core_stops() -> TestResult {
         "releasing waited for the reader"
     );
     assert!(reader.join().map_err(|_| "the reader panicked")?);
+    Ok(())
+}
+
+/// What the app's notifier was told, in order.
+#[derive(Default)]
+struct Told(Mutex<Vec<String>>);
+
+impl Told {
+    fn log(&self) -> Vec<String> {
+        self.0.lock().map(|log| log.clone()).unwrap_or_default()
+    }
+
+    fn push(&self, line: String) {
+        if let Ok(mut log) = self.0.lock() {
+            log.push(line);
+        }
+    }
+}
+
+/// A notifier that records what it is told and then panics on an offer,
+/// as a buggy app callback could.
+struct Panicky(Arc<Told>);
+
+impl Notifier for Panicky {
+    #[allow(clippy::panic, reason = "a panicking app callback is the point")]
+    fn offer_received(&self, notice: OfferNotice) {
+        self.0.push(format!(
+            "offer {} from {} ({}) {} files {} folders {} bytes",
+            notice.transfer,
+            notice.from,
+            notice.from_name,
+            notice.files,
+            notice.folders,
+            notice.total_bytes
+        ));
+        panic!("the app's notifier failed");
+    }
+    fn offer_gone(&self, transfer: String) {
+        self.0.push(format!("gone {transfer}"));
+    }
+    fn transfer_finished(&self, transfer: String, text: String) {
+        self.0.push(format!("finished {transfer}: {text}"));
+    }
+    fn missed(&self) {
+        self.0.push("missed".to_owned());
+    }
+}
+
+/// Two cores over loopback, B paired with A by QR; B's handle to A.
+fn paired(
+    a_home: &Scratch,
+    b_home: &Scratch,
+) -> Result<(Core, Core, ContactHandle), Box<dyn std::error::Error>> {
+    let a = Core::new(settings(&a_home.0))?;
+    let b = Core::new(settings(&b_home.0))?;
+    let a_contact = b.pair_scan_qr(a.pair_show_qr()?.text())?;
+    Ok((a, b, a_contact))
+}
+
+/// The notifier hears of an offer by its sender and counts (no names),
+/// and of its end; one that panics loses that event, not the event thread
+/// or its place.
+#[test]
+fn notifications_survive_a_panicking_notifier() -> TestResult {
+    let (a_home, b_home) = (Scratch::new("notify-a")?, Scratch::new("notify-b")?);
+    let (a, b, a_contact) = paired(&a_home, &b_home)?;
+    let told = Arc::new(Told::default());
+    a.set_notifier(Arc::new(Panicky(Arc::clone(&told))));
+    let a_events = a.subscribe()?;
+
+    let file = b_home.0.join("secret-plan.txt");
+    std::fs::write(&file, b"plans")?;
+    let sent = a_contact.send(vec![file.display().to_string()])?;
+    let offered = wait_for(&a_events, |event| match event {
+        CoreEvent::OfferReceived { offer } => Some(offer),
+        _ => None,
+    })?;
+    a.transfer(offered.transfer.clone())?.accept(Vec::new())?;
+    wait_for(&a_events, |event| match event {
+        CoreEvent::Completed { transfer } if transfer == offered.transfer => Some(()),
+        _ => None,
+    })?;
+    // The notifier runs after the subscriptions: wait for it to catch up.
+    let finished = format!("finished {}: Files received", sent.id());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !told.log().contains(&finished) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let b_device = b.status()?.device;
+    let name = todoke_ffi::types::name_of(&b_device);
+    assert_eq!(
+        told.log(),
+        [
+            format!(
+                "offer {} from {b_device} ({name}) 1 files 0 folders 5 bytes",
+                sent.id()
+            ),
+            format!("gone {}", sent.id()),
+            finished,
+        ]
+    );
+    assert!(told.log().iter().all(|line| !line.contains("secret")));
+    // Cleared: nothing more is told.
+    a.clear_notifier();
+    drop((a_contact, sent, b));
+    Ok(())
+}
+
+/// What a contact refuses to send before asking the core: nothing, a
+/// relative path among absolute ones; what the core refuses: a file that
+/// is not there, a path with a NUL.
+#[test]
+fn sending_checks_its_paths() -> TestResult {
+    let (a_home, b_home) = (Scratch::new("paths-a")?, Scratch::new("paths-b")?);
+    let (a, b, a_contact) = paired(&a_home, &b_home)?;
+    let file = b_home.0.join("there.txt");
+    std::fs::write(&file, b"x")?;
+    let there = file.display().to_string();
+    for paths in [
+        Vec::new(),
+        vec!["there.txt".to_owned()],
+        vec![there.clone(), "./there.txt".to_owned()],
+        vec![String::new()],
+    ] {
+        assert!(
+            matches!(
+                a_contact.send(paths.clone()),
+                Err(TodokeError::Invalid { .. })
+            ),
+            "{paths:?}"
+        );
+    }
+    let missing = b_home.0.join("missing.txt").display().to_string();
+    assert!(matches!(
+        a_contact.send(vec![missing]),
+        Err(TodokeError::Source { .. })
+    ));
+    let nul = format!("{there}\0.txt");
+    assert!(a_contact.send(vec![nul]).is_err());
+    // Nothing was offered.
+    assert_eq!(b.transfers()?, Vec::new());
+    drop((a, a_contact));
+    Ok(())
+}
+
+/// Handles to things the core does not know answer with typed errors.
+#[test]
+fn unknown_handles_are_typed_errors() -> TestResult {
+    let home = Scratch::new("unknown")?;
+    let core = Core::new(settings(&home.0))?;
+    let stranger = core.contact("ab".repeat(32))?;
+    assert_eq!(stranger.name(), "Device ABAB ABAB");
+    assert!(matches!(
+        stranger.send(Vec::new()),
+        Err(TodokeError::Invalid { .. })
+    ));
+    assert!(matches!(
+        stranger.send(vec!["relative.txt".into()]),
+        Err(TodokeError::Invalid { .. })
+    ));
+    let transfer = core.transfer("cd".repeat(16))?;
+    assert_eq!(transfer.id(), "cd".repeat(16));
+    assert!(matches!(transfer.info(), Err(TodokeError::State { .. })));
+    assert!(transfer.decline().is_err());
+    assert!(transfer.cancel().is_err());
+    Ok(())
+}
+
+/// A profile reopened with the same key store finds its key under the same
+/// ID; another profile in the same store gets its own ID and key.
+#[test]
+fn key_stores_hold_one_key_per_profile() -> TestResult {
+    let (first, second) = (Scratch::new("profile-1")?, Scratch::new("profile-2")?);
+    let store = Arc::new(Memory::default());
+    let start = |home: &Scratch| {
+        let mut asked = settings(&home.0);
+        asked.key_storage = KeyStoragePolicy::Platform;
+        Core::with_key_store(asked, Arc::clone(&store) as Arc<dyn KeyStore>)
+    };
+    let device = start(&first)?.status()?.device;
+    let keys = store.keys();
+    assert_eq!(keys.len(), 1);
+    // Released and reopened: the same identity, from the same key.
+    assert_eq!(start(&first)?.status()?.device, device);
+    assert_eq!(store.keys(), keys);
+    // Another profile: its own ID and key.
+    let other = start(&second)?.status()?.device;
+    assert_ne!(other, device);
+    let keys = store.keys();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0].0, keys[1].0);
+    assert_ne!(keys[0].1, keys[1].1);
+    Ok(())
+}
+
+/// A key store that answers `load` and `store` as told.
+struct Canned {
+    load: Result<Option<Vec<u8>>, KeyStoreError>,
+    store: Result<(), KeyStoreError>,
+}
+
+impl KeyStore for Canned {
+    fn protection(&self) -> KeyProtection {
+        KeyProtection::Tee
+    }
+    fn load(&self, _: String) -> Result<Option<Vec<u8>>, KeyStoreError> {
+        self.load.clone()
+    }
+    fn store(&self, _: String, _: Vec<u8>) -> Result<(), KeyStoreError> {
+        self.store.clone()
+    }
+}
+
+/// A key store that fails, refuses, or hands back something that is not a
+/// key stops the start with a key store error; nothing falls back to a
+/// file.
+#[test]
+fn failing_key_stores_stop_the_start() -> TestResult {
+    let refused = KeyStoreError::Refused {
+        message: "denied".into(),
+    };
+    let locked = KeyStoreError::Unavailable {
+        message: "locked".into(),
+    };
+    let cases = [
+        (Ok(None), Err(refused.clone())),
+        (Ok(None), Err(locked.clone())),
+        (Err(refused), Ok(())),
+        (Err(locked), Ok(())),
+        (Ok(Some(Vec::new())), Ok(())),
+        (Ok(Some(vec![7; 31])), Ok(())),
+        (Ok(Some(vec![7; 33])), Ok(())),
+    ];
+    for (load, store) in cases {
+        let home = Scratch::new("failing")?;
+        let mut asked = settings(&home.0);
+        asked.key_storage = KeyStoragePolicy::Platform;
+        let case = format!("{load:?} {store:?}");
+        let started = Core::with_key_store(asked, Arc::new(Canned { load, store }));
+        assert!(
+            matches!(started, Err(TodokeError::KeyStore { .. })),
+            "{case}: {started:?}"
+        );
+        assert!(!home.0.join("state").join("storage.key").exists(), "{case}");
+    }
+    Ok(())
+}
+
+/// A profile whose ID cannot be read does not start (it would otherwise
+/// look for its key under another name).
+#[test]
+fn an_unnamed_profile_does_not_start() -> TestResult {
+    let home = Scratch::new("unnamed")?;
+    let mut asked = settings(&home.0);
+    asked.key_storage = KeyStoragePolicy::Platform;
+    let store = Arc::new(Memory::default());
+    drop(Core::with_key_store(
+        asked.clone(),
+        Arc::clone(&store) as Arc<dyn KeyStore>,
+    )?);
+    std::fs::write(home.0.join("state").join("storage.id"), b"not an id")?;
+    assert!(matches!(
+        Core::with_key_store(asked, store),
+        Err(TodokeError::Profile { .. })
+    ));
+    Ok(())
+}
+
+/// A radio link that records being closed.
+#[derive(Default)]
+struct Link(std::sync::atomic::AtomicBool);
+
+impl RadioLink for Link {
+    fn kind(&self) -> LinkKind {
+        LinkKind::Ble
+    }
+    fn send(&self, _: Vec<u8>) -> Result<(), LinkError> {
+        Err(LinkError::Closed)
+    }
+    fn close(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Radio links are refused while §16 O7 keeps them disabled, and the link
+/// offered is closed rather than left open in the app.
+#[test]
+fn radio_links_are_refused_and_closed() -> TestResult {
+    let home = Scratch::new("link")?;
+    let core = Core::new(settings(&home.0))?;
+    let link = Arc::new(Link::default());
+    assert!(matches!(
+        core.attach_link(Arc::clone(&link) as Arc<dyn RadioLink>),
+        Err(TodokeError::Disabled { .. })
+    ));
+    assert!(link.0.load(std::sync::atomic::Ordering::SeqCst));
     Ok(())
 }

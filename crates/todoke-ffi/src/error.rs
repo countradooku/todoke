@@ -120,3 +120,97 @@ impl fmt::Display for TodokeError {
 }
 
 impl std::error::Error for TodokeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every core error keeps its kind, and its message crosses escaped:
+    /// no control or bidi character, as the core's own `escape` writes it.
+    #[test]
+    fn core_errors_keep_their_kind_and_are_escaped() {
+        let raw = "C:\\in\u{202e}fdp.exe\n\u{200b}\u{7}done";
+        let escaped = todoke_core::api::escape(raw);
+        assert_eq!(escaped, "C:\\\\in\\u{202e}fdp.exe\\u{a}\\u{200b}\\u{7}done");
+        let cases = [
+            (
+                ErrorCode::Invalid,
+                TodokeError::Invalid {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Ambiguous,
+                TodokeError::Ambiguous {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Unreachable,
+                TodokeError::Unreachable {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::State,
+                TodokeError::State {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Pairing,
+                TodokeError::Pairing {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Source,
+                TodokeError::Source {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Disabled,
+                TodokeError::Disabled {
+                    message: escaped.clone(),
+                },
+            ),
+            (
+                ErrorCode::Internal,
+                TodokeError::Internal {
+                    message: escaped.clone(),
+                },
+            ),
+        ];
+        for (code, expected) in cases {
+            let error = TodokeError::from_core(code, raw);
+            assert_eq!(error, expected);
+            assert!(!error.message().chars().any(char::is_control));
+            assert!(!error.message().contains('\u{202e}'));
+        }
+    }
+
+    /// What an app prints is the message alone.
+    #[test]
+    fn display_is_the_message() {
+        let errors = [
+            TodokeError::Unsupported {
+                message: "a".into(),
+            },
+            TodokeError::KeyStore {
+                message: "b".into(),
+            },
+            TodokeError::Profile {
+                message: "c".into(),
+            },
+            TodokeError::unexpected(),
+        ];
+        for error in errors {
+            assert_eq!(error.to_string(), error.message());
+        }
+        assert_eq!(
+            TodokeError::unexpected().message(),
+            "the core answered with something unexpected"
+        );
+    }
+}

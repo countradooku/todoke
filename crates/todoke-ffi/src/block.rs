@@ -49,4 +49,64 @@ mod tests {
         let _ = sender.send(());
         assert_eq!(block_on(answer).ok(), Some(7));
     }
+
+    /// A future that is ready at once is never parked on.
+    #[test]
+    fn a_ready_future_returns_at_once() {
+        assert_eq!(block_on(core::future::ready(5)), 5);
+    }
+
+    /// A future that wakes itself each time it is pending (as a busy
+    /// channel does) is polled again until it is ready.
+    #[test]
+    fn a_future_woken_many_times_completes() {
+        let mut polls = 0;
+        let value = block_on(core::future::poll_fn(|context| {
+            polls += 1;
+            if polls <= 50 {
+                context.waker().wake_by_ref();
+                Poll::Pending
+            } else {
+                Poll::Ready(polls)
+            }
+        }));
+        assert_eq!(value, 51);
+    }
+
+    /// Wakes from another thread before the future is ready (spurious for
+    /// it) only make it poll again.
+    #[test]
+    fn spurious_wakes_from_another_thread_are_harmless() {
+        use core::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Mutex;
+
+        let ready = Arc::new(AtomicBool::new(false));
+        let slot: Arc<Mutex<Option<Waker>>> = Arc::default();
+        let (flag, registered) = (Arc::clone(&ready), Arc::clone(&slot));
+        let waking = std::thread::spawn(move || {
+            let waker = loop {
+                if let Some(waker) = registered.lock().ok().and_then(|slot| slot.clone()) {
+                    break waker;
+                }
+                std::thread::yield_now();
+            };
+            for _ in 0..20 {
+                waker.wake_by_ref();
+            }
+            flag.store(true, Ordering::Release);
+            waker.wake();
+        });
+        let value = block_on(core::future::poll_fn(|context| {
+            if let Ok(mut slot) = slot.lock() {
+                *slot = Some(context.waker().clone());
+            }
+            if ready.load(Ordering::Acquire) {
+                Poll::Ready(true)
+            } else {
+                Poll::Pending
+            }
+        }));
+        assert!(value);
+        assert!(waking.join().is_ok());
+    }
 }

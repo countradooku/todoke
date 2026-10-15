@@ -513,3 +513,177 @@ impl From<api::Event> for CoreEvent {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A name that would pass for a PDF if its bidi override were shown.
+    const TRICK: &str = "invoice\u{202e}fdp.exe\n";
+    const ESCAPED: &str = "invoice\\u{202e}fdp.exe\\u{a}";
+
+    fn entry(name: &str) -> api::EntryInfo {
+        api::EntryInfo {
+            id: 1,
+            parent: 0,
+            directory: false,
+            name: name.to_owned(),
+            mime: format!("text/{name}"),
+            size: 3,
+        }
+    }
+
+    /// Every peer-chosen text in an offer crosses escaped; the sender's
+    /// name is made from its fingerprint, never sent by the peer.
+    #[test]
+    fn offers_cross_escaped() -> Result<(), &'static str> {
+        let offer = Offer::from(api::OfferInfo {
+            transfer: "aa".into(),
+            from: "0123456789abcdef".repeat(4),
+            entries: vec![entry(TRICK)],
+            total_bytes: 3,
+            resume: None,
+        });
+        assert_eq!(offer.from_name, "Device 0123 4567");
+        assert_eq!(offer.entries[0].name, ESCAPED);
+        assert_eq!(offer.entries[0].mime, format!("text/{ESCAPED}"));
+        assert_eq!(offer.resume, Vec::<u32>::new());
+        let event = CoreEvent::from(api::Event::OfferReceived(api::OfferInfo {
+            transfer: "aa".into(),
+            from: String::new(),
+            entries: vec![entry(TRICK)],
+            total_bytes: 3,
+            resume: Some(vec![1]),
+        }));
+        let CoreEvent::OfferReceived { offer } = event else {
+            return Err("an offer became something else");
+        };
+        assert_eq!(offer.entries[0].name, ESCAPED);
+        assert_eq!(offer.resume, [1]);
+        Ok(())
+    }
+
+    /// Why a transfer ended crosses escaped: in events, the transfer
+    /// list, and the history (with its names).
+    #[test]
+    fn endings_and_history_cross_escaped() {
+        let event = CoreEvent::from(api::Event::Ended {
+            transfer: "aa".into(),
+            reason: api::TransferState::Cancelled,
+            message: TRICK.into(),
+        });
+        assert_eq!(
+            event,
+            CoreEvent::Ended {
+                transfer: "aa".into(),
+                reason: TransferState::Cancelled,
+                message: ESCAPED.into(),
+            }
+        );
+        let transfer = Transfer::from(api::TransferInfo {
+            transfer: "aa".into(),
+            peer: "bb".into(),
+            way: api::Way::Incoming,
+            state: api::TransferState::Failed,
+            detail: Some(TRICK.into()),
+            bytes_done: 1,
+            bytes_total: 2,
+        });
+        assert_eq!(transfer.detail, ESCAPED);
+        assert_eq!(transfer.way, Way::Incoming);
+        let item = HistoryItem::from(api::HistoryEntry {
+            transfer: "aa".into(),
+            peer: "bb".into(),
+            way: api::Way::Outgoing,
+            state: api::TransferState::Delivered,
+            detail: Some(TRICK.into()),
+            finished_at: 5,
+            files: 1,
+            bytes: 2,
+            names: vec![TRICK.into(), "plain".into()],
+            manifest_hash: Some("cc".into()),
+            receipt: Some(api::ReceiptInfo {
+                id: "dd".into(),
+                completed_at: 4,
+            }),
+        });
+        assert_eq!(item.detail, ESCAPED);
+        assert_eq!(item.names, [ESCAPED, "plain"]);
+        assert_eq!(
+            (item.manifest_hash.as_str(), item.receipt.as_str()),
+            ("cc", "dd")
+        );
+        // Nothing to say is an empty string, not a missing value.
+        let quiet = Transfer::from(api::TransferInfo {
+            transfer: "aa".into(),
+            peer: "bb".into(),
+            way: api::Way::Outgoing,
+            state: api::TransferState::Offered,
+            detail: None,
+            bytes_done: 0,
+            bytes_total: 0,
+        });
+        assert_eq!(quiet.detail, "");
+    }
+
+    /// A contact is named by its device fingerprint (not its person key)
+    /// and keeps its route.
+    #[test]
+    fn contacts_keep_their_route() {
+        for (route, expected) in [
+            (None, Route::None),
+            (Some(api::Route::Lan), Route::Lan),
+            (Some(api::Route::Relay), Route::Relay),
+        ] {
+            let contact = Contact::from(api::ContactInfo {
+                device: "fedcba98".repeat(8),
+                person: "11".repeat(32),
+                available: true,
+                nearby: false,
+                connected: true,
+                route,
+            });
+            assert_eq!(contact.name, "Device FEDC BA98");
+            assert_eq!(contact.route, expected);
+            assert!(contact.available && !contact.nearby && contact.connected);
+        }
+    }
+
+    /// A device is called by its fingerprint's first eight hex digits,
+    /// whatever else the text holds.
+    #[test]
+    fn devices_are_named_by_fingerprint() {
+        assert_eq!(name_of(&"abcdef0123".repeat(7)), "Device ABCD EF01");
+        assert_eq!(name_of("ab\u{202e}cd-ef"), "Device ABCD EF");
+        assert_eq!(name_of("abc"), "Device ABC");
+        assert_eq!(name_of(""), "Device ");
+    }
+
+    /// Counts beyond what the boundary carries saturate.
+    #[test]
+    fn counts_saturate() {
+        assert_eq!(count(7), 7);
+        if let Ok(huge) = usize::try_from(u64::from(u32::MAX) + 1) {
+            assert_eq!(count(huge), u32::MAX);
+        }
+    }
+
+    /// Every key protection maps both ways unchanged.
+    #[test]
+    fn key_protections_round_trip() {
+        for protection in [
+            KeyProtection::File,
+            KeyProtection::Keychain,
+            KeyProtection::SecureEnclave,
+            KeyProtection::Dpapi,
+            KeyProtection::Tpm,
+            KeyProtection::SecretService,
+            KeyProtection::Portal,
+            KeyProtection::StrongBox,
+            KeyProtection::Tee,
+        ] {
+            let core: api::KeyProtection = protection.into();
+            assert_eq!(KeyProtection::from(core), protection);
+        }
+    }
+}
