@@ -65,7 +65,6 @@ todoke-sys-macos.workspace = true
 # Sessions in the tests: a development dependency may enable them, as the
 # desktop app's and the CLI's tests do.
 todoke-core = { workspace = true, features = ["unaudited-dev"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 getrandom.workspace = true
 
 # Two cores on one machine find each other over loopback, which only a

@@ -3,7 +3,7 @@
 //! arrive.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings};
@@ -125,12 +125,15 @@ fn two_cores_pair_offer_accept_and_receive() -> TestResult {
     assert_eq!(keys[0].0.len(), 32);
     assert_eq!(keys[0].1.len(), 32);
 
-    let offer = a.pair_show_qr()?;
-    assert_eq!(
-        offer.modules().len(),
-        (offer.width() * offer.width()) as usize
-    );
-    let a_contact = b.pair_scan_qr(offer.text())?;
+    let a_contact = {
+        let _pairing = pairing();
+        let offer = a.pair_show_qr()?;
+        assert_eq!(
+            offer.modules().len(),
+            (offer.width() * offer.width()) as usize
+        );
+        b.pair_scan_qr(offer.text())?
+    };
     let a_device = a.status()?.device;
     assert_eq!(a_contact.device(), a_device);
 
@@ -316,6 +319,15 @@ impl Notifier for Panicky {
     }
 }
 
+/// Held while two cores pair. A scanner dials the first strangers it
+/// finds nearby, and an offer allows one attempt (PROTOCOL §3.1): tests
+/// pairing at once over loopback would dial each other's displayers and
+/// burn their offers.
+fn pairing() -> MutexGuard<'static, ()> {
+    static PAIRING: Mutex<()> = Mutex::new(());
+    PAIRING.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
 /// Two cores over loopback, B paired with A by QR; B's handle to A.
 fn paired(
     a_home: &Scratch,
@@ -323,7 +335,10 @@ fn paired(
 ) -> Result<(Core, Core, ContactHandle), Box<dyn std::error::Error>> {
     let a = Core::new(settings(&a_home.0))?;
     let b = Core::new(settings(&b_home.0))?;
-    let a_contact = b.pair_scan_qr(a.pair_show_qr()?.text())?;
+    let a_contact = {
+        let _pairing = pairing();
+        b.pair_scan_qr(a.pair_show_qr()?.text())?
+    };
     Ok((a, b, a_contact))
 }
 

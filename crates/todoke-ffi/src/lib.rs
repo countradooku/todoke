@@ -35,6 +35,7 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(not(target_family = "wasm"))]
 mod block;
 pub mod code;
 mod config;

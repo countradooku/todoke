@@ -191,6 +191,7 @@ mod tests {
 
     /// Why a core did not start, as the app acts on it: the key store's
     /// failure is its own kind.
+    #[cfg(not(target_family = "wasm"))]
     #[test]
     fn start_errors_keep_their_kind() {
         use todoke_core::profile::ProfileError;
