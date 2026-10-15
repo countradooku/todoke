@@ -502,3 +502,106 @@ fn the_last_epoch_has_no_successor() -> TestResult {
     assert!(matched(&[0x55; 32], last - EPOCH_SECONDS, last)?);
     Ok(())
 }
+
+/// R3: the QR stranger token (§9, `HMAC-BLAKE3(stranger_key, minute)`)
+/// passes the same checks: one shown offer's tokens over 20,000
+/// consecutive minutes, and 2,000 offers' tokens in one minute, look like
+/// independent random values, so a scanner-side observer cannot follow an
+/// offer from minute to minute or tell two offers' tokens apart.
+#[test]
+fn qr_stranger_tokens_are_unlinkable() -> TestResult {
+    use crate::pairing::{QR_STRANGER_MINUTE, QrPayload};
+
+    let vector = load("qr-payload.json")?;
+    let binary = hex::decode(
+        vector
+            .pointer("/binary_hex")
+            .and_then(serde_json::Value::as_str)
+            .ok_or("binary_hex")?,
+    )?;
+    let created = time(T0)?;
+    let key = QrPayload::from_bytes(&binary, created)?.stranger_key()?;
+    let first = T0 / QR_STRANGER_MINUTE;
+    let over_time = (first..first + 20_000)
+        .map(|minute| key.token(minute))
+        .collect::<Result<Vec<_>, _>>()?;
+    random_looking(&over_time)?;
+    // Offers differing only in their pairing ID (bytes 8..24).
+    let mut across_offers = Vec::with_capacity(2_000);
+    for index in 1..=2_000_u32 {
+        let mut other = binary.clone();
+        other
+            .get_mut(8..12)
+            .ok_or("pairing id")?
+            .copy_from_slice(&index.to_be_bytes());
+        let key = QrPayload::from_bytes(&other, created)?.stranger_key()?;
+        across_offers.push(key.token(first)?);
+    }
+    random_looking(&across_offers)
+}
+
+/// A contact's device key, committed pair PSK, and generation.
+type RawContact = (Ed25519PublicKey, [u8; 32], u64);
+
+/// Three contacts paired into a store at `T0`, with their PSKs and
+/// generations.
+fn three_paired() -> Result<(Store, Vec<RawContact>), Box<dyn std::error::Error>> {
+    let mut store: Store = ContactStore::open(sealer(9), MemoryStorage::new())?;
+    let mut contacts = Vec::new();
+    for (index, generation) in [(0x11_u8, 1_u64), (0x22, 7), (0x33, 1 << 40)] {
+        let enrolled = Enrolled::new()?;
+        let key = enrolled.store.public_key(&enrolled.device)?;
+        let psk = [index; 32];
+        store.pair(
+            &enrolled.bind(1)?,
+            TrustOrigin::QrPairing,
+            PairPsk::new(psk),
+            generation,
+            time(T0)?,
+        )?;
+        contacts.push((key, psk, generation));
+    }
+    Ok((store, contacts))
+}
+
+/// R3: the builder the matching benchmark reaches through
+/// `from_pair_psks` gives, from the same devices, PSKs, and generations,
+/// exactly the table the contact store gives, so the benchmark measures
+/// the shipped table (in every epoch, not only the store's pairing time).
+#[test]
+fn raw_psk_tables_equal_the_store_table() -> TestResult {
+    let (store, contacts) = three_paired()?;
+    for at in [T0, T0 + EPOCH_SECONDS, T0 + 1_000 * EPOCH_SECONDS] {
+        let now = time(at)?;
+        let raw = DiscoveryTable::build(
+            now,
+            contacts
+                .iter()
+                .map(|(device, psk, generation)| (*device, psk, *generation)),
+        )?;
+        assert_eq!(raw, store.discovery_table(now)?);
+        assert_eq!(raw.len(), 3);
+    }
+    Ok(())
+}
+
+/// R3: `from_pair_psks` itself (the `bench-support` feature) equals the
+/// store's table, whatever order the contacts come in.
+#[cfg(feature = "bench-support")]
+#[test]
+fn from_pair_psks_equals_the_store_table() -> TestResult {
+    let (store, mut contacts) = three_paired()?;
+    contacts.reverse();
+    let now = time(T0 + 3 * EPOCH_SECONDS)?;
+    let raw = DiscoveryTable::from_pair_psks(
+        now,
+        contacts
+            .iter()
+            .map(|(device, psk, generation)| (*device, psk, *generation)),
+    )?;
+    assert_eq!(raw, store.discovery_table(now)?);
+    for (device, _, generation) in &contacts {
+        assert_eq!(raw.generation(device), Some(*generation));
+    }
+    Ok(())
+}

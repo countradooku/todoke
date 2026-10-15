@@ -225,8 +225,10 @@ impl Advertiser {
     /// When the paired record is next due to change, if that is after
     /// `mono`: the caller plans again then, so changes are not quantised to
     /// a tick of its own (which would also give its devices a common
-    /// phase). `None` when nothing paired is shown or the change is
-    /// already due (the caller's next plan makes it).
+    /// phase). `None` before the first turn or once the change is due (the
+    /// caller's next plan makes it). A turn's deadline stands while the
+    /// table is stale or empty, or the caller hides the record: at most
+    /// one wake-up per turn, never a time already past.
     #[must_use]
     pub fn next_change(&self, mono: Duration) -> Option<Duration> {
         let rotation = &self.rotation;
@@ -353,10 +355,11 @@ fn dwell(random: &mut impl Random) -> Option<Duration> {
     Some(Duration::from_millis(min + below(max - min + 1, random)?))
 }
 
-/// A uniform integer in `0..bound` (`bound` > 0), by rejection: values in
-/// the last, partial run of `bound` are drawn again. A source that keeps
-/// giving rejected values (a broken one: each draw is rejected with
-/// probability below `bound / 2^64`) gives `None` after 64 draws.
+/// A uniform integer in `0..bound` (`bound` > 0), by rejection: values at
+/// or above the largest multiple of `bound` not above `u64::MAX` are drawn
+/// again. A draw is rejected with probability at most `bound / 2^64` (for
+/// the small bounds used here, negligible), so a source that gives 64
+/// rejected values in a row is broken, and gives `None`.
 fn below(bound: u64, random: &mut impl Random) -> Option<u64> {
     let zone = u64::MAX - u64::MAX % bound;
     for _ in 0..64 {

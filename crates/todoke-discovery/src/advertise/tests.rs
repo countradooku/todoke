@@ -469,6 +469,292 @@ fn os_randomness_gives_distinct_labels() -> TestResult {
     Ok(())
 }
 
+/// R3: a contact that joins the table mid-round (a new pairing, or one
+/// whose ratchet is certain again) does not cut into the round under way,
+/// which finishes in its shuffled order, and is shown in the next round,
+/// which is again every contact once.
+#[test]
+fn a_contact_that_joins_is_shown_in_the_next_round() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let full = fixture.tables.first().ok_or("table")?;
+    let joiner = *fixture.contacts.first().ok_or("contact")?;
+    assert!(fixture.reduced.advertisement(&joiner).is_none());
+    let wall = time(WALL)?;
+    assert!(!full.is_stale(wall) && !fixture.reduced.is_stale(wall));
+    let mut all: Vec<Ed25519PublicKey> = full.contacts().copied().collect();
+    all.sort();
+    for seed in 0..64 {
+        let mut advertiser = Advertiser::new();
+        let mut random = SplitMix(seed);
+        // The first turn of a two-contact round.
+        let plan = advertiser.plan(&fixture.reduced, wall, Duration::ZERO, &mut random);
+        let first = whose(&fixture.reduced, plan.paired.map(|a| a.record))?;
+        assert_eq!(advertiser.rotation.left.len(), 1);
+        // The contact joins; the round finishes with the one left in it.
+        let mut mono = advertiser.rotation.until;
+        let plan = advertiser.plan(full, wall, mono, &mut random);
+        let second = whose(full, plan.paired.map(|a| a.record))?;
+        assert_ne!(second, joiner);
+        assert_ne!(second, first);
+        mono = advertiser.rotation.until;
+        // The next round: every contact once, the joiner included.
+        let mut round = Vec::new();
+        for _ in 0..3 {
+            let plan = advertiser.plan(full, wall, mono, &mut random);
+            round.push(whose(full, plan.paired.map(|a| a.record))?);
+            mono = advertiser.rotation.until;
+        }
+        round.sort();
+        assert_eq!(round, all, "seed {seed}");
+    }
+    Ok(())
+}
+
+/// R3: the instance label belongs to the epoch, not to the turn. A turn
+/// under way at an epoch boundary keeps its contact and its end, but shows
+/// that contact's record for the new epoch under the new epoch's label;
+/// within an epoch every turn shares one label.
+#[test]
+fn the_label_changes_at_the_epoch_boundary_mid_turn() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let (before, after) = (
+        fixture.tables.first().ok_or("table")?,
+        fixture.tables.get(1).ok_or("table")?,
+    );
+    let boundary = *fixture.walls.get(1).ok_or("wall")?;
+    let mut advertiser = Advertiser::new();
+    let mut random = SplitMix(9);
+    let start = SECOND * 10;
+    let last_second = advertiser
+        .plan(before, time(boundary - 1)?, start, &mut random)
+        .paired
+        .ok_or("paired")?;
+    let (shown, since, until) = (
+        advertiser.rotation.shown,
+        advertiser.rotation.since,
+        advertiser.rotation.until,
+    );
+    let mono = start + Duration::from_millis(500);
+    assert!(mono < until);
+    let next_epoch = advertiser
+        .plan(after, time(boundary)?, mono, &mut random)
+        .paired
+        .ok_or("paired")?;
+    // The same turn: same contact, same start and end.
+    assert_eq!(advertiser.rotation.shown, shown);
+    assert_eq!(advertiser.rotation.since, since);
+    assert_eq!(advertiser.rotation.until, until);
+    assert_eq!(advertiser.next_change(mono), Some(until));
+    // Its record and the label are the new epoch's.
+    let contact = shown.ok_or("shown")?;
+    assert_eq!(Some(next_epoch.record), after.advertisement(&contact));
+    assert_eq!(next_epoch.record.epoch(), after.epoch());
+    assert_ne!(next_epoch.record, last_second.record);
+    assert_ne!(next_epoch.label, last_second.label);
+    // Every later turn in the epoch keeps the new label.
+    let mut mono = until;
+    for _ in 0..6 {
+        let plan = advertiser.plan(after, time(boundary + 60)?, mono, &mut random);
+        assert_eq!(plan.paired.map(|a| a.label), Some(next_epoch.label));
+        mono = advertiser.rotation.until;
+    }
+    Ok(())
+}
+
+/// R3: one contact means one record: every turn shows it, and every turn
+/// is still a fresh round with its own random time, so an observer sees
+/// no fixed period even then.
+#[tokio::test]
+async fn a_single_contact_is_shown_for_random_times() -> TestResult {
+    let (alice, bob) = paired().await?;
+    let table = alice.table(WALL)?;
+    assert_eq!(table.len(), 1);
+    let turns = turns(
+        &mut Advertiser::new(),
+        &table,
+        time(WALL)?,
+        200,
+        &mut SplitMix(11),
+    )?;
+    assert!(turns.iter().all(|(device, _)| *device == bob.key()));
+    let mut dwells: Vec<Duration> = turns.iter().map(|(_, dwell)| *dwell).collect();
+    assert!(
+        dwells
+            .iter()
+            .all(|dwell| (ROTATION_MIN..=ROTATION_MAX).contains(dwell))
+    );
+    dwells.sort();
+    dwells.dedup();
+    // 200 draws from 2,001 values: a fixed or near-fixed period would
+    // give a handful.
+    assert!(dwells.len() > 150, "{} distinct times", dwells.len());
+    Ok(())
+}
+
+/// R3: shuffling nothing or one item needs no randomness (a one-contact
+/// round starts even when the source fails after the dwell), and two
+/// items come out in both orders.
+#[test]
+fn shuffling_small_rounds() -> TestResult {
+    let mut none: [u8; 0] = [];
+    assert_eq!(shuffle(&mut none, &mut Empty), Some(()));
+    let mut one = [7_u8];
+    assert_eq!(shuffle(&mut one, &mut Empty), Some(()));
+    assert_eq!(one, [7]);
+    let mut orders = std::collections::BTreeSet::new();
+    let mut random = SplitMix(12);
+    for _ in 0..64 {
+        let mut two = [1_u8, 2];
+        shuffle(&mut two, &mut random).ok_or("random")?;
+        orders.insert(two);
+    }
+    assert_eq!(orders.len(), 2);
+    let mut two = [1_u8, 2];
+    assert_eq!(shuffle(&mut two, &mut Empty), None);
+    Ok(())
+}
+
+/// R3: rejection sampling at the top of the range. For a bound just above
+/// 2^63 the zone is the bound itself, so about half of all values are
+/// drawn again, and what is accepted is below the bound; for `u64::MAX`
+/// only `u64::MAX` is drawn again. Whatever the bound, a value is never
+/// out of range.
+#[test]
+fn uniform_draws_at_large_bounds() -> TestResult {
+    let half = 1_u64 << 63;
+    let bound = half + 1;
+    // u64::MAX % bound == half - 2, so the zone is exactly `bound`.
+    let mut script = Script(vec![
+        u64::MAX.to_be_bytes(),
+        bound.to_be_bytes(),
+        half.to_be_bytes(),
+    ]);
+    assert_eq!(below(bound, &mut script), Some(half));
+    let mut script = Script(vec![(bound - 1).to_be_bytes()]);
+    assert_eq!(below(bound, &mut script), Some(bound - 1));
+    let mut script = Script(vec![u64::MAX.to_be_bytes(), (u64::MAX - 1).to_be_bytes()]);
+    assert_eq!(below(u64::MAX, &mut script), Some(u64::MAX - 1));
+    let mut random = SplitMix(13);
+    for bound in [2, 3, 1_000, 2_001, half - 1, half, half + 1, u64::MAX] {
+        for _ in 0..200 {
+            let value = below(bound, &mut random).ok_or("random")?;
+            assert!(value < bound, "{value} of {bound}");
+        }
+    }
+    Ok(())
+}
+
+/// R3: a QR's stranger record lasts exactly as long as the offer's
+/// minutes on the wall clock: it is still shown in the last second of the
+/// last minute, and gone at the next second; a wall clock that goes back
+/// before the first minute ends it too.
+#[test]
+fn a_qr_stranger_record_ends_with_the_offers_last_minute() -> TestResult {
+    let (_, tokens, table) = qr_stranger(WALL)?;
+    let first = WALL / 60 * 60;
+    // The offer's last minute: the last one its schedule has a token for.
+    let mut last = first;
+    while tokens.at(time(last + 60)?).is_some() {
+        last += 60;
+    }
+    let end = last + 59;
+    let mut advertiser = Advertiser::new();
+    let mut random = Counter(0);
+    assert!(advertiser.enable_qr_stranger(
+        tokens.clone(),
+        time(WALL)?,
+        Duration::ZERO,
+        &mut random
+    ));
+    let shown = advertiser
+        .plan(&table, time(end)?, SECOND, &mut random)
+        .stranger
+        .ok_or("stranger")?;
+    assert_eq!(Some(*shown.record.token()), tokens.at(time(end)?));
+    assert_eq!(
+        advertiser
+            .plan(&table, time(end + 1)?, SECOND * 2, &mut random)
+            .stranger,
+        None
+    );
+    assert!(!advertiser.stranger_enabled());
+    // Back before the offer.
+    assert!(advertiser.enable_qr_stranger(tokens, time(WALL)?, Duration::ZERO, &mut random));
+    assert_eq!(
+        advertiser
+            .plan(&table, time(first - 1)?, SECOND, &mut random)
+            .stranger,
+        None
+    );
+    assert!(!advertiser.stranger_enabled());
+    Ok(())
+}
+
+/// R3: the core's loop (`todoke-core` `run`) sleeps until the earlier of
+/// its next 500 ms tick and `next_change`, then plans. Modelled here over
+/// ten minutes for a current, a stale, and an empty table: `next_change`
+/// is never a time already past (which would make the loop spin), a
+/// current table wakes it for at most one change per 2 seconds, and a
+/// stale or empty one at most once (for a turn begun before).
+#[test]
+fn the_core_loop_never_spins_on_next_change() -> TestResult {
+    const TICK: Duration = Duration::from_millis(500);
+    let fixture = crate::support::fixture()?;
+    let current = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let stale = fixture.tables.get(1).ok_or("table")?;
+    assert!(stale.is_stale(wall));
+    let span = SECOND * 600;
+    for (name, later, most) in [
+        ("current", current, span.as_secs() / 2),
+        ("stale", stale, 1),
+        ("empty", &fixture.empty, 1),
+    ] {
+        let mut advertiser = Advertiser::new();
+        let mut random = SplitMix(14);
+        // One turn with the current table first, as after a refresh.
+        advertiser.plan(current, wall, Duration::ZERO, &mut random);
+        let (mut mono, mut next_tick, mut changes) = (Duration::ZERO, TICK, 0_u64);
+        while mono < span {
+            let change = advertiser.next_change(mono);
+            if let Some(at) = change {
+                assert!(at > mono, "{name}: a change already due at {mono:?}");
+            }
+            let wake = change.map_or(next_tick, |at| at.min(next_tick));
+            if wake == next_tick {
+                next_tick += TICK;
+            } else {
+                changes += 1;
+            }
+            mono = wake;
+            advertiser.plan(later, wall, mono, &mut random);
+        }
+        assert!(changes <= most, "{name}: {changes} wake-ups for changes");
+    }
+    Ok(())
+}
+
+/// R3: Debug output shows no label and no stranger token either.
+#[test]
+fn debug_output_hides_labels_and_the_stranger_token() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut advertiser = Advertiser::new();
+    let mut random = SplitMix(15);
+    assert!(advertiser.enable_stranger(wall, Duration::ZERO, &mut random));
+    let plan = advertiser.plan(table, wall, Duration::ZERO, &mut random);
+    let text = format!("{advertiser:?}");
+    for advertisement in plan.paired.iter().chain(plan.stranger.iter()) {
+        assert!(!text.contains(advertisement.label.as_str()), "{text}");
+        let token = advertisement.record.token();
+        assert!(!text.contains(&format!("{token:?}")), "{text}");
+        assert!(!text.contains(&advertisement.record.txt_value()), "{text}");
+    }
+    assert!(text.contains("stranger: true"), "{text}");
+    Ok(())
+}
+
 mod model {
     //! R3: a property test of the advertising schedule. Stranger mode is
     //! checked against a model of its timing only (when it starts, rotates,
