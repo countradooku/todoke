@@ -42,6 +42,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use todoke_crypto::consent::SessionBinding;
 use todoke_crypto::identity::{KeyId, KeyStore};
+use todoke_proto::link::LinkAbilities;
 use todoke_proto::session::{ErrorRecord, ErrorScope, FrameType};
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::{Cancel, CancelReason, Capabilities, RejectReason, TransferId};
@@ -188,6 +189,8 @@ pub struct TransferEngine<'k, K: KeyStore, S: SendSource, R: ReceiveSink> {
     events: VecDeque<TransferEvent>,
     revocations: VecDeque<Vec<u8>>,
     revocations_seen: usize,
+    /// Whether the peer has sent `LinkAbilities` (§10.2), at most once.
+    link_abilities_seen: bool,
     /// Accept nonces seen in this session, both directions (§7.3: unique
     /// per session).
     accept_nonces: BTreeSet<[u8; 16]>,
@@ -248,6 +251,7 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             events: VecDeque::new(),
             revocations: VecDeque::new(),
             revocations_seen: 0,
+            link_abilities_seen: false,
             accept_nonces: BTreeSet::new(),
             resume_query: None,
             revalidation_pending: false,
@@ -495,6 +499,7 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             FrameType::CANCEL => self.on_cancel(body, now),
             FrameType::CANCEL_ACK => self.on_cancel_ack(body),
             FrameType::ERROR => self.on_transfer_error(body),
+            FrameType::LINK_ABILITIES => self.on_link_abilities(body),
             FrameType::REVOKE => {
                 if self.revocations_seen >= MAX_REVOCATIONS {
                     return Err(violation(FailureCode::Limit));
@@ -506,6 +511,17 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             // Capabilities a second time, or any other known type.
             _ => Err(violation(FailureCode::State)),
         }
+    }
+
+    /// The peer's link abilities (§10.2): checked, once per session. This
+    /// engine sets up no link (it never sends its own `LinkAbilities`), so
+    /// the peer must never send a `LinkOffer` or `LinkAnswer` (STATE).
+    fn on_link_abilities(&mut self, body: &[u8]) -> Handled {
+        LinkAbilities::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+        if core::mem::replace(&mut self.link_abilities_seen, true) {
+            return Err(violation(FailureCode::State));
+        }
+        Ok(())
     }
 
     /// A transfer-scoped `Error` from the peer ends that transfer (§12);

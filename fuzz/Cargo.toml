@@ -242,6 +242,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "proto_link_records"
+path = "fuzz_targets/proto_link_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "ffi_commands"
 path = "fuzz_targets/ffi_commands.rs"
 test = false

@@ -15,6 +15,8 @@ workspace = true
 # data, not something to reimplement.
 [dependencies]
 unicode-normalization.workspace = true
+# Wi-Fi credentials in link offers (§10.2) are wiped when dropped.
+zeroize.workspace = true
 
 [[example]]
 name = "generate_vectors"
@@ -46,4 +48,3 @@ serde_json.workspace = true
 # compiles todoke-proto's examples or tests (such as `cargo test --workspace`);
 # runtime code never calls the raw split, and normal builds do not enable it.
 snow = { workspace = true, features = ["risky-raw-split"] }
-zeroize.workspace = true

@@ -454,6 +454,28 @@ fn peer_errors_and_revocations() -> TestResult {
     assert_eq!(link.b.pop_revocation(), Some(vec![0; 172]));
     let result = link.b.handle_frame(FrameType::REVOKE, &[1; 172], link.now);
     assert_eq!(session_failure(result), Some(FailureCode::Limit));
+    // Link setup (§10.2): the peer's abilities are checked and taken once;
+    // this engine offers no link, so an offer or answer is STATE.
+    let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+    let result = link
+        .b
+        .handle_frame(FrameType::LINK_ABILITIES, &[0x08, 0], link.now);
+    assert_eq!(session_failure(result), Some(FailureCode::Malformed));
+    let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+    link.b
+        .handle_frame(FrameType::LINK_ABILITIES, &[0b111, 0b100], link.now)?;
+    let result = link
+        .b
+        .handle_frame(FrameType::LINK_ABILITIES, &[0, 0], link.now);
+    assert_eq!(session_failure(result), Some(FailureCode::State));
+    for (frame, body) in [
+        (FrameType::LINK_OFFER, vec![1; 55]),
+        (FrameType::LINK_ANSWER, vec![1; 17]),
+    ] {
+        let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
+        let result = link.b.handle_frame(frame, &body, link.now);
+        assert_eq!(session_failure(result), Some(FailureCode::State));
+    }
     // Unknown transfer-layer frame types in Ready: STATE.
     let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
     let result = link

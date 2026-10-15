@@ -31,6 +31,7 @@
 
 pub mod discovery;
 pub mod identity;
+pub mod link;
 pub mod pairing;
 pub mod relay;
 pub mod session;
