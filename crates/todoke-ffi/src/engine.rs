@@ -118,6 +118,8 @@ impl Core {
         }
         #[cfg(not(target_family = "wasm"))]
         {
+            #[cfg(target_os = "android")]
+            crate::android::record_api_level();
             let config = crate::config::core_config(settings, key_store.is_some())?;
             let source = crate::keys::source(&config.state_dir, key_store, config.key_storage)?;
             let core = todoke_core::runtime::Core::start(config, Box::new(source))

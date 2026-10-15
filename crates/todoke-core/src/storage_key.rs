@@ -241,15 +241,7 @@ impl PlatformKeyStore for SealedFile {
             .sealer()?
             .seal(&self.context, key)
             .map_err(|_| io::Error::other("sealing the key failed"))?;
-        // Written aside, then linked into place: never torn, never replaced.
-        let partial = temporary(&self.path)?;
-        let mut file = open_private(&partial, true)?;
-        let written = file.write_all(&sealed).and_then(|()| file.sync_all());
-        drop(file);
-        let linked = written.and_then(|()| std::fs::hard_link(&partial, &self.path));
-        let _ = std::fs::remove_file(&partial);
-        linked?;
-        sync_parent(&self.path)
+        write_new(&self.path, &sealed)
     }
 }
 
@@ -489,6 +481,59 @@ fn temporary(path: &Path) -> io::Result<PathBuf> {
     Ok(path.with_file_name(name))
 }
 
+/// Writes `bytes` as the new private file `path`: written aside, then moved
+/// into place without replacing anything (`renameat2(RENAME_NOREPLACE)`,
+/// `renameatx_np(RENAME_EXCL)`) or linked into place, so it is never torn.
+/// Android before 11 has neither for apps (the security policy refuses hard
+/// links, the seccomp filter `renameat2`): there the file is created
+/// exclusively under its own name and written in place, which a crash can
+/// leave torn.
+///
+/// # Errors
+///
+/// `AlreadyExists` when `path` exists; other I/O errors.
+fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let write = |target: &Path| {
+        let mut file = open_private(target, true)?;
+        file.write_all(bytes)?;
+        file.sync_all()
+    };
+    let partial = temporary(path)?;
+    let placed = write(&partial).and_then(|()| place_new(&partial, path));
+    let _ = std::fs::remove_file(&partial);
+    if !placed? {
+        write(path)?;
+    }
+    sync_parent(path)
+}
+
+/// Moves `partial` to `path` without replacing anything, else links it
+/// there. `false` when this process can do neither.
+fn place_new(partial: &Path, path: &Path) -> io::Result<bool> {
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    if todoke_fs::platform::rename_noreplace() {
+        use rustix::fs::{CWD, RenameFlags};
+        use rustix::io::Errno;
+        match rustix::fs::renameat_with(CWD, partial, CWD, path, RenameFlags::NOREPLACE) {
+            Ok(()) => return Ok(true),
+            // The file system cannot: try a link.
+            Err(errno)
+                if errno == Errno::INVAL
+                    || errno == Errno::NOSYS
+                    || errno == Errno::NOTSUP
+                    || errno == Errno::OPNOTSUPP => {}
+            Err(errno) => return Err(errno.into()),
+        }
+    }
+    match std::fs::hard_link(partial, path) {
+        Ok(()) => Ok(true),
+        // Android's security policy refuses apps hard links in their data.
+        #[cfg(target_os = "android")]
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
 /// Makes a rename or removal in `path`'s directory durable (Unix: the
 /// directory is synced; Windows has no such call, and the file system
 /// journals metadata).
@@ -543,22 +588,12 @@ pub fn profile_id(state_dir: &Path) -> io::Result<String> {
                     let _ = write!(id, "{byte:02x}");
                     id
                 });
-            let partial = state_dir.join(format!("storage.id.{id}.tmp"));
-            let mut file = open_private(&partial, true)?;
-            file.write_all(id.as_bytes())?;
-            file.sync_all()?;
-            drop(file);
             // Two first starts at once: the first ID wins; read it back.
-            match std::fs::hard_link(&partial, &path) {
+            match write_new(&path, id.as_bytes()) {
                 Ok(()) => {}
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(error) => {
-                    let _ = std::fs::remove_file(&partial);
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
-            let _ = std::fs::remove_file(&partial);
-            sync_parent(&path)?;
             profile_id(state_dir)
         }
         Err(error) => Err(error),
@@ -637,6 +672,32 @@ mod tests {
             use std::os::unix::fs::PermissionsExt as _;
             let mode = std::fs::metadata(file.path())?.permissions().mode();
             assert_eq!(mode & 0o777, 0o600);
+        }
+        Ok(())
+    }
+
+    /// A new private file is written whole, never replaces one, and leaves
+    /// no temporary file beside it either way.
+    #[test]
+    fn new_files_never_replace_and_leave_nothing_behind() -> TestResult {
+        let scratch = Scratch::new("write-new")?;
+        std::fs::create_dir_all(&scratch.0)?;
+        let path = scratch.0.join("storage.id");
+        write_new(&path, b"first")?;
+        let again = write_new(&path, b"second").map_err(|error| error.kind());
+        assert_eq!(again, Err(io::ErrorKind::AlreadyExists));
+        assert_eq!(std::fs::read(&path)?, b"first");
+        let names = std::fs::read_dir(&scratch.0)?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(names, ["storage.id"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(&path)?.permissions().mode() & 0o777,
+                0o600
+            );
         }
         Ok(())
     }

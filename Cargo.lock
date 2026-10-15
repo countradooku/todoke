@@ -8121,6 +8121,7 @@ dependencies = [
  "qrcode",
  "rustix",
  "todoke-core",
+ "todoke-fs",
  "todoke-sys-macos",
  "tokio",
  "zeroize",

@@ -36,6 +36,8 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 #[cfg(not(target_family = "wasm"))]
+#[cfg(target_os = "android")]
+mod android;
 mod block;
 pub mod code;
 mod config;

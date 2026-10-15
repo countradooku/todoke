@@ -91,14 +91,17 @@ does not apply and long paths work.
   publication (no journal entry, no `Complete`, no receipt) and leaves the
   substitute there untouched rather than delete something this crate did
   not create.
-- *Android:* bionic declares `renameat2` with `__INTRODUCED_IN(30)`, so the
-  libc wrapper exists from API level 30 (Android 11), not from Android 14 as
-  an earlier draft of this ADR said. Whether the app seccomp filter of every
-  supported release allows the `renameat2` system call is **unverified** (a
-  disallowed call kills the process, and the libc wrapper's existence says
-  nothing about the filter). Android therefore keeps the hard link first.
-  P16 verifies the seccomp question on devices and enables `renameat2` where
-  it is allowed.
+- *Android (settled in P16, [ADR 0015](0015-android.md)):* the app seccomp
+  filter allows what bionic's `SYSCALLS.TXT` lists, and `renameat2` is
+  there from API level 30 (Android 11); a call the filter refuses kills the
+  process. `todoke-ffi` reads the API level (`ro.build.version.sdk`) when
+  the core starts and `todoke_fs::platform` allows `renameat2` from 30 on,
+  never before it is known. Hard links are no fallback for apps: SELinux
+  refuses them in the app's own data (`EACCES`, seen on Android 7 and 10),
+  which now counts as "no hard links", so Android 7 to 10 publish by the
+  exclusive copy.
+  Instrumented tests in the app's own sandbox ran on Android 7, 10, 11, and
+  16 emulators.
 - *Crash between publication and journaling:* the file is published, the
   journal does not know, and a resume publishes it again under the next
   suffix. Nothing is lost or overwritten; the user may see a duplicate.
