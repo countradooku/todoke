@@ -243,9 +243,15 @@ class BindingsTest {
     @Test
     fun guardedCloseWaitsForCallsInProgress() = runBlocking(Dispatchers.Default) {
         val guarded = Guarded(Core(settings(home("guarded"))))
-        val calls = (1..8).map { async(Dispatchers.IO) { guarded.call { it.status() } } }
+        // A call that starts after close is refused; the others finish first.
+        val calls = (1..8).map {
+            async(Dispatchers.IO) { runCatching { guarded.call { it.status() } } }
+        }
         guarded.closeSuspending()
-        calls.forEach { call -> runCatching { call.await() } }
+        for (outcome in calls.map { it.await() }) {
+            val error = outcome.exceptionOrNull()
+            assertTrue(error == null || error is IllegalStateException, "$error")
+        }
         assertFailsWith<IllegalStateException> { guarded.call { it.contact("ab") } }
         // A second close waits for the free and returns.
         guarded.close()
