@@ -354,6 +354,22 @@ async fn stale_tables_and_old_locators_are_refused() -> TestResult {
         incoming.claim(&bob.table()?, wall()?).await,
         Err(ConnectError::UnknownPeer)
     ));
+    // Bob claiming with his old table still finds Alice, but responding
+    // with it after the commit is refused: its generation is not the
+    // store's, so the claimed locator is not tied to the current PSK.
+    let (_held, link) = forged_link(old_locator, 42).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    let claimed = incoming.claim(&bob_old, wall()?).await?;
+    let (bob_local, bob_store) = bob.parts()?;
+    assert!(matches!(
+        claimed
+            .respond(&bob_old, bob_store, &bob_local, wall()?)
+            .await,
+        Err(ConnectError::StaleTable)
+    ));
+    assert!(!bob_manager.is_busy(&alice.key()));
     // Bob's own old table is refused once the epoch moves on.
     let (_held, link) = forged_link(old_locator, 41).await?;
     let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
@@ -1274,6 +1290,29 @@ fn link_information_is_kept_and_addresses_are_not_shown() {
     let shown = format!("{info:?}");
     assert!(!shown.contains("192.168"), "{shown}");
     assert!(shown.contains("12345"), "{shown}");
+}
+
+/// A contact whose ratchet is pending or uncertain is not in a rebuilt
+/// table: its Hello is an unknown peer, and nothing is sent back (§4.1,
+/// §4.4: no locator of a pending generation is advertised or accepted).
+#[tokio::test(start_paused = true)]
+async fn contacts_with_a_pending_ratchet_are_unknown_peers() -> TestResult {
+    let (alice, mut bob) = paired().await?;
+    let bob_manager = bob.manager();
+    let locator = alice.table()?.locator(&bob.key()).ok_or("locator")?;
+    bob.store.mark_ratchet_uncertain(&alice.key())?;
+    let (mut held, link) = forged_link(locator, 43).await?;
+    let Incoming::Contact(incoming) = bob_manager.accept(link).await? else {
+        return Err("expected a contact Hello".into());
+    };
+    assert!(matches!(
+        incoming.claim(&bob.table()?, wall()?).await,
+        Err(ConnectError::UnknownPeer)
+    ));
+    let mut byte = [0];
+    let read = core::future::poll_fn(|cx| Pin::new(&mut held).poll_read(cx, &mut byte)).await?;
+    assert_eq!(read, 0, "nothing may be sent to an unknown peer");
+    Ok(())
 }
 
 /// R3: the responder's store decides after the claim: a contact that became

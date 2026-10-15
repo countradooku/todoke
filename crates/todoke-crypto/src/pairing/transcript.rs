@@ -10,7 +10,7 @@
 //! psk        = HKDF(B3(pre_noise), ISK, "todoke/v1/cpace-psk\0", 32)
 //! ```
 //!
-//! Hello bytes are the 66-byte bodies; share bytes are the 49-byte bodies.
+//! Hello bytes are the 58-byte bodies; share bytes are the 49-byte bodies.
 //! The same `pre_noise` follows the Noise prologue domain (§4.2.6). These
 //! context choices still need conformance vectors before release (§3.2).
 

@@ -420,6 +420,41 @@ fn divergent_generations_fail_authentication() -> TestResult {
     Ok(())
 }
 
+/// The split's generation is the plans', never read from a Hello: two
+/// sides at generation 8 with that generation's PSK finish at 8.
+#[test]
+fn the_split_generation_comes_from_the_plans() -> TestResult {
+    let (init_static, resp_static) = (NoiseStaticKey::generate()?, NoiseStaticKey::generate()?);
+    let (mut initiator, client_hello) = HandshakeDriver::initiator(
+        GATE,
+        InitiatorPlan::contact(
+            8,
+            [0x51; 16],
+            Zeroizing::new([0x63; 32]),
+            *resp_static.public_key(),
+        ),
+        &init_static,
+        [0x52; 16],
+        Entropy::Os,
+        T,
+    )?;
+    let hello = read_client_hello(body(&client_hello)?)?;
+    let (mut responder, server_hello) = HandshakeDriver::responder(
+        GATE,
+        hello,
+        ResponderPlan::contact(8, Zeroizing::new([0x63; 32]), *init_static.public_key()),
+        &resp_static,
+        [0x53; 16],
+        Entropy::Os,
+        T,
+    )?;
+    run_to_end(&mut initiator, &mut responder, body(&server_hello)?)?;
+    let (a, b) = (initiator.finish()?, responder.finish()?);
+    assert_eq!((a.generation, b.generation), (8, 8));
+    assert_eq!(a.handshake_hash, b.handshake_hash);
+    Ok(())
+}
+
 #[test]
 fn changed_hello_fields_break_the_transcript() -> TestResult {
     // A responder that saw a different ServerHello nonce (as if a relay
