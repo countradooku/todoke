@@ -42,6 +42,16 @@ version = "1.5.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.aws-lc-rs]]
+version = "1.18.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.aws-lc-sys]]
+version = "0.46.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.bao]]
 version = "0.13.1"
 criteria = "safe-to-deploy"
@@ -62,6 +72,41 @@ version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.boltffi]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.boltffi_ast]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.boltffi_binding]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.boltffi_core]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.boltffi_macros]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.boltffi_scan]]
+version = "0.31.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.bytes]]
+version = "1.12.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.cc]]
 version = "1.8.0"
 criteria = "safe-to-deploy"
@@ -71,6 +116,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.0.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.cfg_aliases]]
+version = "0.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.chacha20]]
 version = "0.10.2"
@@ -82,10 +132,20 @@ version = "1.9.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.cmake]]
+version = "0.1.58"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.cmov]]
 version = "0.5.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13: new in the fuzz graph with the human-code pairing harness (CPace from pakery, through the unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
+[[exemptions.combine]]
+version = "4.6.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.const-oid]]
 version = "0.10.2"
@@ -96,6 +156,16 @@ notes = "Not yet reviewed. Exempted on 2026-10-13: new in the fuzz graph with th
 version = "0.4.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.core-foundation]]
+version = "0.10.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.core-foundation-sys]]
+version = "0.8.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.core-models]]
 version = "0.0.7"
@@ -137,6 +207,16 @@ version = "0.11.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.displaydoc]]
+version = "0.2.7"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.dunce]]
+version = "1.0.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.ed25519]]
 version = "3.0.0"
 criteria = "safe-to-deploy"
@@ -152,6 +232,11 @@ version = "1.19.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.equivalent]]
+version = "1.0.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.fastrand]]
 version = "2.5.0"
 criteria = "safe-to-deploy"
@@ -166,6 +251,16 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (channels to its daemon thread); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.form_urlencoded]]
+version = "1.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.fs_extra]]
+version = "1.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.futures-io]]
 version = "0.3.34"
@@ -183,6 +278,11 @@ criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
 [[exemptions.getrandom]]
+version = "0.2.17"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.getrandom]]
 version = "0.4.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
@@ -191,6 +291,11 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "0.3.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.hashbrown]]
+version = "0.17.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.hax-lib]]
 version = "0.3.7"
@@ -237,10 +342,60 @@ version = "0.4.15"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.icu_collections]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_locale_core]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_normalizer]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_normalizer_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_properties]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_properties_data]]
+version = "2.3.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.icu_provider]]
+version = "2.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.idna]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.idna_adapter]]
+version = "1.2.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.if-addrs]]
 version = "0.15.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for mdns-sd (interface enumeration); no imported audit or trusted publisher covers it; replace with an audit or imported audit."
+
+[[exemptions.indexmap]]
+version = "2.14.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.itertools]]
 version = "0.13.0"
@@ -251,6 +406,26 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.0.18"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.jni]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.jni-macros]]
+version = "0.22.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.jni-sys]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.jni-sys-macros]]
+version = "0.4.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.jobserver]]
 version = "0.1.35"
@@ -357,6 +532,11 @@ version = "0.12.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (Linux system call definitions used by rustix); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
 
+[[exemptions.litemap]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.lock_api]]
 version = "0.4.14"
 criteria = "safe-to-deploy"
@@ -366,6 +546,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for spin (flume); isrg, mozill
 version = "0.4.34"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.lru-slab]]
+version = "0.1.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.mdns-sd]]
 version = "0.21.5"
@@ -402,6 +587,11 @@ version = "1.12.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.openssl-probe]]
+version = "0.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.pakery-core]]
 version = "0.6.0"
 criteria = "safe-to-deploy"
@@ -417,20 +607,55 @@ version = "0.6.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13: new in the fuzz graph with the human-code pairing harness (CPace from pakery, through the unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
 
+[[exemptions.percent-encoding]]
+version = "2.3.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.pin-project-lite]]
 version = "0.2.17"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.potential_utf]]
+version = "0.1.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.prettyplease]]
 version = "0.2.37"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.proc-macro-crate]]
+version = "3.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.proc-macro2]]
 version = "1.0.107"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.qrcode]]
+version = "0.14.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.quinn]]
+version = "0.11.12"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.quinn-proto]]
+version = "0.11.19"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.quinn-udp]]
+version = "0.5.16"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.r-efi]]
 version = "6.0.0"
@@ -447,6 +672,11 @@ version = "0.10.1"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.rand_pcg]]
+version = "0.10.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.regex]]
 version = "1.13.1"
 criteria = "safe-to-deploy"
@@ -462,25 +692,85 @@ version = "0.8.11"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.ring]]
+version = "0.17.14"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.rustc-hash]]
 version = "2.1.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.rustc_lexer]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.rustix]]
 version = "1.1.5"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (todoke-fs uses its openat-family calls; docs/adr/0006-filesystem.md); imported audits cover only older versions, and imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
 
+[[exemptions.rustls]]
+version = "0.23.46"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.rustls-native-certs]]
+version = "0.8.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.rustls-pki-types]]
+version = "1.15.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.rustls-platform-verifier]]
+version = "0.7.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.rustls-platform-verifier-android]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.rustls-webpki]]
+version = "0.103.15"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.rustversion]]
 version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.same-file]]
+version = "1.0.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.schannel]]
+version = "0.1.29"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.scopeguard]]
 version = "1.2.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for lock_api (flume); isrg, mozilla, and bytecode-alliance trust its publisher (Amanieu) instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.security-framework]]
+version = "3.7.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.security-framework-sys]]
+version = "2.17.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.serde]]
 version = "1.0.229"
@@ -502,6 +792,11 @@ version = "1.0.154"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.serde_spanned]]
+version = "1.1.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.sha2]]
 version = "0.11.1"
 criteria = "safe-to-deploy"
@@ -512,10 +807,25 @@ version = "3.0.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.simd_cesu8]]
+version = "1.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.simdutf8]]
+version = "0.1.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.slab]]
 version = "0.4.12"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.smallvec]]
+version = "1.16.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.snow]]
 version = "0.10.0"
@@ -537,6 +847,11 @@ version = "0.9.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for flume; no imported audit or trusted publisher covers it; replace with an audit or imported audit."
 
+[[exemptions.stable_deref_trait]]
+version = "1.2.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.syn]]
 version = "2.0.119"
 criteria = "safe-to-deploy"
@@ -546,6 +861,26 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "3.0.9"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.synstructure]]
+version = "0.14.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.thiserror]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.thiserror-impl]]
+version = "2.0.21"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.tinystr]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.tinyvec]]
 version = "1.13.3"
@@ -557,6 +892,46 @@ version = "1.53.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-transport (LAN TCP and timers; features net, time, rt); mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
 
+[[exemptions.tokio-macros]]
+version = "2.7.2"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.toml]]
+version = "1.1.8+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.toml_datetime]]
+version = "1.1.2+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.toml_edit]]
+version = "0.25.17+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.toml_parser]]
+version = "1.1.5+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.toml_writer]]
+version = "1.1.3+spec-1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.tracing]]
+version = "0.1.44"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.tracing-core]]
+version = "0.1.36"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.typenum]]
 version = "1.20.1"
 criteria = "safe-to-deploy"
@@ -567,10 +942,35 @@ version = "1.0.27"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.unicode-xid]]
+version = "0.2.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.untrusted]]
+version = "0.9.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.url]]
+version = "2.5.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.utf8_iter]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.uuid]]
 version = "1.28.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.walkdir]]
+version = "2.5.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.wasi]]
 version = "0.11.1+wasi-snapshot-preview1"
@@ -597,10 +997,105 @@ version = "0.2.129"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.web-time]]
+version = "1.1.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.webpki-root-certs]]
+version = "1.0.9"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.winapi-util]]
+version = "0.1.11"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows-sys]]
+version = "0.52.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
 [[exemptions.windows-sys]]
 version = "0.61.2"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13 for the todoke-fs harnesses (declared by rustix and errno for Windows targets); imported orgs trust its publisher instead of auditing; replace with an audit or imported audit."
+
+[[exemptions.windows-targets]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_aarch64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_aarch64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_i686_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_i686_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_i686_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_gnu]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_gnullvm]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.windows_x86_64_msvc]]
+version = "0.52.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.winnow]]
+version = "1.0.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.writeable]]
+version = "0.6.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.yoke]]
+version = "0.8.3"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.yoke-derive]]
+version = "0.8.4"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.zerofrom]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.zerofrom-derive]]
+version = "0.1.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.zeroize]]
 version = "1.9.1"
@@ -611,6 +1106,21 @@ notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by 
 version = "1.5.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-13: new in the fuzz graph with the human-code pairing harness (CPace from pakery, through the unaudited-code-pairing feature; docs/adr/0002-cpace.md); replace with an audit or imported audit."
+
+[[exemptions.zerotrie]]
+version = "0.2.5"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.zerovec]]
+version = "0.11.8"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
+
+[[exemptions.zerovec-derive]]
+version = "0.11.6"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for the ffi_commands fuzz target (the running core through todoke-ffi); the root store records this crate's review status; replace with an audit or imported audit."
 
 [[exemptions.zmij]]
 version = "1.0.23"

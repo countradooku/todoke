@@ -18,8 +18,10 @@
 #   pairing) and `insecure-content-without-accept` (seals and opens content
 #   without a signed Accept, bypassing the PROTOCOL §7.2 consent gate; used
 #   only by benchmarks), or Snow's `risky-raw-split` (traffic-key export, used
-#   only by the offline fixture generator), and todoke-desktop's `mock` (a
-#   scripted core and GPUI test support, for screenshots). Under resolver 2/3, dev-dependency features are only
+#   only by the offline fixture generator), todoke-desktop's `mock` (a
+#   scripted core and GPUI test support, for screenshots), and todoke-ffi's
+#   `unaudited-dev` and `test-support` (sessions, and loopback discovery, in
+#   the binding tests). Under resolver 2/3, dev-dependency features are only
 #   unified into builds of targets that need them (Cargo book, "Feature
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
@@ -87,6 +89,8 @@ forbidden_features=(
     "snow:risky-raw-split"
     "todoke-core:unaudited-dev"
     "todoke-desktop:mock"
+    "todoke-ffi:unaudited-dev"
+    "todoke-ffi:test-support"
 )
 
 # Features the root workspace may not enable even through dev-dependencies.

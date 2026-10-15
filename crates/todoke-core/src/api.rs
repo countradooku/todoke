@@ -335,6 +335,10 @@ pub enum KeyProtection {
     SecretService,
     /// The XDG secret portal (Flatpak).
     Portal,
+    /// The Android Keystore, in a `StrongBox` security chip.
+    StrongBox,
+    /// The Android Keystore, in the trusted execution environment.
+    Tee,
 }
 
 impl KeyProtection {
@@ -349,6 +353,8 @@ impl KeyProtection {
             Self::Tpm => "Windows Data Protection, wrapped by the TPM",
             Self::SecretService => "the Secret Service (your keyring)",
             Self::Portal => "the desktop's secret portal",
+            Self::StrongBox => "Android Keystore, in StrongBox",
+            Self::Tee => "Android Keystore, in the trusted execution environment",
         }
     }
 }

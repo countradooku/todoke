@@ -27,6 +27,9 @@ todoke-fs = { path = "../crates/todoke-fs", version = "0.1.0" }
 # The mDNS sighting check (no gate feature; no socket is opened).
 todoke-discovery = { path = "../crates/todoke-discovery", version = "0.1.0" }
 todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0", default-features = false }
+# The binding's boundary under random command sequences: a core runs, which
+# needs development sessions (PROTOCOL §16), in a scratch profile.
+todoke-ffi = { path = "../crates/todoke-ffi", version = "0.1.0", features = ["unaudited-dev"] }
 
 [[bin]]
 name = "proto_device_binding"
@@ -237,3 +240,11 @@ path = "fuzz_targets/proto_relay_control.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "ffi_commands"
+path = "fuzz_targets/ffi_commands.rs"
+test = false
+doc = false
+bench = false
+

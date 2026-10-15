@@ -1,0 +1,17 @@
+{
+  "name": "todoke-binding-tests",
+  "private": true,
+  "description": "Smoke tests of the TypeScript bindings (BoltFFI's npm package of todoke-ffi), with the compiler and BoltFFI runtime the pack type-checks against (pinned to BoltFFI 0.31.1).",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test \"typescript/tests/*.test.ts\""
+  },
+  "devDependencies": {
+    "@boltffi/runtime": "0.31.1",
+    "@types/node": "24.19.2",
+    "typescript": "5.9.3"
+  }
+}
