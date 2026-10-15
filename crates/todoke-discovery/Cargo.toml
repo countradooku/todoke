@@ -23,11 +23,21 @@ todoke-transport.workspace = true
 getrandom.workspace = true
 
 # mDNS (§9). Without the default `logging` feature, so nothing it does is
-# logged; `async` for awaiting browser events.
-[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# logged; `async` for awaiting browser events. Not on iOS: raw multicast
+# needs Apple's restricted entitlement there (Bonjour below instead).
+[target.'cfg(not(any(target_family = "wasm", target_os = "ios")))'.dependencies]
 mdns-sd = { version = "=0.21.5", default-features = false }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 # The bounded queue between the browser thread and async callers.
 tokio = { workspace = true, features = ["sync"] }
+
+# §9 through the system's Bonjour (mDNSResponder) on Apple platforms, and
+# the interface addresses its host records name (already in the graph
+# through mdns-sd).
+[target.'cfg(target_vendor = "apple")'.dependencies]
+todoke-sys-macos.workspace = true
+if-addrs = "=0.15.0"
 
 [dev-dependencies]
 proptest.workspace = true

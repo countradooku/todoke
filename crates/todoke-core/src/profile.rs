@@ -187,7 +187,9 @@ impl Profile {
         now: UnixTime,
     ) -> Result<Self, ProfileError> {
         private_dir(dir)?;
-        let key_bytes = source.storage_key().map_err(|error| ProfileError::storage_key(&error))?;
+        let key_bytes = source
+            .storage_key()
+            .map_err(|error| ProfileError::storage_key(&error))?;
         let sealer = || SoftwareSealer::new(StorageKey::from_bytes(Zeroizing::new(*key_bytes)));
         let mut keys = SoftwareKeyStore::open(sealer(), FileStorage::new(dir.join("keys.bin")))
             .map_err(|_| ProfileError::Corrupt("keys.bin"))?;

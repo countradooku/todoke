@@ -10,7 +10,9 @@ use todoke_crypto::discovery::DiscoveryTable;
 use todoke_crypto::identity::{Ed25519PublicKey, SoftwareSealer, StorageKey};
 use todoke_crypto::pairing::{HumanCode, PairingOffers, QrPayload, UnauditedCodePairing};
 use todoke_crypto::session::{Session, SessionMode, Timer as _, UnauditedSuite0001};
-use todoke_discovery::{Advertiser, Directory, Mdns, OsRandom};
+use todoke_discovery::{Advertiser, Directory, OsRandom};
+
+use crate::discovery::Mdns;
 use todoke_fs::dest::DirDestination;
 use todoke_fs::{FsSink, FsSource, Preparer, SharedSink, SinkConfig};
 use todoke_proto::discovery::DISCOVERY_TOKEN_LEN;
@@ -278,9 +280,9 @@ impl State {
         // The private state directory first: a key file goes in it.
         crate::profile::private_dir(&config.state_dir).map_err(StartError::Profile)?;
         // Asked once: a platform store may cost a round trip (or a prompt).
-        let key = key_source
-            .storage_key()
-            .map_err(|error| StartError::Profile(crate::profile::ProfileError::storage_key(&error)))?;
+        let key = key_source.storage_key().map_err(|error| {
+            StartError::Profile(crate::profile::ProfileError::storage_key(&error))
+        })?;
         let key_protection = key_source.protection();
         let fetched = crate::storage_key::Fetched(Zeroizing::new(*key));
         let profile =

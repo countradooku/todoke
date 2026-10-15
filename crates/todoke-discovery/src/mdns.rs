@@ -34,34 +34,19 @@ use todoke_transport::LanPolicy;
 use todoke_transport::policy::{MIN_PEER_PORT, is_local_network};
 use tokio::sync::mpsc;
 
-use crate::advertise::{Advertisement, Plan, STRANGER_ROTATION};
+use crate::advertise::{Advertisement, Plan};
+pub use crate::backend::{MdnsError, STRANGER_MAX};
 use crate::directory::{Directory, Observed};
 use crate::sighting::Sighting;
 
 /// How often the browser starts afresh and verifies what it found.
 pub const REFRESH: Duration = Duration::from_secs(50);
-/// The longest a stranger advertisement stays registered, whatever plans
-/// the caller applies: one rotation and some slack (§9).
-pub const STRANGER_MAX: Duration = Duration::from_secs(STRANGER_ROTATION.as_secs() + 10);
 /// Checked events queued for the caller; more are dropped.
 const QUEUE: usize = 256;
 /// Instances whose liveness is verified at each refresh (most recent).
 const VERIFIED: usize = 64;
 /// How long the thread waits for an event before its periodic checks.
 const POLL: Duration = Duration::from_millis(250);
-
-/// An mDNS failure; the daemon's own message is not kept (it may name
-/// addresses or instances).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MdnsError;
-
-impl fmt::Display for MdnsError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("mDNS failed")
-    }
-}
-
-impl std::error::Error for MdnsError {}
 
 impl From<mdns_sd::Error> for MdnsError {
     fn from(_: mdns_sd::Error) -> Self {
