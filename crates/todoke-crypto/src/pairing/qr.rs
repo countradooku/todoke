@@ -8,12 +8,14 @@
 
 use core::fmt;
 
+use todoke_proto::discovery::DISCOVERY_TOKEN_LEN;
 use todoke_proto::identity::KEM_STATIC_LEN;
 use todoke_proto::session::{HYBRID_SUITE, PROTOCOL_VERSION};
 use todoke_proto::time::UnixTime;
 use zeroize::Zeroizing;
 
 use super::base45;
+use crate::discovery::{DiscoveryError, hmac_blake3_token};
 use crate::identity::binding::{kem_static_is_valid, noise_static_is_valid};
 use crate::identity::{CLOCK_SKEW_SECONDS, Ed25519PublicKey};
 use crate::session::kdf;
@@ -34,6 +36,11 @@ const _: () = assert!(QR_TEXT_LEN == 1975);
 const _: () = assert!(4 + 2 + 2 + 16 + 8 + 32 + 32 + KEM_STATIC_LEN + 32 == QR_PAYLOAD_LEN);
 
 const RENDEZVOUS_INFO: &[u8] = b"todoke/v1/pairing-rendezvous\0";
+const STRANGER_INFO: &[u8] = b"todoke/v1/qr-stranger\0";
+/// Seconds per QR stranger token: it rotates at each minute boundary (§9).
+pub const QR_STRANGER_MINUTE: u64 = 60;
+/// Minutes a scanner tests on each side of its own: the §1 clock skew.
+const STRANGER_SKEW_MINUTES: u64 = CLOCK_SKEW_SECONDS / QR_STRANGER_MINUTE;
 
 /// Why a QR payload or text was rejected. Carries no payload bytes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -101,6 +108,80 @@ impl RendezvousToken {
 impl fmt::Debug for RendezvousToken {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("RendezvousToken([REDACTED])")
+    }
+}
+
+/// The key behind a QR offer's stranger tokens (§9):
+/// `HKDF(pairing_id, one_time_psk, "todoke/v1/qr-stranger\0", 32)`.
+///
+/// The displayer advertises `HMAC-BLAKE3(key, minute:u64)[..8]` while the
+/// QR is shown; the scanner dials only advertisements that match. A match
+/// is a candidate filter, not authentication. Derived from the PSK, so it
+/// is redacted in `Debug` and zeroized on drop.
+pub struct QrStrangerKey(Zeroizing<[u8; 32]>);
+
+impl QrStrangerKey {
+    /// The stranger token for `minute` (`floor(unix_time / 60)`).
+    ///
+    /// # Errors
+    ///
+    /// [`DiscoveryError`] if the HMAC fails, which its fixed key length
+    /// rules out.
+    pub fn token(&self, minute: u64) -> Result<[u8; DISCOVERY_TOKEN_LEN], DiscoveryError> {
+        hmac_blake3_token(&self.0, minute)
+    }
+
+    /// Whether `token` is this offer's for a minute within the §1 clock
+    /// skew of `now`'s (-2..+2, bounded at zero).
+    #[must_use]
+    pub fn matches(&self, token: &[u8; DISCOVERY_TOKEN_LEN], now: UnixTime) -> bool {
+        let minute = now.seconds() / QR_STRANGER_MINUTE;
+        (minute.saturating_sub(STRANGER_SKEW_MINUTES)
+            ..=minute.saturating_add(STRANGER_SKEW_MINUTES))
+            .any(|minute| self.token(minute).is_ok_and(|ours| ours == *token))
+    }
+
+    /// The tokens to advertise from the minute of `from` through the minute
+    /// of `until`, for the displayer's advertiser, which then holds no key.
+    ///
+    /// # Errors
+    ///
+    /// [`DiscoveryError`] if a derivation fails.
+    pub fn schedule(
+        &self,
+        from: UnixTime,
+        until: UnixTime,
+    ) -> Result<QrStrangerTokens, DiscoveryError> {
+        let first = from.seconds() / QR_STRANGER_MINUTE;
+        let last = until.seconds() / QR_STRANGER_MINUTE;
+        let tokens = (first..=last)
+            .map(|minute| self.token(minute))
+            .collect::<Result<_, _>>()?;
+        Ok(QrStrangerTokens { first, tokens })
+    }
+}
+
+impl fmt::Debug for QrStrangerKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("QrStrangerKey([REDACTED])")
+    }
+}
+
+/// A shown QR offer's stranger tokens, one per minute over its lifetime
+/// (§9). They are advertised in turn, so they are no secret.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct QrStrangerTokens {
+    first: u64,
+    tokens: Vec<[u8; DISCOVERY_TOKEN_LEN]>,
+}
+
+impl QrStrangerTokens {
+    /// The token for the minute of `now`, or `None` outside the offer's
+    /// minutes (then nothing is advertised).
+    #[must_use]
+    pub fn at(&self, now: UnixTime) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
+        let offset = (now.seconds() / QR_STRANGER_MINUTE).checked_sub(self.first)?;
+        self.tokens.get(usize::try_from(offset).ok()?).copied()
     }
 }
 
@@ -302,6 +383,20 @@ impl QrPayload {
         kdf::hkdf_sha256(&self.pairing_id, self.psk.as_slice(), RENDEZVOUS_INFO)
             .map(RendezvousToken)
             .map_err(|_| QrRendezvousError)
+    }
+
+    /// The key behind this offer's stranger tokens (§9).
+    ///
+    /// # Errors
+    ///
+    /// [`DiscoveryError`] if the derivation fails inside libcrux, which the
+    /// fixed lengths rule out.
+    pub fn stranger_key(&self) -> Result<QrStrangerKey, DiscoveryError> {
+        Ok(QrStrangerKey(kdf::hkdf_sha256(
+            &self.pairing_id,
+            self.psk.as_slice(),
+            STRANGER_INFO,
+        )?))
     }
 
     pub(crate) fn psk(&self) -> &Zeroizing<[u8; 32]> {

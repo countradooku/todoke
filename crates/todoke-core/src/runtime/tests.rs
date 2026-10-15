@@ -28,7 +28,7 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
         relay_presence_seconds: 300,
         hidden: false,
         history_days: 30,
-        key_storage: crate::config::KeyStorage::Auto,
+        key_storage: crate::config::KeyStorage::File,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
@@ -291,6 +291,150 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         Response::Error { .. }
     ));
     let _ = ErrorCode::State;
+    Ok(())
+}
+
+/// How many strangers `core` sees.
+async fn strangers_seen(core: &Core) -> usize {
+    match core.request(Request::Strangers).await {
+        Response::Strangers(list) => list.len(),
+        _ => 0,
+    }
+}
+
+/// Two QR pairings in one room at once (§3.1, §9): each scanner sees the
+/// other displayer first, recognises its own by the QR's stranger token,
+/// and pairs with it.
+#[tokio::test]
+async fn two_qr_pairings_in_one_room_reach_their_own_displayers() -> AnyResult<()> {
+    let scratch = Scratch::new("two-qr-pairings")?;
+    let discovery = scratch.0.join("discovery");
+    let first = device(&scratch.0, "first", &discovery)?;
+    let second = device(&scratch.0, "second", &discovery)?;
+    let first_scanner = device(&scratch.0, "first-scanner", &discovery)?;
+    let second_scanner = device(&scratch.0, "second-scanner", &discovery)?;
+    let (first_hex, second_hex) = (device_hex(&first).await?, device_hex(&second).await?);
+
+    // The second displayer shows its QR first and both scanners see it.
+    let Response::Qr {
+        text: second_qr, ..
+    } = second.request(Request::PairShowQr).await
+    else {
+        return Err("no second QR offer".into());
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while strangers_seen(&first_scanner).await == 0
+            || strangers_seen(&second_scanner).await == 0
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await?;
+    // The first shows its QR, and both are scanned at once, before
+    // anyone could see the first's advertisement.
+    let Response::Qr { text: first_qr, .. } = first.request(Request::PairShowQr).await else {
+        return Err("no first QR offer".into());
+    };
+    let (first_paired, second_paired) = tokio::join!(
+        first_scanner.request(Request::PairScanQr { text: first_qr }),
+        second_scanner.request(Request::PairScanQr { text: second_qr }),
+    );
+    assert_eq!(
+        first_paired,
+        Response::Paired {
+            contact: first_hex.clone()
+        }
+    );
+    assert_eq!(
+        second_paired,
+        Response::Paired {
+            contact: second_hex.clone()
+        }
+    );
+    // Each displayer paired with its own scanner only.
+    for (displayer, scanner) in [(&first, &first_scanner), (&second, &second_scanner)] {
+        let Response::Contacts(contacts) = displayer.request(Request::Contacts).await else {
+            return Err("contacts".into());
+        };
+        let devices: Vec<_> = contacts.into_iter().map(|c| c.device).collect();
+        assert_eq!(devices, vec![device_hex(scanner).await?]);
+    }
+    Ok(())
+}
+
+/// A listener that counts the connections it is offered and drops them.
+async fn decoy() -> AnyResult<(u16, std::sync::Arc<core::sync::atomic::AtomicUsize>)> {
+    let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await?;
+    let port = listener.local_addr()?.port();
+    let dialed = std::sync::Arc::new(core::sync::atomic::AtomicUsize::new(0));
+    let count = std::sync::Arc::clone(&dialed);
+    tokio::spawn(async move {
+        while listener.accept().await.is_ok() {
+            count.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+        }
+    });
+    Ok((port, dialed))
+}
+
+/// §9: a QR scan sends its `ClientHello` only to advertisements carrying
+/// the QR's stranger token. A stranger with another token is never
+/// dialed; one that copied the displayer's token is dialed at most once
+/// and cannot keep the scanner from its displayer.
+#[tokio::test]
+async fn a_qr_scan_dials_only_its_displayers_token() -> AnyResult<()> {
+    let scratch = Scratch::new("qr-token-only")?;
+    let discovery = scratch.0.join("discovery");
+    let displayer = device(&scratch.0, "displayer", &discovery)?;
+    let scanner = device(&scratch.0, "scanner", &discovery)?;
+    let (other_port, other_dialed) = decoy().await?;
+    let (copy_port, copy_dialed) = decoy().await?;
+    let other = todoke_proto::discovery::DiscoveryRecord::new(
+        todoke_proto::discovery::DiscoveryMode::Stranger,
+        todoke_proto::discovery::Epoch::of(running::wall()),
+        [7; 8],
+    )?;
+    std::fs::write(
+        discovery.join("0123456789abcdef.rec"),
+        format!("{other_port} {}", other.txt_value()),
+    )?;
+    let Response::Qr { text, .. } = displayer.request(Request::PairShowQr).await else {
+        return Err("no QR offer".into());
+    };
+    // The displayer's own record, copied under another label and port.
+    let shown = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            for entry in std::fs::read_dir(&discovery)?.filter_map(Result::ok) {
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                if name.ends_with(".rec") && name != "0123456789abcdef.rec" {
+                    let contents = std::fs::read_to_string(entry.path())?;
+                    if let Some((_, value)) = contents.split_once(' ') {
+                        return Ok::<_, std::io::Error>(value.to_owned());
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await??;
+    std::fs::write(
+        discovery.join("fedcba9876543210.rec"),
+        format!("{copy_port} {shown}"),
+    )?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while strangers_seen(&scanner).await < 2 {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await?;
+    assert_eq!(
+        scanner.request(Request::PairScanQr { text }).await,
+        Response::Paired {
+            contact: device_hex(&displayer).await?
+        }
+    );
+    assert_eq!(other_dialed.load(core::sync::atomic::Ordering::SeqCst), 0);
+    assert!(copy_dialed.load(core::sync::atomic::Ordering::SeqCst) <= 1);
     Ok(())
 }
 

@@ -81,6 +81,59 @@ fn committed_vector_round_trips_byte_for_byte() -> TestResult {
     Ok(())
 }
 
+/// §9: the stranger key and the token of every fixture minute; a scanner
+/// matches it within the §1 120-second skew only; the displayer's
+/// schedule covers exactly the offer's minutes.
+#[test]
+fn committed_vector_stranger_tokens() -> TestResult {
+    let vector = load("qr-payload.json")?;
+    let payload = QrPayload::from_text(&fixture_text()?, at(CREATED)?)?;
+    assert_eq!(
+        hex_at(&vector, "/qr_stranger_info_hex")?.as_slice(),
+        STRANGER_INFO
+    );
+    let key = payload.stranger_key()?;
+    assert_eq!(
+        &*key.0,
+        &hex_array_at::<32>(&vector, "/qr_stranger_key_hex")?
+    );
+    assert_eq!(format!("{key:?}"), "QrStrangerKey([REDACTED])");
+    let cases = json_at(&vector, "/qr_stranger_tokens")?
+        .as_array()
+        .ok_or("qr_stranger_tokens")?;
+    assert_eq!(cases.len(), 4);
+    let schedule = key.schedule(at(CREATED)?, at(EXPIRES)?)?;
+    for case in cases {
+        let seconds = case["unix_seconds"].as_u64().ok_or("unix_seconds")?;
+        let minute = case["minute"].as_u64().ok_or("minute")?;
+        let token = hex_array_at::<8>(case, "/token_hex")?;
+        assert_eq!(minute, seconds / QR_STRANGER_MINUTE);
+        assert_eq!(key.token(minute)?, token);
+        assert_eq!(schedule.at(at(seconds)?), Some(token));
+        let minute_start = minute * QR_STRANGER_MINUTE;
+        let minute_end = minute_start + QR_STRANGER_MINUTE - 1;
+        for skew in [0, 60, CLOCK_SKEW_SECONDS] {
+            assert!(key.matches(&token, at(seconds + skew)?));
+            assert!(key.matches(&token, at(seconds - skew)?));
+        }
+        // Every scanner clock within 120 seconds of the displayer's.
+        assert!(key.matches(&token, at(minute_start - CLOCK_SKEW_SECONDS)?));
+        assert!(key.matches(&token, at(minute_end + CLOCK_SKEW_SECONDS)?));
+        assert!(!key.matches(&token, at(minute_start - 3 * QR_STRANGER_MINUTE)?));
+        assert!(!key.matches(&token, at(minute_end + 2 * QR_STRANGER_MINUTE + 1)?));
+    }
+    // Outside the offer's minutes the displayer advertises nothing.
+    let first = CREATED / QR_STRANGER_MINUTE * QR_STRANGER_MINUTE;
+    assert_eq!(schedule.at(at(first - 1)?), None);
+    assert_eq!(schedule.at(at(EXPIRES + QR_STRANGER_MINUTE)?), None);
+    // Another offer's tokens do not match.
+    let mut other = fixture_binary()?;
+    other[8] ^= 1;
+    let other = QrPayload::from_bytes(&other, at(CREATED)?)?.stranger_key()?;
+    assert!(!other.matches(&key.token(CREATED / QR_STRANGER_MINUTE)?, at(CREATED)?));
+    Ok(())
+}
+
 /// The fixture's remaining fields: its header values match the runtime's
 /// constants and the payload bytes, and each public key is the one its
 /// published seed derives (Ed25519 and the device ID through the runtime's

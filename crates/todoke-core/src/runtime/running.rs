@@ -2,7 +2,7 @@
 
 use core::cell::{Cell, RefCell};
 use core::time::Duration;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::net::SocketAddr;
 use std::rc::Rc;
 
@@ -56,7 +56,11 @@ const RETRY_MAX: Duration = Duration::from_secs(60);
 const SESSION_LASTED: Duration = Duration::from_secs(30);
 /// How long the core waits after a failed accept before the next.
 const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
-/// How many stranger devices a QR scan tries.
+/// How long a QR scan looks among the nearby strangers for the device
+/// showing its QR before it turns to the relay.
+const QR_SCAN_WINDOW: Duration = Duration::from_secs(10);
+/// How many dials one QR scan makes at most to advertisements carrying
+/// its QR's stranger token: more than one only if the token was copied.
 const MAX_QR_TARGETS: usize = 4;
 /// Entries listed by one `Offers` answer: four offers of §13's 10000.
 const MAX_LISTED_ENTRIES: usize = 40_000;
@@ -854,11 +858,20 @@ impl State {
         let Ok(payload) = self.offers.create_qr(&local, now, self.mono()) else {
             return Response::error(ErrorCode::Pairing, "no pairing offer could be created");
         };
+        // Its scanner recognises it by the QR's stranger tokens (§9).
+        let Ok(tokens) = payload
+            .stranger_key()
+            .and_then(|key| key.schedule(now, payload.expires_at()))
+        else {
+            self.offers.cancel_all();
+            return Response::error(ErrorCode::Internal, "no pairing offer could be created");
+        };
         if !self
             .advertiser
             .borrow_mut()
-            .enable_stranger(now, self.mono(), &mut OsRandom)
+            .enable_qr_stranger(tokens, now, self.mono(), &mut OsRandom)
         {
+            self.offers.cancel_all();
             return Response::error(ErrorCode::Internal, "OS randomness is unavailable");
         }
         self.pairing.set(Some(Pairing::Qr));
@@ -897,23 +910,9 @@ impl State {
             return Response::error(ErrorCode::Pairing, "not a valid, unexpired pairing code");
         };
         self.strangers_until.set(self.mono() + STRANGER_BROWSING);
-        // Without the LAN there is nobody nearby to wait for.
-        let targets = if self.listener.is_some() {
-            self.wait_for_strangers().await
-        } else {
-            Vec::new()
-        };
-        for (_, candidates) in targets.into_iter().take(MAX_QR_TARGETS) {
-            let Ok(link) = todoke_transport::race::race(
-                &self.connector,
-                &candidates,
-                &todoke_transport::RaceConfig::default(),
-            )
-            .await
-            else {
-                continue;
-            };
-            match self.scan_on(link, &payload).await {
+        // Without the LAN there is nobody nearby to look for.
+        if self.listener.is_some() {
+            match self.scan_nearby(&payload).await {
                 Ok(peer) => return self.paired_with(peer).await,
                 Err(Some(response)) => return response,
                 Err(None) => {}
@@ -927,6 +926,74 @@ impl State {
             }
         }
         Response::error(ErrorCode::Pairing, "no device accepted the offer")
+    }
+
+    /// QR pairing with the nearby strangers: only advertisements carrying
+    /// the QR's stranger token (§9) get its `ClientHello`, so pairings shown
+    /// side by side never reach each other's displayers (§3.1). The scan
+    /// looks for [`QR_SCAN_WINDOW`], since the displayer may not be seen
+    /// yet. A token is a candidate filter, not authentication: anyone can
+    /// copy it, so each address under it is dialed once (the handshake
+    /// pins the QR's keys), at most [`MAX_QR_TARGETS`] times in all.
+    async fn scan_nearby(
+        self: &Rc<Self>,
+        payload: &QrPayload,
+    ) -> Result<Ed25519PublicKey, Option<Response>> {
+        let Ok(key) = payload.stranger_key() else {
+            return Err(None);
+        };
+        let deadline = self.mono() + QR_SCAN_WINDOW;
+        let mut dialed = HashSet::new();
+        let mut dials = 0;
+        loop {
+            let now = wall();
+            for (token, candidates) in self.strangers() {
+                if !key.matches(&token, now) {
+                    continue;
+                }
+                let fresh: Vec<Candidate> = candidates
+                    .into_iter()
+                    .filter(|candidate| !dialed.contains(candidate))
+                    .collect();
+                if fresh.is_empty() {
+                    continue;
+                }
+                if dials >= MAX_QR_TARGETS {
+                    return Err(None);
+                }
+                dials += 1;
+                let Ok(link) = todoke_transport::race::race(
+                    &self.connector,
+                    &fresh,
+                    &todoke_transport::RaceConfig::default(),
+                )
+                .await
+                else {
+                    dialed.extend(fresh);
+                    continue;
+                };
+                // Only the address that answered is done: under a copied
+                // token, the others get a dial of their own.
+                let remote = link.info().remote();
+                if let Some(answered) = fresh
+                    .iter()
+                    .find(|candidate| Some(candidate.address()) == remote)
+                {
+                    dialed.insert(*answered);
+                } else {
+                    dialed.extend(fresh);
+                }
+                match self.scan_on(link, payload).await {
+                    Err(None) => {}
+                    done => return done,
+                }
+            }
+            if self.mono() >= deadline {
+                return Err(None);
+            }
+            self.tick();
+            tokio::time::sleep(TICK).await;
+        }
     }
 
     /// QR pairing as the scanner (the initiator, §4) on `link`: the new
@@ -1026,18 +1093,22 @@ impl State {
         }
     }
 
+    /// The strangers seen now and where to reach them.
+    fn strangers(&self) -> Vec<([u8; DISCOVERY_TOKEN_LEN], Vec<Candidate>)> {
+        self.directory
+            .borrow()
+            .strangers(self.mono())
+            .into_iter()
+            .map(|(token, reachable)| (token, reachable.candidates()))
+            .collect()
+    }
+
     /// The strangers seen, waiting a few ticks for answers if none yet.
     async fn wait_for_strangers(
         self: &Rc<Self>,
     ) -> Vec<([u8; DISCOVERY_TOKEN_LEN], Vec<Candidate>)> {
         for _ in 0..20 {
-            let found: Vec<_> = self
-                .directory
-                .borrow()
-                .strangers(self.mono())
-                .into_iter()
-                .map(|(token, reachable)| (token, reachable.candidates()))
-                .collect();
+            let found = self.strangers();
             if !found.is_empty() {
                 return found;
             }

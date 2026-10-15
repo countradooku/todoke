@@ -11,7 +11,7 @@ use todoke_crypto::identity::{
     MemoryStorage, SoftwareKeyStore, SoftwareSealer, StorageKey, VerifiedDeviceBinding,
     issue_device_binding,
 };
-use todoke_crypto::pairing::{PairingOffers, QrPayload};
+use todoke_crypto::pairing::{PairingOffers, QrPayload, QrStrangerKey, QrStrangerTokens};
 use todoke_crypto::session::{
     Accepted, IncomingSession, LocalIdentity, NoiseStaticKey, Session, UnauditedSuite0001,
 };
@@ -88,6 +88,20 @@ impl Device {
     pub(crate) fn table(&self, wall: u64) -> AnyResult<DiscoveryTable> {
         Ok(self.store.discovery_table(time(wall)?)?)
     }
+}
+
+/// A QR offer shown at `wall` by a device without contacts: the scanner's
+/// stranger key, the displayer's token schedule, and its (empty) table.
+pub(crate) fn qr_stranger(
+    wall: u64,
+) -> AnyResult<(QrStrangerKey, QrStrangerTokens, DiscoveryTable)> {
+    let device = Device::new(0x43)?;
+    let at = time(wall)?;
+    let payload =
+        PairingOffers::new().create_qr(&device.local()?, at, core::time::Duration::ZERO)?;
+    let key = payload.stranger_key()?;
+    let tokens = key.schedule(at, payload.expires_at())?;
+    Ok((key, tokens, device.table(wall)?))
 }
 
 /// Alice scans Bob's QR code; both end up with each other as contacts.

@@ -8,8 +8,10 @@
 //!   every committed session (a new table). The instance label is fresh
 //!   random for every epoch, and never a device name.
 //! - **Stranger:** only after an explicit local enable, for at most
-//!   [`STRANGER_LIFETIME`], with a fresh random token and label every
-//!   [`STRANGER_ROTATION`]. It identifies nobody and is never a credential.
+//!   [`STRANGER_LIFETIME`], with a new token and a fresh random label every
+//!   [`STRANGER_ROTATION`]. For code pairing the token is random; while a
+//!   QR is shown it is the QR's token for the current minute, so only its
+//!   scanner recognises it. It identifies nobody and is never a credential.
 //!
 //! Randomness comes from the caller (the OS CSPRNG in production) so the
 //! schedule can be tested deterministically.
@@ -18,6 +20,7 @@ use core::time::Duration;
 
 use todoke_crypto::discovery::DiscoveryTable;
 use todoke_crypto::identity::Ed25519PublicKey;
+use todoke_crypto::pairing::QrStrangerTokens;
 use todoke_proto::discovery::{
     DISCOVERY_TOKEN_LEN, DiscoveryMode, DiscoveryRecord, Epoch, InstanceLabel,
 };
@@ -79,11 +82,21 @@ impl Plan {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Stranger {
     started: Duration,
     rotated: Duration,
     advertisement: Advertisement,
+    tokens: Tokens,
+}
+
+/// Where stranger tokens come from.
+#[derive(Clone, Debug)]
+enum Tokens {
+    /// Fresh random every [`STRANGER_ROTATION`] (code pairing).
+    Random,
+    /// The shown QR's token for each minute (§9).
+    Qr(QrStrangerTokens),
 }
 
 /// The advertising schedule. Times: `wall` is the trusted wall clock (for
@@ -101,18 +114,44 @@ impl Advertiser {
         Self::default()
     }
 
-    /// Starts stranger mode for [`STRANGER_LIFETIME`] (an explicit local
-    /// action, §9). Returns whether it started (it needs randomness).
+    /// Starts stranger mode with random tokens for [`STRANGER_LIFETIME`]
+    /// (an explicit local action, §9), for code pairing. Returns whether
+    /// it started (it needs randomness).
     pub fn enable_stranger(
         &mut self,
         wall: UnixTime,
         mono: Duration,
         random: &mut impl Random,
     ) -> bool {
-        self.stranger = stranger(wall, random).map(|advertisement| Stranger {
+        self.start_stranger(Tokens::Random, wall, mono, random)
+    }
+
+    /// Starts stranger mode for a shown QR (§9): each minute's token comes
+    /// from `tokens`, and stranger mode ends early when the wall clock
+    /// leaves the offer's minutes. Returns whether it started (it needs
+    /// randomness for the labels, and `wall` within the offer's minutes).
+    pub fn enable_qr_stranger(
+        &mut self,
+        tokens: QrStrangerTokens,
+        wall: UnixTime,
+        mono: Duration,
+        random: &mut impl Random,
+    ) -> bool {
+        self.start_stranger(Tokens::Qr(tokens), wall, mono, random)
+    }
+
+    fn start_stranger(
+        &mut self,
+        tokens: Tokens,
+        wall: UnixTime,
+        mono: Duration,
+        random: &mut impl Random,
+    ) -> bool {
+        self.stranger = stranger(&tokens, wall, random).map(|advertisement| Stranger {
             started: mono,
             rotated: mono,
             advertisement,
+            tokens,
         });
         self.stranger.is_some()
     }
@@ -191,30 +230,35 @@ impl Advertiser {
         mono: Duration,
         random: &mut impl Random,
     ) -> Option<Advertisement> {
-        let current = self.stranger?;
+        let current = self.stranger.as_mut()?;
         if mono.saturating_sub(current.started) >= STRANGER_LIFETIME {
             self.stranger = None;
             return None;
         }
-        if mono.saturating_sub(current.rotated) >= STRANGER_ROTATION {
-            let Some(advertisement) = stranger(wall, random) else {
-                // No randomness: stop rather than keep a stale token.
+        let due = match &current.tokens {
+            Tokens::Random => mono.saturating_sub(current.rotated) >= STRANGER_ROTATION,
+            // At each minute boundary (§9).
+            Tokens::Qr(tokens) => tokens.at(wall) != Some(*current.advertisement.record.token()),
+        };
+        if due {
+            let Some(advertisement) = stranger(&current.tokens, wall, random) else {
+                // No randomness, or past the QR's minutes: stop rather
+                // than keep a stale token.
                 self.stranger = None;
                 return None;
             };
-            self.stranger = Some(Stranger {
-                rotated: mono,
-                advertisement,
-                ..current
-            });
-            return Some(advertisement);
+            current.rotated = mono;
+            current.advertisement = advertisement;
         }
         Some(current.advertisement)
     }
 }
 
-fn stranger(wall: UnixTime, random: &mut impl Random) -> Option<Advertisement> {
-    let token: [u8; DISCOVERY_TOKEN_LEN] = random.bytes()?;
+fn stranger(tokens: &Tokens, wall: UnixTime, random: &mut impl Random) -> Option<Advertisement> {
+    let token: [u8; DISCOVERY_TOKEN_LEN] = match tokens {
+        Tokens::Random => random.bytes()?,
+        Tokens::Qr(tokens) => tokens.at(wall)?,
+    };
     let label = InstanceLabel::from_random(random.bytes()?).ok()?;
     let record = DiscoveryRecord::new(DiscoveryMode::Stranger, Epoch::of(wall), token).ok()?;
     Some(Advertisement { label, record })

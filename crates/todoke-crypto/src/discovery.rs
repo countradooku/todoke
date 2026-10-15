@@ -69,6 +69,22 @@ impl From<KdfError> for DiscoveryError {
     }
 }
 
+/// `HMAC-BLAKE3(key, counter:u64)[..8]`: RFC 2104 HMAC over unkeyed
+/// BLAKE3 (64-byte block, 32-byte output), not BLAKE3 keyed mode (§1).
+/// The paired token (§9, `counter` the epoch) and the QR stranger token
+/// (`counter` the minute).
+pub(crate) fn hmac_blake3_token(
+    key: &[u8; 32],
+    counter: u64,
+) -> Result<[u8; DISCOVERY_TOKEN_LEN], DiscoveryError> {
+    let mut mac = SimpleHmac::<blake3::Hasher>::new_from_slice(key).map_err(|_| DiscoveryError)?;
+    mac.update(&counter.to_be_bytes());
+    let tag = Zeroizing::new(<[u8; 32]>::from(mac.finalize().into_bytes()));
+    let mut token = [0; DISCOVERY_TOKEN_LEN];
+    token.copy_from_slice(&tag[..DISCOVERY_TOKEN_LEN]);
+    Ok(token)
+}
+
 /// One contact's discovery keys, held only while a table is built.
 struct PairKeys {
     pair_secret: Zeroizing<[u8; 32]>,
@@ -85,16 +101,9 @@ impl PairKeys {
         })
     }
 
-    /// `HMAC-BLAKE3(pair_key, epoch:u64)[..8]`: RFC 2104 HMAC over unkeyed
-    /// BLAKE3 (64-byte block, 32-byte output), not BLAKE3 keyed mode (§1).
+    /// `HMAC-BLAKE3(pair_key, epoch:u64)[..8]`.
     fn token(&self, epoch: Epoch) -> Result<[u8; DISCOVERY_TOKEN_LEN], DiscoveryError> {
-        let mut mac = SimpleHmac::<blake3::Hasher>::new_from_slice(self.pair_key.as_slice())
-            .map_err(|_| DiscoveryError)?;
-        mac.update(&epoch.get().to_be_bytes());
-        let tag = Zeroizing::new(<[u8; 32]>::from(mac.finalize().into_bytes()));
-        let mut token = [0; DISCOVERY_TOKEN_LEN];
-        token.copy_from_slice(&tag[..DISCOVERY_TOKEN_LEN]);
-        Ok(token)
+        hmac_blake3_token(&self.pair_key, epoch.get())
     }
 
     /// `HKDF(epoch:u64, pair_secret, "todoke/v1/rendezvous\0", 32)`.

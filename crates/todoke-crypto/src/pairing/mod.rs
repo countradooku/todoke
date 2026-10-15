@@ -97,8 +97,9 @@ pub use offers::{
     MAX_CONCURRENT_ATTEMPTS, MAX_OFFERS, OfferKind, OfferReservation, PairingOffers,
 };
 pub use qr::{
-    OFFER_LIFETIME_SECONDS, QR_MAGIC, QR_PAYLOAD_LEN, QR_TEXT_LEN, QR_TEXT_PREFIX, QrError,
-    QrPayload, QrRendezvousError, RendezvousToken,
+    OFFER_LIFETIME_SECONDS, QR_MAGIC, QR_PAYLOAD_LEN, QR_STRANGER_MINUTE, QR_TEXT_LEN,
+    QR_TEXT_PREFIX, QrError, QrPayload, QrRendezvousError, QrStrangerKey, QrStrangerTokens,
+    RendezvousToken,
 };
 
 /// Why a pairing step was refused. Carries no secret, token, or pairing ID.
