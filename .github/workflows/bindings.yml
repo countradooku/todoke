@@ -36,7 +36,7 @@ jobs:
       - name: Install the pinned toolchain and the Apple targets
         run: |
           rustup show
-          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin
       - name: Build the BoltFFI CLI (pinned, from source)
         run: bash scripts/ci/install-boltffi.sh
       # The host's slice, with development sessions: the tests start cores.

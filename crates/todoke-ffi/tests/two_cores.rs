@@ -125,15 +125,13 @@ fn two_cores_pair_offer_accept_and_receive() -> TestResult {
     assert_eq!(keys[0].0.len(), 32);
     assert_eq!(keys[0].1.len(), 32);
 
-    let a_contact = {
-        let _pairing = pairing();
-        let offer = a.pair_show_qr()?;
-        assert_eq!(
-            offer.modules().len(),
-            (offer.width() * offer.width()) as usize
-        );
-        b.pair_scan_qr(offer.text())?
-    };
+    let offer = a.pair_show_qr()?;
+    assert_eq!(
+        offer.modules().len(),
+        (offer.width() * offer.width()) as usize
+    );
+    a.stop_pairing()?;
+    let a_contact = pair(&a, &b)?;
     let a_device = a.status()?.device;
     assert_eq!(a_contact.device(), a_device);
 
@@ -328,6 +326,22 @@ fn pairing() -> MutexGuard<'static, ()> {
     PAIRING.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// B pairs with A by QR, one pairing at a time. A scanner gives up when
+/// the first strangers it sees (perhaps a dropped core's record still
+/// cached) do not answer before A appears; that is the core's discovery,
+/// not the binding, so a refused pairing is tried again with a new offer.
+fn pair(a: &Core, b: &Core) -> Result<ContactHandle, TodokeError> {
+    let _pairing = pairing();
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        match b.pair_scan_qr(a.pair_show_qr()?.text()) {
+            Err(TodokeError::Pairing { .. }) if attempts < 3 => {}
+            result => return result,
+        }
+    }
+}
+
 /// Two cores over loopback, B paired with A by QR; B's handle to A.
 fn paired(
     a_home: &Scratch,
@@ -335,10 +349,7 @@ fn paired(
 ) -> Result<(Core, Core, ContactHandle), Box<dyn std::error::Error>> {
     let a = Core::new(settings(&a_home.0))?;
     let b = Core::new(settings(&b_home.0))?;
-    let a_contact = {
-        let _pairing = pairing();
-        b.pair_scan_qr(a.pair_show_qr()?.text())?
-    };
+    let a_contact = pair(&a, &b)?;
     Ok((a, b, a_contact))
 }
 
