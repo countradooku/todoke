@@ -55,3 +55,23 @@ network; this was measured on one. Run the two-machine commands in
 README.md on a wired gigabit link and on a Wi-Fi 6 link, and add the
 results here with the machines, the network (switch or access point,
 channel width, signal), the revision, and three runs of each size.
+
+## Discovery matching
+
+**aarch64 (measured 2026-10-15).** Apple M5 Pro, 48 GB, macOS 27.0.1;
+rustc 1.99.0; revision `9764dc6` plus the `feat/discovery` benchmark
+changes; the discovery command in README.md, with no other heavy work
+running. Ranges are criterion's 95% confidence intervals:
+
+| Benchmark (1,000 contacts) | Time |
+| --- | --- |
+| table build (per epoch and per committed session) | 6.79–6.82 ms |
+| match a contact's record | 41.3–41.5 ns |
+| match an unknown record | 38.5–39.0 ns |
+| a whole sighting: check, match, store | 923–929 ns |
+
+Matching is one ordered-map lookup by token, so it hardly depends on the
+number of contacts. The table costs about 6.8 µs per contact: its pair
+keys, three tokens, three locators, and a rendezvous token. A device spends a
+few milliseconds every 15 minutes on 1,000 contacts, and about a
+microsecond per mDNS sighting.

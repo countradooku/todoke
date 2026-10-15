@@ -117,8 +117,9 @@ these:
 
 ## Consequences
 
-- Discovery of a device with many contacts takes up to three seconds per
-  contact on the peer's side. The core can skip discovery for a known peer
+- Discovery of a device with many contacts waits for its round: 2 to 4
+  seconds per available contact, in random order since P15
+  ([ADR 0013](0013-private-discovery.md)). The core can skip discovery for a known peer
   by racing its last known addresses directly: the handshake authenticates
   whatever answers.
 - Migration mid-transfer costs a new consent prompt on the receiver, so the

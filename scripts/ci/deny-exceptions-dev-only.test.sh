@@ -195,6 +195,30 @@ cargo metadata --offline --format-version 1 --manifest-path "$scratch/consent-de
 expect_manifest "content consent bypass in the root development graph" "$scratch/consent-dev/Cargo.toml" \
     "todoke-crypto feature insecure-content-without-accept is enabled in the root workspace's development graph"
 
+# A shipped crate enabling discovery tables built from raw pair PSKs (the
+# matching benchmark's `bench-support`, docs/adr/0013-private-discovery.md).
+workspace_copy "$scratch/bench-support"
+cat >> "$scratch/bench-support/crates/todoke-preview/Cargo.toml" <<'TOML'
+
+[dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["bench-support"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/bench-support/Cargo.toml" > /dev/null
+expect_manifest "raw-PSK discovery tables in a shipped graph" "$scratch/bench-support/Cargo.toml" \
+    'todoke-crypto feature bench-support is enabled outside dev-dependencies'
+
+# A workspace member enabling it for its own tests: feature unification would
+# hand raw-PSK tables to every shipped crate's tests.
+workspace_copy "$scratch/bench-support-dev"
+cat >> "$scratch/bench-support-dev/crates/todoke-preview/Cargo.toml" <<'TOML'
+
+[dev-dependencies]
+todoke-crypto = { path = "../todoke-crypto", version = "0.1.0", features = ["bench-support"] }
+TOML
+cargo metadata --offline --format-version 1 --manifest-path "$scratch/bench-support-dev/Cargo.toml" > /dev/null
+expect_manifest "raw-PSK discovery tables in the root development graph" "$scratch/bench-support-dev/Cargo.toml" \
+    "todoke-crypto feature bench-support is enabled in the root workspace's development graph"
+
 # A shipped crate enabling the desktop's mock core (screenshots only).
 workspace_copy "$scratch/desktop-mock"
 cat >> "$scratch/desktop-mock/crates/todoke-preview/Cargo.toml" <<'TOML'

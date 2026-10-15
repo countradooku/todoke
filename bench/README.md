@@ -110,6 +110,35 @@ must allow the port.
 
 Results: [RESULTS.md](RESULTS.md#lan).
 
+## Discovery matching (`benches/discovery.rs`)
+
+PROTOCOL §9, on the receiving device, with 1,000 contacts (the store holds
+1,024; P15's target is 1,000), each with a random pair PSK:
+
+- `discovery/1000-contacts/table-build`: the discovery table (each
+  contact's tokens and locators for the previous, current, and next
+  epochs, and its rendezvous token), built at every 15-minute epoch and
+  after every committed session.
+- `discovery/1000-contacts/match-contact`: one contact's record against
+  the table.
+- `discovery/1000-contacts/match-unknown`: a record with a random token,
+  which matches nobody (most of a busy network).
+- `discovery/1000-contacts/observe-sighting`: a whole sighting as mDNS
+  delivers it: the TXT string and address checks, the match, and storing
+  it in the directory.
+
+The tables come from `DiscoveryTable::from_pair_psks`, which only
+todoke-crypto's `bench-support` feature exposes (the guard keeps it out of
+every shipped graph).
+
+Run:
+
+```sh
+CARGO_BUILD_JOBS=4 cargo bench --manifest-path bench/Cargo.toml --locked --bench discovery
+```
+
+Results: [RESULTS.md](RESULTS.md#discovery-matching).
+
 ## Future measurements
 
 The eventual suite should also measure connection and consent latency,

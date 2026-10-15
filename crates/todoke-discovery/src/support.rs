@@ -192,8 +192,6 @@ async fn pair_into(alice: &mut Device, bob: &mut Device) -> AnyResult<()> {
 /// Discovery state of Alice and three contacts, built once per test binary
 /// (one QR pairing each) for the model-based property tests.
 pub(crate) struct Fixture {
-    /// Alice's device key.
-    pub(crate) alice: Ed25519PublicKey,
     /// Her contacts' device keys, in pairing order.
     pub(crate) contacts: Vec<Ed25519PublicKey>,
     /// The first second of each epoch in `tables`.
@@ -247,7 +245,6 @@ fn build_fixture() -> AnyResult<Fixture> {
         .mark_ratchet_uncertain(keys.first().ok_or("contact")?)?;
     let reduced = alice.table(WALL)?;
     Ok(Fixture {
-        alice: alice.key(),
         contacts: keys,
         walls,
         tables,

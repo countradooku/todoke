@@ -405,10 +405,10 @@ impl State {
             let table = self.table.borrow();
             let mut directory = self.directory.borrow_mut();
             directory.set_stranger_browsing(mono < self.strangers_until.get());
-            let mut plan =
-                self.advertiser
-                    .borrow_mut()
-                    .plan(&table, None, now, mono, &mut OsRandom);
+            let mut plan = self
+                .advertiser
+                .borrow_mut()
+                .plan(&table, now, mono, &mut OsRandom);
             if self.hidden.get() {
                 plan.paired = None;
             }
@@ -600,10 +600,10 @@ impl State {
     /// The stranger token this device advertises now.
     pub(super) fn stranger_token(&self) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
         let table = self.table.borrow();
-        let plan =
-            self.advertiser
-                .borrow_mut()
-                .plan(&table, None, wall(), self.mono(), &mut OsRandom);
+        let plan = self
+            .advertiser
+            .borrow_mut()
+            .plan(&table, wall(), self.mono(), &mut OsRandom);
         plan.stranger
             .map(|advertisement| *advertisement.record.token())
     }
@@ -1376,6 +1376,18 @@ pub(super) async fn run(
     let mut tick = tokio::time::interval(TICK);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        // The next paired record change, on time rather than at the tick
+        // after it (docs/adr/0013-private-discovery.md).
+        let rotation = {
+            let next = state.advertiser.borrow().next_change(state.mono());
+            let timer = state.manager.timer();
+            async move {
+                match next {
+                    Some(at) => timer.sleep_until(at).await,
+                    None => core::future::pending().await,
+                }
+            }
+        };
         let accept = async {
             match &state.listener {
                 Some(listener) => listener.accept().await,
@@ -1403,6 +1415,7 @@ pub(super) async fn run(
                 }
             }
             _ = tick.tick() => state.tick(),
+            () = rotation => state.tick(),
         }
     }
 }
