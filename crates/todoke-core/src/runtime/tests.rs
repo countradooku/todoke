@@ -28,7 +28,7 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
         relay_presence_seconds: 300,
         hidden: false,
         history_days: 30,
-        key_storage: crate::config::KeyStorage::Auto,
+        key_storage: crate::config::KeyStorage::File,
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
@@ -291,6 +291,76 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         Response::Error { .. }
     ));
     let _ = ErrorCode::State;
+    Ok(())
+}
+
+/// How many strangers `core` sees.
+async fn strangers_seen(core: &Core) -> usize {
+    match core.request(Request::Strangers).await {
+        Response::Strangers(list) => list.len(),
+        _ => 0,
+    }
+}
+
+/// Two QR pairings in one room at once (§3.1, §9): neither scanner can
+/// tell from the stranger advertisements which device shows its QR, and
+/// the other displayer is seen first. Each scanner still pairs with its
+/// own displayer, and its attempt at the wrong one costs that offer
+/// nothing.
+#[tokio::test]
+async fn two_qr_pairings_in_one_room_reach_their_own_displayers() -> AnyResult<()> {
+    let scratch = Scratch::new("two-qr-pairings")?;
+    let discovery = scratch.0.join("discovery");
+    let first = device(&scratch.0, "first", &discovery)?;
+    let second = device(&scratch.0, "second", &discovery)?;
+    let first_scanner = device(&scratch.0, "first-scanner", &discovery)?;
+    let second_scanner = device(&scratch.0, "second-scanner", &discovery)?;
+    let (first_hex, second_hex) = (device_hex(&first).await?, device_hex(&second).await?);
+
+    // The second displayer shows its QR first and both scanners see it.
+    let Response::Qr {
+        text: second_qr, ..
+    } = second.request(Request::PairShowQr).await
+    else {
+        return Err("no second QR offer".into());
+    };
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while strangers_seen(&first_scanner).await == 0
+            || strangers_seen(&second_scanner).await == 0
+        {
+            tokio::time::sleep(Duration::from_millis(200)).await;
+        }
+    })
+    .await?;
+    // The first shows its QR, and both are scanned at once, before
+    // anyone could see the first's advertisement.
+    let Response::Qr { text: first_qr, .. } = first.request(Request::PairShowQr).await else {
+        return Err("no first QR offer".into());
+    };
+    let (first_paired, second_paired) = tokio::join!(
+        first_scanner.request(Request::PairScanQr { text: first_qr }),
+        second_scanner.request(Request::PairScanQr { text: second_qr }),
+    );
+    assert_eq!(
+        first_paired,
+        Response::Paired {
+            contact: first_hex.clone()
+        }
+    );
+    assert_eq!(
+        second_paired,
+        Response::Paired {
+            contact: second_hex.clone()
+        }
+    );
+    // Each displayer paired with its own scanner only.
+    for (displayer, scanner) in [(&first, &first_scanner), (&second, &second_scanner)] {
+        let Response::Contacts(contacts) = displayer.request(Request::Contacts).await else {
+            return Err("contacts".into());
+        };
+        let devices: Vec<_> = contacts.into_iter().map(|c| c.device).collect();
+        assert_eq!(devices, vec![device_hex(scanner).await?]);
+    }
     Ok(())
 }
 

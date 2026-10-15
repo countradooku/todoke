@@ -87,7 +87,14 @@ from local user intent for every resumed transfer (§7.2, §7.5).
    lists at most 40000 entries, so it fits one IPC message.
 8. **Pairing.** `pair show` creates a QR or code offer and advertises in
    stranger mode for its lifetime; `pair scan` tries the nearby strangers;
-   `pair code` sends the code to one chosen stranger. The QR text and code
+   `pair code` sends the code to one chosen stranger. A stranger
+   advertisement (§9) does not say which QR it belongs to, so `pair scan`
+   dials each advertisement it sees once, as it appears, for 10 seconds
+   (at most 8 dials), before it turns to the relay: the displayer may be
+   seen after another pairing's displayer in the same room. A device
+   showing another QR closes on the `ClientHello`'s unknown locator, and
+   its offer stays usable (§3.1: invalid unauthenticated attempts do not
+   consume it). The QR text and code
    leave the core only to be shown (they are redacted from `Debug`), cross
    the daemon's same-user IPC, and are printed on the user's terminal. O5's
    boundary concerns FFI; there is none here. One offer is shown at a
@@ -181,6 +188,28 @@ from local user intent for every resumed transfer (§7.2, §7.5).
 - **Open files per offer.** Each queued file holds two descriptors until
   its offer ends; many large queued offers can still reach the limit the
   daemon raised. Fix: open files lazily and re-verify their identity.
+- **QR scans dial strangers that are not the displayer (spec gap).**
+  Nothing in §3.1's `QrPayload` can be matched against a §9 stranger
+  advertisement (its token is "uniform random"), so a scanner cannot
+  pick its displayer before dialing. Each wrong dial tells that device
+  the QR's `pairing_id` (a locator, not a secret), takes one of its §13
+  unauthenticated attempts (<=20 starts/minute), and costs the scanner a
+  round trip; with many pairings in one room the starts budget can turn
+  away a scanner's own attempt, and a hostile stranger advertiser can
+  hold each dial for up to the 30-second handshake deadline. The offer
+  itself is never consumed. Fix (a spec revision, not implemented): while
+  a QR is shown, the displayer's stranger token for minute `m =
+  floor(unix_time / 60)` is
+  `HMAC-BLAKE3(HKDF(pairing_id, one_time_psk, "todoke/v1/qr-stranger\0",
+  32), m:u64)[..8]`, and the scanner dials only advertisements matching
+  minutes `m-1..m+1` (a candidate filter like §9's paired token;
+  collisions still go through the full handshake). The 19-byte record
+  and the 60-second rotation do not change, and the token is
+  pseudorandom to anyone who has not seen the QR, while anyone who has
+  can already race to pair (§3.1). It conflicts with §9's "uniform
+  random stranger token", needs a test vector, and must not be applied
+  to code pairing (a token derived from 10 digits is a dictionary
+  oracle, as §10 says for rendezvous).
 - **Session idle timeout:** a session with nothing to do closes after 30
   seconds, so a long-idle receiver reconnects for each new offer (a cost,
   not a weakness).
