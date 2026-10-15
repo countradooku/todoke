@@ -6,7 +6,10 @@
 //!   one record). Each round shows every contact once, in a fresh uniformly
 //!   random order, each for a random time between [`ROTATION_MIN`] and
 //!   [`ROTATION_MAX`]: an observer learns neither the order nor a fixed
-//!   period to count contacts by. The record is the contact's token for the
+//!   period. It can still count the contacts by watching one label through
+//!   a whole round (docs/adr/0013-private-discovery.md). The caller applies
+//!   each change at [`Advertiser::next_change`], not on a coarser tick of
+//!   its own, so the times are not quantised. The record is the contact's token for the
 //!   current epoch, so it changes at every epoch boundary and after every
 //!   committed session (a new table). The instance label is fresh random
 //!   for every epoch, and never a device name.
@@ -32,14 +35,16 @@ use todoke_proto::time::UnixTime;
 /// The shortest time a contact's record is shown before the next one's.
 pub const ROTATION_MIN: Duration = Duration::from_secs(2);
 /// The longest; each record's time is uniform in between, to the
-/// millisecond.
+/// millisecond (applied on time when the caller wakes at
+/// [`Advertiser::next_change`]).
 pub const ROTATION_MAX: Duration = Duration::from_secs(4);
 /// How long stranger mode lasts after it is enabled (§9).
 pub const STRANGER_LIFETIME: Duration = Duration::from_secs(300);
 /// How often the stranger token (and its label) changes (§9).
 pub const STRANGER_ROTATION: Duration = Duration::from_secs(60);
 
-/// A source of OS randomness for labels and stranger tokens.
+/// A source of OS randomness for labels, stranger tokens, and the paired
+/// rotation's order and times.
 pub trait Random {
     /// Eight random bytes, or `None` if the OS has none (then nothing new
     /// is advertised).
@@ -105,25 +110,36 @@ enum Tokens {
     Qr(QrStrangerTokens),
 }
 
-/// The paired rotation: who is shown, until when, and who is left in this
-/// round.
-#[derive(Clone, Debug, Default)]
+/// The paired rotation: who is shown, from when until when, and who is
+/// left in this round.
+#[derive(Clone, Default)]
 struct Rotation {
     shown: Option<Ed25519PublicKey>,
+    since: Duration,
     until: Duration,
-    /// Whether the record shown is the priority contact's turn.
-    priority_turn: bool,
     /// The rest of this round, next last.
     left: Vec<Ed25519PublicKey>,
 }
 
 /// The advertising schedule. Times: `wall` is the trusted wall clock (for
 /// epochs), `mono` the caller's monotonic clock.
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Advertiser {
     label: Option<(Epoch, InstanceLabel)>,
     rotation: Rotation,
     stranger: Option<Stranger>,
+}
+
+/// Redacted: the rotation holds the contacts' device keys (the contact
+/// graph), and a stranger record its token.
+impl core::fmt::Debug for Advertiser {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Advertiser")
+            .field("showing", &self.rotation.shown.is_some())
+            .field("left_in_round", &self.rotation.left.len())
+            .field("stranger", &self.stranger.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Advertiser {
@@ -189,36 +205,43 @@ impl Advertiser {
     /// What to advertise at `wall` / `mono`, given the contacts in `table`.
     /// A table built for another epoch than `wall`'s advertises nothing
     /// paired; rebuild it at each epoch and after each committed session.
-    /// `priority`, if it is in the table, gets every other turn: a device
-    /// the user is about to send to or expects a file from.
+    ///
+    /// No contact is ever favoured: a contact shown more often than the
+    /// others would tell an observer whom this device is about to exchange
+    /// files with (and §9's pair token is the same on both devices).
     pub fn plan(
         &mut self,
         table: &DiscoveryTable,
-        priority: Option<&Ed25519PublicKey>,
         wall: UnixTime,
         mono: Duration,
         random: &mut impl Random,
     ) -> Plan {
         Plan {
-            paired: self.paired(table, priority, wall, mono, random),
+            paired: self.paired(table, wall, mono, random),
             stranger: self.stranger(wall, mono, random),
         }
+    }
+
+    /// When the paired record is next due to change, if that is after
+    /// `mono`: the caller plans again then, so changes are not quantised to
+    /// a tick of its own (which would also give its devices a common
+    /// phase). `None` when nothing paired is shown or the change is
+    /// already due (the caller's next plan makes it).
+    #[must_use]
+    pub fn next_change(&self, mono: Duration) -> Option<Duration> {
+        let rotation = &self.rotation;
+        (rotation.shown.is_some() && rotation.until > mono).then_some(rotation.until)
     }
 
     fn paired(
         &mut self,
         table: &DiscoveryTable,
-        priority: Option<&Ed25519PublicKey>,
         wall: UnixTime,
         mono: Duration,
         random: &mut impl Random,
     ) -> Option<Advertisement> {
         // A table for another epoch would advertise an old token (§9).
-        if table.is_stale(wall) {
-            return None;
-        }
-        let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
-        if contacts.is_empty() {
+        if table.is_stale(wall) || table.is_empty() {
             return None;
         }
         let epoch = Epoch::of(wall);
@@ -230,7 +253,7 @@ impl Advertiser {
                 label
             }
         };
-        let device = self.turn(table, priority, mono, random)?;
+        let device = self.turn(table, mono, random)?;
         let record = table.advertisement(&device)?;
         Some(Advertisement { label, record })
     }
@@ -267,41 +290,35 @@ impl Advertiser {
 
 impl Advertiser {
     /// The contact whose record is shown at `mono`: the current one until
-    /// its time is up (or it left the table), then the priority contact if
-    /// the last turn was not its, else the next of this round's shuffled
-    /// order. `None` without randomness for a new order or time.
+    /// its time is up (or it left the table, or the clock went back), then
+    /// the next of this round's shuffled order. `None` without randomness
+    /// for a new order or time; the round is then left as it was.
     fn turn(
         &mut self,
         table: &DiscoveryTable,
-        priority: Option<&Ed25519PublicKey>,
         mono: Duration,
         random: &mut impl Random,
     ) -> Option<Ed25519PublicKey> {
         let rotation = &mut self.rotation;
         if let Some(shown) = rotation.shown
-            && mono < rotation.until
+            && (rotation.since..rotation.until).contains(&mono)
             && table.advertisement(&shown).is_some()
         {
             return Some(shown);
         }
-        let priority = priority.filter(|device| table.advertisement(device).is_some());
-        let (device, priority_turn) = match priority {
-            Some(device) if !rotation.priority_turn => (*device, true),
-            _ => (next_in_round(&mut rotation.left, table, random)?, false),
-        };
+        // Drawn first, so a failing source changes nothing.
         let dwell = dwell(random)?;
-        *rotation = Rotation {
-            shown: Some(device),
-            until: mono + dwell,
-            priority_turn,
-            left: core::mem::take(&mut rotation.left),
-        };
+        let device = next_in_round(&mut rotation.left, table, random)?;
+        rotation.shown = Some(device);
+        rotation.since = mono;
+        rotation.until = mono.saturating_add(dwell);
         Some(device)
     }
 }
 
 /// The next contact of the round in `left` that is still in `table`; a new
-/// round, shuffled, when none is left.
+/// round, shuffled, when none is left. On `None` (no randomness for the
+/// shuffle) `left` is unchanged but for contacts that had left the table.
 fn next_in_round(
     left: &mut Vec<Ed25519PublicKey>,
     table: &DiscoveryTable,

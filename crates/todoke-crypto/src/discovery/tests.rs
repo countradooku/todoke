@@ -485,3 +485,20 @@ fn the_first_epoch_has_no_predecessor() -> TestResult {
     assert!(matched(&[0x44; 32], EPOCH_SECONDS, 0)?);
     Ok(())
 }
+
+/// At the end of the protocol's time range there is no epoch after the
+/// last: its table tests the last two epochs only, and still matches its
+/// predecessor's records both ways.
+#[test]
+fn the_last_epoch_has_no_successor() -> TestResult {
+    let last = todoke_proto::time::MAX_UNIX_TIME;
+    let table = DiscoveryTable::build(time(last)?, [(device()?, &[0x55; 32], 1)].into_iter())?;
+    let epoch = table.epoch().get();
+    assert_eq!(
+        table.epoch().adjacent().map(Epoch::get).collect::<Vec<_>>(),
+        [epoch - 1, epoch]
+    );
+    assert!(matched(&[0x55; 32], last, last - EPOCH_SECONDS)?);
+    assert!(matched(&[0x55; 32], last - EPOCH_SECONDS, last)?);
+    Ok(())
+}

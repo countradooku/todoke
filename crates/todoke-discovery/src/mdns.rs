@@ -708,23 +708,11 @@ mod tests {
         let mut alice_mdns = Mdns::start(47_001, policy)?;
         let mut bob_mdns = Mdns::start(47_002, policy)?;
         let mut advertiser = Advertiser::new();
-        let plan = advertiser.plan(
-            &alice_table,
-            None,
-            time(WALL)?,
-            Duration::ZERO,
-            &mut OsRandom,
-        );
+        let plan = advertiser.plan(&alice_table, time(WALL)?, Duration::ZERO, &mut OsRandom);
         assert!(plan.paired.is_some());
         alice_mdns.apply(&plan)?;
         let mut bob_plan = Advertiser::new();
-        bob_mdns.apply(&bob_plan.plan(
-            &bob_table,
-            None,
-            time(WALL)?,
-            Duration::ZERO,
-            &mut OsRandom,
-        ))?;
+        bob_mdns.apply(&bob_plan.plan(&bob_table, time(WALL)?, Duration::ZERO, &mut OsRandom))?;
         let mut directory = Directory::new();
         let started = std::time::Instant::now();
         while started.elapsed() < Duration::from_secs(10) {

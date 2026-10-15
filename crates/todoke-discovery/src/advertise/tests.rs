@@ -34,29 +34,23 @@ async fn the_contact_record_is_advertised_under_an_epoch_label() -> TestResult {
     let table = alice.table(WALL)?;
     let mut random = Counter(0);
     let mut advertiser = Advertiser::new();
-    let plan = advertiser.plan(&table, None, time(WALL)?, SECOND, &mut random);
+    let plan = advertiser.plan(&table, time(WALL)?, SECOND, &mut random);
     let paired = plan.paired.ok_or("paired")?;
     assert_eq!(Some(paired.record), table.advertisement(&bob.key()));
     assert_eq!(plan.stranger, None);
     // The same label all epoch long; a new one at the next epoch.
-    let later = advertiser.plan(&table, None, time(WALL + 30)?, SECOND * 31, &mut random);
+    let later = advertiser.plan(&table, time(WALL + 30)?, SECOND * 31, &mut random);
     assert_eq!(later.paired.map(|a| a.label), Some(paired.label));
     let boundary = (WALL / EPOCH_SECONDS + 1) * EPOCH_SECONDS;
     let next_table = alice.table(boundary)?;
-    let next = advertiser.plan(
-        &next_table,
-        None,
-        time(boundary)?,
-        SECOND * 900,
-        &mut random,
-    );
+    let next = advertiser.plan(&next_table, time(boundary)?, SECOND * 900, &mut random);
     let next = next.paired.ok_or("paired")?;
     assert_ne!(next.label, paired.label);
     assert_eq!(Some(next.record), next_table.advertisement(&bob.key()));
     assert_ne!(next.record, paired.record);
     assert_eq!(plan.labels(), vec![paired.label]);
     // R1: the old table is not used past its epoch.
-    let stale = advertiser.plan(&table, None, time(boundary)?, SECOND * 901, &mut random);
+    let stale = advertiser.plan(&table, time(boundary)?, SECOND * 901, &mut random);
     assert_eq!(stale.paired, None);
     Ok(())
 }
@@ -67,37 +61,16 @@ async fn nothing_is_advertised_without_contacts_or_randomness() -> TestResult {
     let mut advertiser = Advertiser::new();
     let table = alice.table(WALL)?;
     assert_eq!(
-        advertiser.plan(&table, None, time(WALL)?, SECOND, &mut Empty),
+        advertiser.plan(&table, time(WALL)?, SECOND, &mut Empty),
         Plan::default()
     );
     alice.store.mark_ratchet_uncertain(&bob.key())?;
     let empty = alice.table(WALL)?;
     assert_eq!(
-        advertiser.plan(&empty, None, time(WALL)?, SECOND, &mut Counter(0)),
+        advertiser.plan(&empty, time(WALL)?, SECOND, &mut Counter(0)),
         Plan::default()
     );
     assert!(!advertiser.enable_stranger(time(WALL)?, SECOND, &mut Empty));
-    Ok(())
-}
-
-/// A priority contact gets every other turn; with one contact it is the
-/// only record anyway, and an unknown priority changes nothing.
-#[tokio::test]
-async fn a_priority_contact_takes_even_slots() -> TestResult {
-    let (alice, bob) = paired().await?;
-    let table = alice.table(WALL)?;
-    let mut advertiser = Advertiser::new();
-    let mut random = Counter(0);
-    for slot in 0..6_u64 {
-        let mono = ROTATION_MAX * u32::try_from(slot)?;
-        let plan = advertiser.plan(&table, Some(&bob.key()), time(WALL)?, mono, &mut random);
-        assert_eq!(
-            plan.paired.map(|a| a.record),
-            table.advertisement(&bob.key())
-        );
-        let unknown = advertiser.plan(&table, Some(&alice.key()), time(WALL)?, mono, &mut random);
-        assert_eq!(unknown.paired, plan.paired);
-    }
     Ok(())
 }
 
@@ -111,28 +84,26 @@ async fn stranger_mode_is_explicit_short_and_rotating() -> TestResult {
     let mut random = Counter(0);
     let wall = time(WALL)?;
     assert_eq!(
-        advertiser
-            .plan(&table, None, wall, SECOND, &mut random)
-            .stranger,
+        advertiser.plan(&table, wall, SECOND, &mut random).stranger,
         None
     );
     let start = SECOND * 50;
     assert!(advertiser.enable_stranger(wall, start, &mut random));
     let first = advertiser
-        .plan(&table, None, wall, start, &mut random)
+        .plan(&table, wall, start, &mut random)
         .stranger
         .ok_or("stranger")?;
     assert_eq!(first.record.mode(), DiscoveryMode::Stranger);
     let paired = advertiser
-        .plan(&table, None, wall, start, &mut random)
+        .plan(&table, wall, start, &mut random)
         .paired
         .ok_or("paired")?;
     assert_ne!(first.label, paired.label);
     assert_ne!(first.record.token(), paired.record.token());
-    let same = advertiser.plan(&table, None, wall, start + SECOND * 59, &mut random);
+    let same = advertiser.plan(&table, wall, start + SECOND * 59, &mut random);
     assert_eq!(same.stranger, Some(first));
     let rotated = advertiser
-        .plan(&table, None, wall, start + STRANGER_ROTATION, &mut random)
+        .plan(&table, wall, start + STRANGER_ROTATION, &mut random)
         .stranger
         .ok_or("stranger")?;
     assert_ne!(rotated.label, first.label);
@@ -141,25 +112,21 @@ async fn stranger_mode_is_explicit_short_and_rotating() -> TestResult {
     let mut mono = start + STRANGER_ROTATION;
     while mono + SECOND < start + STRANGER_LIFETIME {
         mono += SECOND * 10;
-        if let Some(advertisement) = advertiser
-            .plan(&table, None, wall, mono, &mut random)
-            .stranger
+        if let Some(advertisement) = advertiser.plan(&table, wall, mono, &mut random).stranger
             && !seen.contains(&advertisement)
         {
             seen.push(advertisement);
         }
     }
     assert_eq!(seen.len(), 5);
-    let expired = advertiser.plan(&table, None, wall, start + STRANGER_LIFETIME, &mut random);
+    let expired = advertiser.plan(&table, wall, start + STRANGER_LIFETIME, &mut random);
     assert_eq!(expired.stranger, None);
     assert!(!advertiser.stranger_enabled());
     // Disabling ends it at once.
     assert!(advertiser.enable_stranger(wall, mono, &mut random));
     advertiser.disable_stranger();
     assert_eq!(
-        advertiser
-            .plan(&table, None, wall, mono, &mut random)
-            .stranger,
+        advertiser.plan(&table, wall, mono, &mut random).stranger,
         None
     );
     Ok(())
@@ -179,11 +146,7 @@ fn a_shown_qr_advertises_its_token_for_each_minute() -> TestResult {
     let minute_start = WALL / 60 * 60;
     assert!(advertiser.enable_qr_stranger(tokens.clone(), time(WALL)?, start, &mut random));
     let mut plan = |advertiser: &mut Advertiser, wall: u64, mono: Duration| {
-        time(wall).map(|wall| {
-            advertiser
-                .plan(&table, None, wall, mono, &mut random)
-                .stranger
-        })
+        time(wall).map(|wall| advertiser.plan(&table, wall, mono, &mut random).stranger)
     };
     let first = plan(&mut advertiser, WALL, start)?.ok_or("stranger")?;
     assert_eq!(first.record.mode(), DiscoveryMode::Stranger);
@@ -255,7 +218,6 @@ fn whose(
 fn turns(
     advertiser: &mut Advertiser,
     table: &DiscoveryTable,
-    priority: Option<&Ed25519PublicKey>,
     wall: UnixTime,
     count: usize,
     random: &mut impl Random,
@@ -263,7 +225,7 @@ fn turns(
     let mut mono = Duration::ZERO;
     let mut out = Vec::with_capacity(count);
     for _ in 0..count {
-        let plan = advertiser.plan(table, priority, wall, mono, random);
+        let plan = advertiser.plan(table, wall, mono, random);
         let until = advertiser.rotation.until;
         out.push((
             whose(table, plan.paired.map(|a| a.record))?,
@@ -291,7 +253,6 @@ fn rounds_show_every_contact_once_in_a_random_order_for_a_random_time() -> TestR
     let turns = turns(
         &mut Advertiser::new(),
         table,
-        None,
         wall,
         rounds * 3,
         &mut SplitMix(1),
@@ -342,63 +303,6 @@ fn rounds_show_every_contact_once_in_a_random_order_for_a_random_time() -> TestR
     Ok(())
 }
 
-/// A priority contact takes every other turn, and the turns between still
-/// go round all the contacts, the priority one included; a priority that is
-/// not a contact changes nothing.
-#[test]
-fn a_priority_contact_takes_every_other_turn() -> TestResult {
-    let fixture = crate::support::fixture()?;
-    let table = fixture.tables.first().ok_or("table")?;
-    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
-    let priority = *fixture.contacts.get(2).ok_or("contact")?;
-    let turns = turns(
-        &mut Advertiser::new(),
-        table,
-        Some(&priority),
-        wall,
-        60,
-        &mut SplitMix(2),
-    )?;
-    for (index, (device, _)) in turns.iter().enumerate() {
-        if index % 2 == 0 {
-            assert_eq!(*device, priority, "turn {index}");
-        }
-    }
-    for round in turns
-        .iter()
-        .skip(1)
-        .step_by(2)
-        .collect::<Vec<_>>()
-        .chunks(3)
-    {
-        let mut seen: Vec<Ed25519PublicKey> = round.iter().map(|(device, _)| *device).collect();
-        seen.sort();
-        let mut all: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
-        all.sort();
-        assert_eq!(seen, all);
-    }
-    // Alice herself is no contact: the same as no priority.
-    let unknown = turns_for(table, Some(&fixture.alice), wall)?;
-    let none = turns_for(table, None, wall)?;
-    assert_eq!(unknown, none);
-    Ok(())
-}
-
-fn turns_for(
-    table: &DiscoveryTable,
-    priority: Option<&Ed25519PublicKey>,
-    wall: UnixTime,
-) -> Result<Vec<(Ed25519PublicKey, Duration)>, Box<dyn std::error::Error>> {
-    turns(
-        &mut Advertiser::new(),
-        table,
-        priority,
-        wall,
-        30,
-        &mut SplitMix(3),
-    )
-}
-
 /// A contact that leaves the table (ratchet-uncertain) is replaced at once,
 /// and never shown again while it is out.
 #[test]
@@ -413,20 +317,101 @@ fn a_contact_that_leaves_is_not_shown() -> TestResult {
     // Turn until the leaving contact is shown, then switch tables.
     let mut mono = Duration::ZERO;
     loop {
-        let plan = advertiser.plan(full, None, wall, mono, &mut random);
+        let plan = advertiser.plan(full, wall, mono, &mut random);
         if whose(full, plan.paired.map(|a| a.record))? == gone {
             break;
         }
         mono = advertiser.rotation.until;
     }
     for _ in 0..30 {
-        let plan = advertiser.plan(&fixture.reduced, None, wall, mono, &mut random);
+        let plan = advertiser.plan(&fixture.reduced, wall, mono, &mut random);
         assert_ne!(
             whose(&fixture.reduced, plan.paired.map(|a| a.record))?,
             gone
         );
         mono = advertiser.rotation.until;
     }
+    Ok(())
+}
+
+/// A source that fails between the dwell and the shuffle changes nothing:
+/// the round and the record shown stay as they were, and the next plan
+/// with randomness carries on from there.
+#[test]
+fn a_failing_source_leaves_the_round_intact() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut advertiser = Advertiser::new();
+    let mut random = SplitMix(5);
+    advertiser.plan(table, wall, Duration::ZERO, &mut random);
+    // Run to the last turn of the round, so the next turn needs a shuffle.
+    while !advertiser.rotation.left.is_empty() {
+        let next = advertiser.rotation.until;
+        advertiser.plan(table, wall, next, &mut random);
+    }
+    let shown = advertiser.rotation.shown;
+    let mut mono = advertiser.rotation.until;
+    // Enough for the dwell, then nothing for the shuffle.
+    let plan = advertiser.plan(table, wall, mono, &mut Script(vec![[1; 8]]));
+    assert_eq!(plan.paired, None);
+    assert_eq!(advertiser.rotation.shown, shown);
+    assert_eq!(advertiser.rotation.left.len(), 0);
+    // With randomness again: a whole new round.
+    let mut seen = Vec::new();
+    for _ in 0..3 {
+        let plan = advertiser.plan(table, wall, mono, &mut random);
+        seen.push(whose(table, plan.paired.map(|a| a.record))?);
+        mono = advertiser.rotation.until;
+    }
+    seen.sort();
+    let mut all: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
+    all.sort();
+    assert_eq!(seen, all);
+    Ok(())
+}
+
+/// A clock that goes back ends the turn rather than stretching it, and
+/// `next_change` says when the record changes (never a time already past).
+#[test]
+fn turns_end_on_time_and_never_stretch() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut advertiser = Advertiser::new();
+    assert_eq!(advertiser.next_change(Duration::ZERO), None);
+    let mut random = SplitMix(6);
+    let start = SECOND * 100;
+    advertiser.plan(table, wall, start, &mut random);
+    let until = advertiser.rotation.until;
+    assert_eq!(advertiser.next_change(start), Some(until));
+    assert_eq!(advertiser.next_change(until), None);
+    // Back in time: a new turn starts there, at most 4 seconds long.
+    let back = SECOND * 50;
+    advertiser.plan(table, wall, back, &mut random);
+    assert_eq!(advertiser.rotation.since, back);
+    assert!(advertiser.rotation.until <= back + ROTATION_MAX);
+    // Near the end of the clock's range: no overflow.
+    advertiser.plan(table, wall, Duration::MAX, &mut random);
+    assert_eq!(advertiser.rotation.until, Duration::MAX);
+    Ok(())
+}
+
+/// Debug output shows neither contacts nor tokens, only counts.
+#[test]
+fn debug_output_hides_the_contacts() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut advertiser = Advertiser::new();
+    advertiser.plan(table, wall, Duration::ZERO, &mut SplitMix(7));
+    advertiser.enable_stranger(wall, Duration::ZERO, &mut SplitMix(8));
+    let text = format!("{advertiser:?}");
+    for contact in table.contacts() {
+        // A key's own Debug output is its full hex.
+        assert!(!text.contains(&format!("{contact:?}")), "{text}");
+    }
+    assert!(text.contains("left_in_round: 2"), "{text}");
     Ok(())
 }
 
@@ -453,7 +438,7 @@ async fn stranger_mode_stops_without_randomness() -> TestResult {
     let wall = time(WALL)?;
     let mut advertiser = Advertiser::new();
     assert!(advertiser.enable_stranger(wall, SECOND, &mut Counter(0)));
-    let rotated = advertiser.plan(&table, None, wall, SECOND * 61, &mut Empty);
+    let rotated = advertiser.plan(&table, wall, SECOND * 61, &mut Empty);
     assert_eq!(rotated.stranger, None);
     assert!(!advertiser.stranger_enabled());
     // A token but no label.
@@ -470,7 +455,7 @@ async fn stranger_mode_stops_without_randomness() -> TestResult {
     let mut fresh = Advertiser::new();
     assert_eq!(
         fresh
-            .plan(&table, None, wall, SECOND, &mut Script(vec![[0; 8]]))
+            .plan(&table, wall, SECOND, &mut Script(vec![[0; 8]]))
             .paired,
         None
     );
@@ -485,17 +470,20 @@ fn os_randomness_gives_distinct_labels() -> TestResult {
 }
 
 mod model {
-    //! R3: a model-based test of the advertising schedule.
+    //! R3: a property test of the advertising schedule. Stranger mode is
+    //! checked against a model of its timing only (when it starts, rotates,
+    //! and ends); the paired record against properties that hold whatever
+    //! the random values are, so the test is no copy of the schedule.
 
     use proptest::prelude::*;
 
     use super::*;
     use crate::support::fixture;
 
-    /// Counter randomness that can be switched off.
-    #[derive(Clone, Debug, Default)]
+    /// Well-spread randomness (`SplitMix64` from a generated seed) that can
+    /// be switched off.
     struct Switchable {
-        next: u64,
+        source: SplitMix,
         off: bool,
     }
 
@@ -504,8 +492,7 @@ mod model {
             if self.off {
                 return None;
             }
-            self.next += 1;
-            Some(self.next.to_be_bytes())
+            self.source.bytes()
         }
     }
 
@@ -513,6 +500,8 @@ mod model {
     enum Table {
         /// The table for the wall clock's epoch, if the fixture has one.
         Current,
+        /// One contact fewer (ratchet-uncertain), for `WALL`'s epoch.
+        Reduced,
         /// One for another epoch.
         Stale,
         /// One without contacts.
@@ -522,172 +511,73 @@ mod model {
     #[derive(Clone, Debug)]
     enum Op {
         Plan {
-            mono: u64,
+            mono_ms: u64,
             wall: u64,
             table: Table,
-            /// An index into the contacts; 3 is Alice herself (no contact).
-            priority: Option<usize>,
         },
         Enable {
-            mono: u64,
+            mono_ms: u64,
         },
         Disable,
         Randomness(bool),
     }
 
     fn step() -> impl Strategy<Value = u64> {
-        proptest::sample::select(vec![0_u64, 1, 2, 3, 30, 59, 60, 61, 240, 299, 300])
+        proptest::sample::select(vec![
+            0_u64, 1, 500, 1_999, 2_000, 2_001, 3_000, 3_999, 4_000, 4_001, 30_000, 59_999, 60_000,
+            240_000, 299_999, 300_000,
+        ])
     }
 
     fn op() -> impl Strategy<Value = Op> {
         let table = prop_oneof![
-            6 => Just(Table::Current),
+            5 => Just(Table::Current),
+            2 => Just(Table::Reduced),
             1 => Just(Table::Stale),
             1 => Just(Table::Empty),
         ];
         prop_oneof![
-            8 => (
-                step(),
-                proptest::sample::select(vec![0_u64, 1, 100, 450, 899, 900]),
-                table,
-                proptest::option::of(0_usize..4),
-            )
-                .prop_map(|(mono, wall, table, priority)| Op::Plan { mono, wall, table, priority }),
-            2 => step().prop_map(|mono| Op::Enable { mono }),
+            8 => (step(), proptest::sample::select(vec![0_u64, 1, 100, 450, 899, 900]), table)
+                .prop_map(|(mono_ms, wall, table)| Op::Plan { mono_ms, wall, table }),
+            2 => step().prop_map(|mono_ms| Op::Enable { mono_ms }),
             1 => Just(Op::Disable),
             1 => any::<bool>().prop_map(Op::Randomness),
         ]
     }
 
-    #[derive(Clone, Copy, Debug)]
-    struct Stranger {
-        started: Duration,
-        rotated: Duration,
-        advertisement: Advertisement,
-    }
-
-    /// The schedule's rules, written plainly.
+    /// Stranger mode's timing (§9): on from an enable, a new record every
+    /// 60 seconds, off at 300 seconds or when a rotation finds no
+    /// randomness.
     #[derive(Default)]
-    struct Model {
-        random: Switchable,
-        label: Option<(Epoch, InstanceLabel)>,
-        shown: Option<Ed25519PublicKey>,
-        until: Duration,
-        priority_turn: bool,
-        left: Vec<Ed25519PublicKey>,
-        stranger: Option<Stranger>,
+    struct Stranger {
+        on: Option<(Duration, Duration)>,
+        last: Option<Advertisement>,
     }
 
-    impl Model {
-        /// A uniform draw below `bound`, rejecting the partial run.
-        fn uniform(&mut self, bound: u64) -> Option<u64> {
-            for _ in 0..64 {
-                let value = u64::from_be_bytes(self.random.bytes()?);
-                if value < u64::MAX - u64::MAX % bound {
-                    return Some(value % bound);
-                }
-            }
-            None
-        }
-
-        /// Who is shown: the current one until its time is up; then the
-        /// priority if it did not have the last turn; else the next of the
-        /// round, a new shuffled round when it is used up.
-        fn turn(
+    impl Stranger {
+        /// What the plan at `mono` must show: `Ok(None)` nothing,
+        /// `Ok(Some(last))` the same record, `Err(())` a new one.
+        fn expect(
             &mut self,
-            table: &DiscoveryTable,
-            priority: Option<&Ed25519PublicKey>,
             mono: Duration,
-        ) -> Option<Ed25519PublicKey> {
-            let listed = |device: &Ed25519PublicKey| table.advertisement(device).is_some();
-            if let Some(shown) = self.shown
-                && mono < self.until
-                && listed(&shown)
-            {
-                return Some(shown);
-            }
-            let (device, priority_turn) = match priority.filter(|device| listed(device)) {
-                Some(device) if !self.priority_turn => (*device, true),
-                _ => {
-                    let mut next = None;
-                    while let Some(device) = self.left.pop() {
-                        if listed(&device) {
-                            next = Some(device);
-                            break;
-                        }
-                    }
-                    if next.is_none() {
-                        let mut round: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
-                        for last in (1..round.len()).rev() {
-                            let pick = self.uniform(u64::try_from(last).ok()? + 1)?;
-                            round.swap(last, usize::try_from(pick).ok()?);
-                        }
-                        next = round.pop();
-                        self.left = round;
-                    }
-                    (next?, false)
-                }
+            random_off: bool,
+        ) -> Result<Option<Advertisement>, ()> {
+            let Some((started, rotated)) = self.on else {
+                return Ok(None);
             };
-            let dwell = 2000 + self.uniform(2001)?;
-            self.shown = Some(device);
-            self.until = mono + Duration::from_millis(dwell);
-            self.priority_turn = priority_turn;
-            Some(device)
-        }
-
-        fn stranger_record(&mut self, wall: UnixTime) -> Option<Advertisement> {
-            let token = self.random.bytes()?;
-            let label = InstanceLabel::from_random(self.random.bytes()?).ok()?;
-            let record =
-                DiscoveryRecord::new(DiscoveryMode::Stranger, Epoch::of(wall), token).ok()?;
-            Some(Advertisement { label, record })
-        }
-
-        fn paired(
-            &mut self,
-            table: &DiscoveryTable,
-            priority: Option<&Ed25519PublicKey>,
-            wall: UnixTime,
-            mono: Duration,
-        ) -> Option<Advertisement> {
-            if table.is_stale(wall) || table.is_empty() {
-                return None;
+            if mono.saturating_sub(started) >= STRANGER_LIFETIME {
+                self.on = None;
+                return Ok(None);
             }
-            let epoch = Epoch::of(wall);
-            let label = match self.label {
-                Some((at, label)) if at == epoch => label,
-                _ => {
-                    let label = InstanceLabel::from_random(self.random.bytes()?).ok()?;
-                    self.label = Some((epoch, label));
-                    label
+            if mono.saturating_sub(rotated) >= STRANGER_ROTATION {
+                if random_off {
+                    self.on = None;
+                    return Ok(None);
                 }
-            };
-            let device = self.turn(table, priority, mono)?;
-            Some(Advertisement {
-                label,
-                record: table.advertisement(&device)?,
-            })
-        }
-
-        fn stranger(&mut self, wall: UnixTime, mono: Duration) -> Option<Advertisement> {
-            let current = self.stranger?;
-            if mono.saturating_sub(current.started) >= Duration::from_secs(300) {
-                self.stranger = None;
-                return None;
+                self.on = Some((started, mono));
+                return Err(());
             }
-            if mono.saturating_sub(current.rotated) >= Duration::from_secs(60) {
-                let Some(advertisement) = self.stranger_record(wall) else {
-                    self.stranger = None;
-                    return None;
-                };
-                self.stranger = Some(Stranger {
-                    rotated: mono,
-                    advertisement,
-                    ..current
-                });
-                return Some(advertisement);
-            }
-            Some(current.advertisement)
+            Ok(self.last)
         }
     }
 
@@ -696,34 +586,40 @@ mod model {
     }
 
     proptest! {
-        #![proptest_config(ProptestConfig::with_cases(128))]
+        #![proptest_config(ProptestConfig::with_cases(256))]
 
-        /// R3: the schedule against a plain model: one paired record at a
-        /// time, rotating over the contacts in shuffled rounds for 2 to 4
-        /// seconds each (a priority contact every other turn), a label per
-        /// epoch, nothing paired from a
-        /// stale or empty table; stranger mode only after an enable, for at
-        /// most 300 seconds, a new token and label every 60, and off when
-        /// randomness fails.
+        /// R3: whatever the random values, through table changes and
+        /// randomness failures:
+        /// - nothing paired from a stale or empty table;
+        /// - a paired record is a listed contact's, for the current epoch,
+        ///   under one label per epoch that no other epoch reuses;
+        /// - a record stays until its time is up (unless its contact left),
+        ///   each turn lasts 2 to 4 seconds, and `next_change` says when;
+        /// - without randomness no new contact is shown;
+        /// - stranger mode follows its timing model, never shares the
+        ///   paired label, and never outlives 300 seconds.
         #[test]
-        fn the_schedule_follows_its_model(ops in proptest::collection::vec(op(), 1..50)) {
+        fn the_schedule_keeps_its_properties(
+            seed in any::<u64>(),
+            ops in proptest::collection::vec(op(), 1..60),
+        ) {
             let fixture = fixture().map_err(fail)?;
             let first_wall = *fixture.walls.first().ok_or_else(|| fail("wall"))?;
             let mut advertiser = Advertiser::new();
-            let mut random = Switchable::default();
-            let mut model = Model::default();
+            let mut random = Switchable { source: SplitMix(seed), off: false };
+            let mut stranger = Stranger::default();
             let (mut mono, mut wall) = (Duration::ZERO, first_wall + 10);
-            let mut paired_labels: Vec<(Epoch, InstanceLabel)> = Vec::new();
-            let mut enabled_at = None;
+            let mut labels: Vec<(Epoch, InstanceLabel)> = Vec::new();
             for op in ops {
                 match op {
-                    Op::Plan { mono: dm, wall: dw, table, priority } => {
-                        mono += Duration::from_secs(dm);
+                    Op::Plan { mono_ms, wall: dw, table } => {
+                        mono += Duration::from_millis(mono_ms);
                         wall += dw;
                         let now = time(wall).map_err(fail)?;
                         let current = fixture.tables.iter().find(|t| !t.is_stale(now));
                         let table = match table {
                             Table::Current => current.unwrap_or(&fixture.reduced),
+                            Table::Reduced => &fixture.reduced,
                             Table::Stale => fixture
                                 .tables
                                 .iter()
@@ -731,59 +627,82 @@ mod model {
                                 .ok_or_else(|| fail("stale table"))?,
                             Table::Empty => &fixture.empty,
                         };
-                        let priority = priority.map(|index| fixture.contacts.get(index).unwrap_or(&fixture.alice));
-                        let plan = advertiser.plan(table, priority, now, mono, &mut random);
-                        let expected = Plan {
-                            paired: model.paired(table, priority, now, mono),
-                            stranger: model.stranger(now, mono),
-                        };
-                        prop_assert_eq!(plan, expected);
-                        // Independently of the model:
+                        let before = advertiser.rotation.clone();
+                        let plan = advertiser.plan(table, now, mono, &mut random);
+                        let after = &advertiser.rotation;
+
+                        if table.is_stale(now) || table.is_empty() {
+                            prop_assert_eq!(plan.paired, None);
+                        }
                         if let Some(paired) = plan.paired {
-                            prop_assert!(!table.is_stale(now));
+                            let shown = after.shown.ok_or_else(|| fail("shown"))?;
+                            prop_assert_eq!(table.advertisement(&shown), Some(paired.record));
                             prop_assert_eq!(paired.record.mode(), DiscoveryMode::Paired);
                             prop_assert_eq!(paired.record.epoch(), Epoch::of(now));
-                            prop_assert!(table.contacts().any(|c| table.advertisement(c) == Some(paired.record)));
-                            // One label per epoch, never reused in another.
-                            for (epoch, label) in &paired_labels {
+                            for (epoch, label) in &labels {
                                 prop_assert_eq!(*epoch == Epoch::of(now), *label == paired.label);
                             }
-                            if !paired_labels.contains(&(Epoch::of(now), paired.label)) {
-                                paired_labels.push((Epoch::of(now), paired.label));
+                            if !labels.contains(&(Epoch::of(now), paired.label)) {
+                                labels.push((Epoch::of(now), paired.label));
+                            }
+                            let kept = before.shown.is_some_and(|previous| {
+                                previous == shown
+                                    && (before.since..before.until).contains(&mono)
+                            });
+                            let due = before.shown.is_none_or(|previous| {
+                                !(before.since..before.until).contains(&mono)
+                                    || table.advertisement(&previous).is_none()
+                            });
+                            // Kept while not due; a new turn only when due.
+                            prop_assert!(kept != due, "kept {} due {}", kept, due);
+                            if due {
+                                prop_assert!(!random.off, "a new turn without randomness");
+                                prop_assert_eq!(after.since, mono);
+                                let dwell = after.until.saturating_sub(after.since);
+                                prop_assert!((ROTATION_MIN..=ROTATION_MAX).contains(&dwell));
+                            }
+                            prop_assert_eq!(advertiser.next_change(mono), Some(after.until));
+                        }
+
+                        let expected = stranger.expect(mono, random.off);
+                        match (expected, plan.stranger) {
+                            (Ok(None), None) => {}
+                            (Ok(Some(last)), Some(now_shown)) => prop_assert_eq!(last, now_shown),
+                            (Err(()), Some(fresh)) => {
+                                prop_assert!(stranger.last != Some(fresh), "no new stranger record");
+                            }
+                            (expected, got) => {
+                                return Err(fail(format!("stranger: expected {expected:?}, got {got:?}")));
                             }
                         }
-                        if let Some(stranger) = plan.stranger {
-                            prop_assert_eq!(stranger.record.mode(), DiscoveryMode::Stranger);
-                            let since = enabled_at.map(|at| mono.saturating_sub(at));
-                            prop_assert!(since.is_some_and(|since| since < STRANGER_LIFETIME));
-                            prop_assert!(plan.paired.is_none_or(|p| p.label != stranger.label));
-                        } else {
-                            enabled_at = None;
+                        if let Some(record) = plan.stranger {
+                            prop_assert_eq!(record.record.mode(), DiscoveryMode::Stranger);
+                            prop_assert!(plan.paired.is_none_or(|p| p.label != record.label));
                         }
-                        prop_assert_eq!(advertiser.stranger_enabled(), model.stranger.is_some());
+                        stranger.last = plan.stranger;
+                        prop_assert_eq!(advertiser.stranger_enabled(), stranger.on.is_some());
                     }
-                    Op::Enable { mono: dm } => {
-                        mono += Duration::from_secs(dm);
+                    Op::Enable { mono_ms } => {
+                        mono += Duration::from_millis(mono_ms);
                         let now = time(wall).map_err(fail)?;
                         let started = advertiser.enable_stranger(now, mono, &mut random);
-                        model.stranger = model.stranger_record(now).map(|advertisement| Stranger {
-                            started: mono,
-                            rotated: mono,
-                            advertisement,
-                        });
-                        prop_assert_eq!(started, model.stranger.is_some());
-                        enabled_at = started.then_some(mono);
+                        prop_assert_eq!(started, !random.off);
+                        stranger.on = started.then_some((mono, mono));
+                        stranger.last = None;
+                        if started {
+                            // The first plan shows the record made at the
+                            // enable: take it as the one to keep.
+                            let plan = advertiser.plan(&fixture.empty, now, mono, &mut random);
+                            stranger.last = plan.stranger;
+                            prop_assert!(stranger.last.is_some());
+                        }
                     }
                     Op::Disable => {
                         advertiser.disable_stranger();
-                        model.stranger = None;
-                        enabled_at = None;
+                        stranger = Stranger::default();
                         prop_assert!(!advertiser.stranger_enabled());
                     }
-                    Op::Randomness(on) => {
-                        random.off = !on;
-                        model.random.off = !on;
-                    }
+                    Op::Randomness(on) => random.off = !on,
                 }
             }
         }

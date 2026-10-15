@@ -10,6 +10,7 @@
     (`todoke-crypto::discovery`)
   - the matching benchmark (`bench/benches/discovery.rs`) and
     todoke-crypto's `bench-support` feature
+  - the core's wake-up for the next record change
 
 ## Context
 
@@ -58,11 +59,18 @@ order, and count a device's contacts by the length of its cycle. Now:
 - every round shows each available contact once, in a fresh uniformly
   random order (Fisher–Yates, indices drawn by rejection from the OS
   CSPRNG);
-- each record stays up for a uniform 2 to 4 seconds, to the millisecond;
-- a priority contact (one the user is about to send to or expects a file
-  from) still gets every other turn, and a contact that leaves the table
-  (ratchet-uncertain, removed) is replaced at once;
-- without randomness nothing paired is advertised, as before.
+- each record stays up for a uniform 2 to 4 seconds, to the millisecond:
+  the core wakes at `Advertiser::next_change` rather than at the next of
+  its 500 ms ticks, so the times are not quantised and its devices share
+  no tick phase;
+- a contact that leaves the table (ratchet-uncertain, removed) is
+  replaced at once, and a clock that goes back ends the turn;
+- no contact is favoured. The schedule used to offer a "priority" contact
+  every other turn (never wired into the core): a contact shown more often
+  tells an observer whom the device is about to exchange files with, and
+  the pair token is the same on both devices, so it was removed;
+- without randomness nothing new is advertised, and the round is left as
+  it was.
 
 The mDNS instance label stays one random label per epoch: the records are
 one device's in any case, and a label per record would show the rotation
@@ -85,7 +93,7 @@ benchmark (bench/RESULTS.md, Apple M5 Pro) with 1,000 contacts:
 The benchmark builds tables from raw pair PSKs through
 `DiscoveryTable::from_pair_psks`, behind a new `bench-support` feature of
 todoke-crypto; `scripts/ci/deny-exceptions-dev-only.sh` fails if a shipped
-graph enables it.
+graph or any root-workspace graph (dev-dependencies included) enables it.
 
 ### Clock skew
 
@@ -93,7 +101,7 @@ A receiver tests the epoch a record claims only if it is its own or a
 neighbour (bounded at zero). Peers whose clocks differ by the §1 120
 seconds therefore match on both sides of an epoch boundary, and anything
 that leaves them in adjacent epochs matches; two epochs apart never does.
-Tests now pin this at the boundaries and at epoch 0.
+Tests now pin this at the boundaries, at epoch 0, and at the last epoch.
 
 ### Unlinkability evidence
 
@@ -149,15 +157,13 @@ GATT allocation unassigned and forbids inventing one (§16 O7).
 ## Consequences
 
 - An observer near a device sees one record at a time, changing at random
-  moments; it can still count the distinct tokens one label shows within an
-  epoch, which approaches the number of contacts if it watches a whole
-  round.
+  moments; it still learns the exact number of available contacts by
+  watching one label through a whole round (every round shows each once).
 - With many contacts, any one contact's record comes round once per round:
-  about 3 seconds times the number of available contacts on average (about
-  50 minutes for 1,000). Two devices find each other as soon as either sees
-  the other's record, a priority contact comes up every other turn, and a
-  known peer's last addresses (or the relay rendezvous) do not wait for
-  discovery.
+  2 to 4 seconds times the number of available contacts (about 50 minutes
+  on average for 1,000). Two devices find each other as soon as either sees
+  the other's record, and a known peer's last addresses (or the relay
+  rendezvous) do not wait for discovery.
 
 ## Residual risks
 
@@ -170,6 +176,12 @@ GATT allocation unassigned and forbids inventing one (§16 O7).
   need a decision on what they reveal.
 - **The statistical tests are not a proof:** unlinkability rests on
   HMAC-BLAKE3 being a PRF.
+- **The LAN Hello links a pair's sessions across epochs:** the contact
+  Hello carries the pair's ratchet `generation` in the clear (§4.1), and it
+  grows by one per committed session, so a LAN observer can follow a pair
+  from epoch to epoch whatever its tokens do (found while researching
+  §16 O7). Fix: a spec revision that blinds the generation in the Hello and
+  checks it inside the handshake.
 - **The benchmark ran on one machine** (Apple M5 Pro); x86_64 and phone
   numbers are still to measure.
 - **Multi-device and BLE** wait on O4 and O7 (above).
