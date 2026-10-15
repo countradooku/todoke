@@ -12,6 +12,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.ReportDrawnWhen
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -75,6 +76,15 @@ class MainActivity : FragmentActivity() {
     @Composable
     private fun Content() {
         val core by app.core.collectAsStateWithLifecycle()
+        // Startup ends with the first screen that needs nothing more: the
+        // app, an unlock request, or why the core did not start.
+        ReportDrawnWhen {
+            when (val state = core) {
+                is CoreState.Locked -> state.gated
+                CoreState.Starting -> false
+                else -> true
+            }
+        }
         AskForNotifications()
         when (val state = core) {
             is CoreState.Locked -> Locked(state.gated)

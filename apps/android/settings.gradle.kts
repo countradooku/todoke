@@ -19,6 +19,7 @@ dependencyResolutionManagement {
 
 rootProject.name = "todoke-android"
 include(":app")
+include(":baselineprofile")
 
 includeBuild("../../crates/todoke-ffi/android") {
     dependencySubstitution {
