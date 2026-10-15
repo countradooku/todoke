@@ -449,6 +449,62 @@ fn sending_checks_its_paths() -> TestResult {
     Ok(())
 }
 
+/// Files handed over as open descriptors (Android documents) arrive under
+/// the names given, with their bytes read from the start; descriptors that
+/// are not open or are given twice are refused.
+#[cfg(unix)]
+#[test]
+fn open_files_are_sent_under_their_names() -> TestResult {
+    use std::io::Read as _;
+    use std::os::fd::IntoRawFd as _;
+    let _serial = serial();
+    let (a_home, b_home) = (Scratch::new("fds-a")?, Scratch::new("fds-b")?);
+    let (a, b, a_contact) = paired(&a_home, &b_home)?;
+    let a_events = a.subscribe()?;
+    let picked = b_home.0.join("content-provider-name");
+    std::fs::write(&picked, b"from a document")?;
+    let mut file = std::fs::File::open(&picked)?;
+    // A provider may hand over a descriptor that was read from already.
+    file.read_exact(&mut [0; 4])?;
+    let sent = a_contact.send_files(vec!["Holiday.txt".to_owned()], vec![file.into_raw_fd()])?;
+    let offered = wait_for(&a_events, |event| match event {
+        CoreEvent::OfferReceived { offer } => Some(offer),
+        _ => None,
+    })?;
+    assert_eq!(offered.transfer, sent.id());
+    assert_eq!(offered.entries[0].name, "Holiday.txt");
+    a.transfer(offered.transfer.clone())?.accept(Vec::new())?;
+    wait_for(&a_events, |event| match event {
+        CoreEvent::Completed { transfer } if transfer == offered.transfer => Some(()),
+        _ => None,
+    })?;
+    assert_eq!(
+        std::fs::read(a_home.0.join("downloads").join("Holiday.txt"))?,
+        b"from a document"
+    );
+    // Refused: no files, a missing name, a closed descriptor, one twice.
+    assert!(matches!(
+        a_contact.send_files(Vec::new(), Vec::new()),
+        Err(TodokeError::Invalid { .. })
+    ));
+    let fd = std::fs::File::open(&picked)?.into_raw_fd();
+    assert!(matches!(
+        a_contact.send_files(Vec::new(), vec![fd]),
+        Err(TodokeError::Invalid { .. })
+    ));
+    assert!(matches!(
+        a_contact.send_files(vec!["x".to_owned()], vec![fd]),
+        Err(TodokeError::Invalid { .. })
+    ));
+    let fd = std::fs::File::open(&picked)?.into_raw_fd();
+    assert!(matches!(
+        a_contact.send_files(vec!["x".to_owned(), "y".to_owned()], vec![fd, fd]),
+        Err(TodokeError::Invalid { .. })
+    ));
+    drop((b, sent, a_contact));
+    Ok(())
+}
+
 /// Handles to things the core does not know answer with typed errors.
 #[test]
 fn unknown_handles_are_typed_errors() -> TestResult {

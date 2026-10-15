@@ -57,6 +57,26 @@ impl Shared {
         }
     }
 
+    /// Offers open `files` under `names` to `contact`, as `request` would
+    /// offer paths.
+    #[cfg(unix)]
+    pub(crate) fn send_files(
+        &self,
+        contact: String,
+        names: Vec<String>,
+        files: Vec<std::fs::File>,
+    ) -> Result<Response, TodokeError> {
+        let files = names
+            .into_iter()
+            .zip(files)
+            .map(|(name, file)| todoke_core::send::OpenFile { name, file })
+            .collect();
+        match crate::block::block_on(self.core.send_files(contact, files)) {
+            Response::Error { code, message } => Err(TodokeError::from_core(code, &message)),
+            response => Ok(response),
+        }
+    }
+
     /// Sends `request`, which answers `Done`.
     pub(crate) fn done(&self, request: Request) -> Result<(), TodokeError> {
         match self.request(request)? {
@@ -98,6 +118,8 @@ impl Core {
         }
         #[cfg(not(target_family = "wasm"))]
         {
+            #[cfg(target_os = "android")]
+            crate::android::record_api_level();
             let config = crate::config::core_config(settings, key_store.is_some())?;
             let source = crate::keys::source(&config.state_dir, key_store, config.key_storage)?;
             let core = todoke_core::runtime::Core::start(config, Box::new(source))

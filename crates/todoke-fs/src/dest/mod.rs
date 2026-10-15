@@ -10,19 +10,18 @@
 //! | Platform | Implementation | Status |
 //! | --- | --- | --- |
 //! | Linux, macOS, Windows (and any POSIX directory on Android or iOS) | [`DirDestination`] | Here |
-//! | Android Storage Access Framework (a user-picked tree URI) | An adapter over `DocumentsContract` in the Android app | Trait only; P16 |
+//! | Android Storage Access Framework (a user-picked tree URI) | None: the app moves published files there (below) | P16 |
 //! | iOS app sandbox and user-picked folders | An adapter using `NSFileCoordinator` and security-scoped URLs in the iOS app | Trait only; P17 |
 //!
-//! **Android SAF (P16).** `DocumentsContract.createDocument(parent, mime,
-//! displayName)` creates a document and never overwrites: providers pick
-//! a free display name (the external storage provider appends `" (1)"`),
-//! so [`Destination::publish`] must report the name the provider chose,
-//! which the sink records. There is no rename-without-replace, so the
-//! adapter writes the content into the document created under its final
-//! name through a `ParcelFileDescriptor` and deletes it on failure
-//! (publication is not atomic there; [`Atomicity::Copied`]). Directory
-//! handles are document URIs; there are no links to follow. The private
-//! quarantine stays in app-internal storage (a POSIX directory).
+//! **Android SAF (P16).** Files are received into app-private storage, a
+//! POSIX directory, through [`DirDestination`] like on any other platform.
+//! The Android app then moves what was published into the folder the user
+//! chose, through `DocumentsContract`, when nothing is being received
+//! (before Android 11 publication is a copy, visible before it is whole). A
+//! provider's `createDocument` never overwrites (it picks a free display
+//! name), so a [`Destination`] over SAF was not needed: verification,
+//! naming, and publication stay here, and SAF only ever sees finished
+//! files (docs/adr/0015-android.md).
 //!
 //! **iOS (P17).** The app container (`Documents`) is POSIX, so
 //! [`DirDestination`] works there unchanged. A folder the user picks

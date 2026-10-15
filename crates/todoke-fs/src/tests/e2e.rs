@@ -556,6 +556,45 @@ fn the_preparer_refuses_swapped_paths() -> TestResult {
     Ok(())
 }
 
+/// A file handed over already open (an Android document) is hashed from
+/// its start whatever was read from it already, served like a path's, and
+/// refused unless it is a regular file.
+#[test]
+fn the_preparer_hashes_handed_over_files() -> TestResult {
+    use std::io::Read as _;
+    let dir = TempDir::new()?;
+    let path = dir.path().join("doc");
+    std::fs::write(&path, b"handed over")?;
+    let hasher = crate::Preparer::new(&scratch()?)?;
+    let mut file = std::fs::File::open(&path)?;
+    let mut first = [0; 4];
+    file.read_exact(&mut first)?;
+    let prepared = hasher.prepare_file(file)?;
+    assert_eq!(prepared.root(), blake3::hash(b"handed over").as_bytes());
+    assert_eq!(prepared.size(), 11);
+    let mut source = FsSource::new(&scratch()?)?;
+    source.insert([0x33; 16], 1, prepared);
+    assert!(source.open(&[0x33; 16], 1).is_ok());
+    // A directory handle is no file to send.
+    #[cfg(unix)]
+    {
+        use todoke_transfer::SourceError;
+        let directory = std::fs::File::open(dir.path())?;
+        assert_eq!(
+            hasher.prepare_file(directory).map(|_| ()),
+            Err(SourceError::Io(std::io::ErrorKind::InvalidInput))
+        );
+        // Nor is a pipe.
+        let (reader, _writer) = std::io::pipe()?;
+        let reader = std::fs::File::from(std::os::fd::OwnedFd::from(reader));
+        assert_eq!(
+            hasher.prepare_file(reader).map(|_| ()),
+            Err(SourceError::Io(std::io::ErrorKind::InvalidInput))
+        );
+    }
+    Ok(())
+}
+
 /// Two sessions' engines share one sink through `SharedSink`.
 #[test]
 fn engines_share_one_sink() -> TestResult {

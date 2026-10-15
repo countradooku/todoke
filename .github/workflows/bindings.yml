@@ -169,6 +169,20 @@ jobs:
           gradle -p crates/todoke-ffi/android assembleRelease \
             -Ptodoke.android="$PWD/crates/todoke-ffi/dist/android"
           ls -l crates/todoke-ffi/android/build/outputs/aar/
+      # The AAR must carry the bindings' classes and every ABI's library (an
+      # AAR built from misplaced Kotlin sources is empty but still builds).
+      - name: Check what the AAR contains
+        run: |
+          aar=$(ls crates/todoke-ffi/android/build/outputs/aar/*release.aar)
+          work="$RUNNER_TEMP/aar" && rm -rf "$work" && mkdir -p "$work"
+          unzip -q "$aar" -d "$work"
+          for class in Core Guarded Native SubscriptionsKt; do
+            unzip -l "$work/classes.jar" | grep -q "org/todoke/ffi/$class.class" \
+              || { echo "missing org.todoke.ffi.$class" >&2; exit 1; }
+          done
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            test -s "$work/jni/$abi/libtodoke_ffi.so" || { echo "missing the $abi library" >&2; exit 1; }
+          done
       - name: Keep the AAR
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

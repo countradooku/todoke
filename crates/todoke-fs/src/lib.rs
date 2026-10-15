@@ -103,6 +103,7 @@ pub mod detect;
 pub mod fuzzing;
 pub mod name;
 mod plan;
+pub mod platform;
 pub mod quarantine;
 #[cfg(any(unix, windows))]
 mod shared;

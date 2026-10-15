@@ -26,7 +26,7 @@ use zeroize::Zeroizing;
 
 use super::relay::Role;
 use super::session::{self, SessionCommand};
-use super::{Envelope, StartError};
+use super::{Command, Envelope, StartError};
 use crate::api::{
     ContactInfo, ErrorCode, Event, HISTORY_NAMES, HistoryEntry, MIN_PREFIX, OfferInfo, ReceiptInfo,
     Request, Response, Route, StatusInfo, StrangerInfo, TransferInfo, TransferState, Way, hex,
@@ -1122,13 +1122,24 @@ impl State {
     /// (the core keeps serving meanwhile), then handed to the session with
     /// that contact or queued for the next one.
     async fn send(self: &Rc<Self>, contact: &str, paths: &[std::path::PathBuf]) -> Response {
+        let paths = paths.to_vec();
+        self.send_with(contact, move || send::walk(&paths)).await
+    }
+
+    /// Offers what `walk` finds (paths walked, or files handed over open)
+    /// to `contact`: walked and hashed on the blocking pool.
+    pub(super) async fn send_with(
+        self: &Rc<Self>,
+        contact: &str,
+        walk: impl FnOnce() -> Result<send::Walked, send::SendError> + Send + 'static,
+    ) -> Response {
         let peer = match self.resolve_contact(contact).await {
             Ok(peer) => peer,
             Err(response) => return response,
         };
-        let (paths, hasher, now) = (paths.to_vec(), self.preparer.clone(), wall());
+        let (hasher, now) = (self.preparer.clone(), wall());
         let outcome = tokio::task::spawn_blocking(move || {
-            let walked = send::walk(&paths)?;
+            let walked = walk()?;
             send::check_open_files(walked.files())?;
             send::prepare(&walked, now, &hasher).map(|prepared| (prepared, walked.skipped))
         })
@@ -1397,10 +1408,18 @@ pub(super) async fn run(
         tokio::select! {
             _ = &mut stop => break,
             envelope = requests.recv() => {
-                let Some((request, reply)) = envelope else { break };
+                let Some((command, reply)) = envelope else { break };
                 let state = Rc::clone(&state);
                 tokio::task::spawn_local(async move {
-                    let _ = reply.send(state.handle(request).await);
+                    let response = match command {
+                        Command::Api(request) => state.handle(request).await,
+                        Command::SendFiles { contact, files } => {
+                            state
+                                .send_with(&contact, move || send::walk_open(files))
+                                .await
+                        }
+                    };
+                    let _ = reply.send(response);
                 });
             }
             accepted = accept => {

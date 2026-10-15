@@ -10,8 +10,74 @@ fn names(walked: &Walked) -> Vec<(Option<usize>, String, bool)> {
         .map(|entry| match entry {
             Walk::Directory { parent, name, .. } => (*parent, name.clone(), true),
             Walk::File { parent, name, .. } => (*parent, name.clone(), false),
+            Walk::Opened { name, .. } => (None, name.clone(), false),
         })
         .collect()
+}
+
+/// A directory handle, as an app could hand one over (Windows opens
+/// directories only with `FILE_FLAG_BACKUP_SEMANTICS`).
+fn open_dir(path: &std::path::Path) -> std::io::Result<std::fs::File> {
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    options.open(path)
+}
+
+/// Files handed over open: each under its own name (NFC), regular files
+/// only, names other systems cannot use skipped and counted, two with one
+/// name refused, and nothing left is `Empty`. Hashing starts from the
+/// start of each file, and the offer has the given names.
+#[test]
+fn open_files_are_offered_under_their_names() -> TestResult {
+    let scratch = Scratch::new("open")?;
+    std::fs::create_dir_all(&scratch.0)?;
+    let (a, b) = (scratch.0.join("1"), scratch.0.join("2"));
+    std::fs::write(&a, b"first")?;
+    std::fs::write(&b, b"second")?;
+    let open = |path: &std::path::Path, name: &str| -> std::io::Result<OpenFile> {
+        Ok(OpenFile {
+            name: name.to_owned(),
+            file: std::fs::File::open(path)?,
+        })
+    };
+    let walked = walk_open(vec![
+        open(&a, "Photo.jpg")?,
+        open(&b, "Cafe\u{301}.txt")?,
+        open(&a, "bad/name")?,
+        open(&a, "CON")?,
+        OpenFile {
+            name: "folder".into(),
+            file: open_dir(&scratch.0)?,
+        },
+    ])?;
+    assert_eq!(walked.skipped, 3);
+    assert_eq!(walked.files(), 2);
+    assert_eq!(names(&walked)[0], (None, "Photo.jpg".to_owned(), false));
+    let hasher = todoke_fs::Preparer::new(&scratch.0.join("outboards"))?;
+    let offer = prepare(
+        &walked,
+        UnixTime::new(1_800_000_000).ok_or("time")?,
+        &hasher,
+    )?;
+    assert_eq!(offer.files(), 2);
+    assert_eq!(offer.total_bytes(), 11);
+    assert_eq!(offer.top_names(8), ["Photo.jpg", "Caf\u{e9}.txt"]);
+    assert_eq!(
+        walk_open(vec![open(&a, "same")?, open(&b, "same")?]).map(|_| ()),
+        Err(SendError::Duplicate)
+    );
+    assert_eq!(
+        walk_open(vec![open(&a, "")?]).map(|_| ()),
+        Err(SendError::Empty)
+    );
+    assert_eq!(walk_open(Vec::new()).map(|_| ()), Err(SendError::Empty));
+    Ok(())
 }
 
 #[test]

@@ -1,9 +1,9 @@
 //! POSIX directory operations through `openat`-family calls (rustix): every
 //! lookup is relative to an open directory, `O_NOFOLLOW` refuses links,
 //! `O_CREAT | O_EXCL` never opens an existing entry, and publication uses
-//! rename-without-replace (`renameat2(RENAME_NOREPLACE)` on Linux,
-//! `renameatx_np(RENAME_EXCL)` on Apple platforms), else a hard link,
-//! else an exclusive copy. Publication is bound to the staged file the
+//! rename-without-replace (`renameat2(RENAME_NOREPLACE)` on Linux and on
+//! Android 11 and later, `renameatx_np(RENAME_EXCL)` on Apple platforms),
+//! else a hard link, else an exclusive copy. Publication is bound to the staged file the
 //! sink wrote and hashed: before and after the rename or link, the
 //! temporary and final names must refer to that open file (same device and
 //! inode, and the expected link count), so a file substituted under the
@@ -202,13 +202,11 @@ fn place(
     temp: &str,
     name: &str,
 ) -> Result<Atomicity, DestError> {
-    // Android: bionic declares renameat2 from API level 30 (Android 11),
-    // but whether the app seccomp filter of every supported release allows
-    // the system call is unverified, and a disallowed call kills the
-    // process, so Android starts with the hard link until P16 verifies it
-    // on devices (docs/adr/0006-filesystem.md).
-    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
-    if let Some(done) = rename_new(dir, staged, temp, name)? {
+    // Android allows renameat2 from API level 30 only (crate::platform).
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
+    if crate::platform::rename_noreplace()
+        && let Some(done) = rename_new(dir, staged, temp, name)?
+    {
         return Ok(done);
     }
     if let Some(done) = link_new(dir, staged, temp, name)? {
@@ -221,7 +219,7 @@ fn place(
 /// Renames `temp` to `name` without replacing anything, then requires
 /// `name` to be the staged file with one link. `None` if the filesystem
 /// cannot rename without replacing.
-#[cfg(any(target_os = "linux", target_vendor = "apple"))]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn rename_new(
     dir: &Handle,
     staged: &File,
@@ -240,7 +238,8 @@ fn rename_new(
 
 /// Links `temp` to `name` (a link never replaces), then requires `name` to
 /// be the staged file with exactly two links. `None` if the filesystem
-/// has no hard links.
+/// has no hard links, or refuses this app them (Android's security policy
+/// does, in the app's own data, on every release P16 ran on: 7 to 16).
 fn link_new(
     dir: &Handle,
     staged: &File,
@@ -254,6 +253,8 @@ fn link_new(
             Ok(Some(Atomicity::Atomic))
         }
         Err(errno) if unsupported(errno) => Ok(None),
+        #[cfg(target_os = "android")]
+        Err(Errno::ACCESS) => Ok(None),
         Err(other) => Err(error(other)),
     }
 }
@@ -468,7 +469,7 @@ mod tests {
 
     /// The rename path requires the final name to be the staged file with
     /// one link, and never replaces.
-    #[cfg(any(target_os = "linux", target_vendor = "apple"))]
+    #[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
     #[test]
     fn the_rename_path_publishes_only_the_staged_file() -> TestResult {
         let temp = TempDir::new()?;

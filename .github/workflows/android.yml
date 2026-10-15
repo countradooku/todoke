@@ -1,0 +1,151 @@
+name: Android app
+
+# The Android app (apps/android, P16; docs/adr/0015-android.md): both store
+# flavors built for release against the shipped libraries, each APK under
+# the 15 MB target, no proprietary dependency in the F-Droid flavor, and the
+# instrumented tests (every UI flow with accessibility checks, the export to
+# a chosen folder, two real cores in the app's sandbox) on AOSP emulators
+# without Google services: Android 7, 10, and 16. Nothing is published or
+# signed.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Release APKs (play and fdroid)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the Android targets
+        run: |
+          rustup show
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      - name: Set up Gradle (pinned; no cache)
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: "9.8.1"
+          cache-disabled: true
+      # The shipped libraries: release builds keep sessions disabled
+      # (PROTOCOL §16).
+      - name: Pack the libraries
+        working-directory: crates/todoke-ffi
+        run: boltffi pack android --release
+      - name: Build both flavors for release
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          gradle --no-daemon -p apps/android :app:assemblePlayRelease :app:assembleFdroidRelease \
+            -Ptodoke.android="$PWD/crates/todoke-ffi/dist/android"
+      - name: Check each APK is under 15 MB
+        run: |
+          shopt -s globstar nullglob
+          apks=(apps/android/app/build/outputs/apk/**/release/*.apk)
+          (( ${#apks[@]} == 6 )) || { echo "expected 6 APKs (2 flavors x 3 ABIs), found ${#apks[@]}" >&2; exit 1; }
+          for apk in "${apks[@]}"; do
+            size=$(stat -c %s "$apk")
+            echo "$size $apk"
+            (( size <= 15 * 1024 * 1024 )) || { echo "$apk is over 15 MB" >&2; exit 1; }
+          done
+      # F-Droid builds only free software: no Play Services, Firebase,
+      # ML Kit, or Play billing in what the fdroid flavor ships.
+      - name: Check the fdroid flavor has no proprietary dependency
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          gradle --no-daemon -q -p apps/android :app:dependencies --configuration fdroidReleaseRuntimeClasspath \
+            -Ptodoke.android="$PWD/crates/todoke-ffi/dist/android" > "$RUNNER_TEMP/fdroid-deps.txt"
+          grep -q "org.todoke:todoke-ffi-android" "$RUNNER_TEMP/fdroid-deps.txt" \
+            || { echo "the dependency report is empty" >&2; exit 1; }
+          if grep -nE "com\.google\.android\.gms|com\.google\.firebase|com\.google\.mlkit|com\.android\.billingclient|com\.google\.android\.play" \
+            "$RUNNER_TEMP/fdroid-deps.txt"; then
+            echo "the fdroid flavor depends on proprietary libraries" >&2
+            exit 1
+          fi
+      - name: Keep the APKs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: todoke-android-apks
+          path: apps/android/app/build/outputs/apk/**/release/*.apk
+          if-no-files-found: error
+          retention-days: 14
+
+  instrumented:
+    name: Instrumented tests (AOSP emulator, API ${{ matrix.api }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # 36: publication by renameat2. 29: Android 10, where apps get
+        # neither renameat2 nor hard links, so files publish by copying.
+        # 24: the minimum (Android 7).
+        api: [36, 29, 24]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the Android targets
+        run: |
+          rustup show
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      - name: Set up Gradle (pinned; no cache)
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: "9.8.1"
+          cache-disabled: true
+      # Development sessions and loopback discovery, so the real-core test
+      # starts two cores (boltffi.test.toml).
+      - name: Pack the development libraries
+        working-directory: crates/todoke-ffi
+        run: boltffi --overlay boltffi.test.toml pack android
+      - name: Build the app and its tests
+        run: |
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          gradle --no-daemon -p apps/android :app:assemblePlayDebug :app:assemblePlayDebugAndroidTest \
+            -Ptodoke.android="$PWD/crates/todoke-ffi/target-tests/android"
+      - name: Let the emulator use KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run the instrumented tests
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: ${{ matrix.api }}
+          target: default
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          script: JAVA_HOME="$JAVA_HOME_21_X64" gradle --no-daemon -p apps/android :app:connectedPlayDebugAndroidTest -Ptodoke.android="$PWD/crates/todoke-ffi/target-tests/android"
+      - name: Keep the results and screenshots
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: todoke-android-tests-${{ matrix.api }}
+          path: |
+            apps/android/app/build/outputs/androidTest-results/
+            apps/android/app/build/outputs/connected_android_test_additional_output/
+          if-no-files-found: warn
+          retention-days: 14

@@ -200,6 +200,20 @@ impl Preparer {
     ) -> Result<PreparedFile, SourceError> {
         prepare_in(&self.outboards, path, expected)
     }
+
+    /// Hashes `file`, already open (a file the platform handed over for
+    /// the local user, such as an Android document), and builds its
+    /// outboard. It must be a regular file that can be read from the start
+    /// again: a pipe or socket is refused.
+    ///
+    /// # Errors
+    ///
+    /// [`SourceError::Io`] for a read failure, a handle that is not a
+    /// regular file (`InvalidInput`), or a file that changed while it was
+    /// hashed (`Other`).
+    pub fn prepare_file(&self, file: File) -> Result<PreparedFile, SourceError> {
+        prepare_open(&self.outboards, file, None)
+    }
 }
 
 /// Creates `dir` (0700 on Unix), emptied.
@@ -249,17 +263,33 @@ fn prepare_in(
     // refuses directories, `PermissionDenied`; Unix refuses a final link,
     // `ELOOP`) is reported as such. The check that counts is below, on
     // the opened handle.
-    let mut file = open_source(path).map_err(|error| {
+    let file = open_source(path).map_err(|error| {
         if std::fs::symlink_metadata(path).is_ok_and(|meta| !meta.is_file()) {
             SourceError::Io(io::ErrorKind::InvalidInput)
         } else {
             io(error)
         }
     })?;
+    prepare_open(outboards, file, expected)
+}
+
+/// Hashes the open `file` into an outboard in `outboards`; with `expected`,
+/// it must be that file in that state.
+fn prepare_open(
+    outboards: &Path,
+    mut file: File,
+    expected: Option<&Metadata>,
+) -> Result<PreparedFile, SourceError> {
+    let io = |error: io::Error| match error.kind() {
+        io::ErrorKind::NotFound => SourceError::NotFound,
+        kind => SourceError::Io(kind),
+    };
     let before = file.metadata().map_err(io)?;
     if !before.is_file() {
         return Err(SourceError::Io(io::ErrorKind::InvalidInput));
     }
+    // A handle the platform handed over may have been read already.
+    file.seek(SeekFrom::Start(0)).map_err(io)?;
     if expected.is_some_and(|expected| Fingerprint::of(expected) != Fingerprint::of(&before)) {
         return Err(SourceError::Io(io::ErrorKind::Other));
     }

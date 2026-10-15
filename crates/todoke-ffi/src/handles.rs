@@ -60,7 +60,53 @@ impl ContactHandle {
             contact: self.device.clone(),
             paths: paths.into_iter().map(Into::into).collect(),
         };
-        match self.shared.request(request)? {
+        self.offered(self.shared.request(request)?)
+    }
+
+    /// Offers files the app opened for the user (Android: documents from
+    /// the Storage Access Framework) to this contact, each under its name
+    /// in `names` (what the user saw; checked like a path's last part).
+    /// `fds` are their descriptors, which this call takes over: detach them
+    /// (`ParcelFileDescriptor.detachFd()`) and never close them afterwards,
+    /// whatever this returns. Only regular files that can be read from the
+    /// start again are sent. Blocks while the core hashes them: call it off
+    /// the UI thread.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for no files, `names` and `fds` of
+    /// different lengths, or a descriptor that is not open or is given
+    /// twice; [`TodokeError::Unsupported`] where there are no descriptors
+    /// (Windows, the web); otherwise the core's answer.
+    pub fn send_files(
+        &self,
+        names: Vec<String>,
+        fds: Vec<i32>,
+    ) -> Result<TransferHandle, TodokeError> {
+        #[cfg(unix)]
+        {
+            // Take every descriptor first, so none leaks whatever follows.
+            let files = crate::fds::adopt(&fds)?;
+            if files.is_empty() || names.len() != files.len() {
+                return Err(TodokeError::Invalid {
+                    message: "give one name for each file to send".to_owned(),
+                });
+            }
+            self.offered(self.shared.send_files(self.device.clone(), names, files)?)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (names, fds);
+            Err(TodokeError::Unsupported {
+                message: "open files can only be handed over on Android and Unix".to_owned(),
+            })
+        }
+    }
+}
+
+impl ContactHandle {
+    fn offered(&self, response: Response) -> Result<TransferHandle, TodokeError> {
+        match response {
             Response::Offered { transfer, .. } => Ok(TransferHandle {
                 shared: Arc::clone(&self.shared),
                 id: transfer,

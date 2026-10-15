@@ -56,6 +56,15 @@ zeroize.workspace = true
 # The core's event stream (a broadcast channel), read on a thread of ours.
 tokio = { workspace = true, features = ["sync"] }
 
+[target.'cfg(unix)'.dependencies]
+# Checking that a descriptor the app hands over is open before adopting it.
+rustix.workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Telling the file layer the Android release, which decides whether files
+# are published with renameat2 (src/android.rs).
+todoke-fs.workspace = true
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # The storage key in the Keychain (and the Secure Enclave) without crossing
 # the boundary.

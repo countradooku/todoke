@@ -35,6 +35,8 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+#[cfg(target_os = "android")]
+mod android;
 #[cfg(not(target_family = "wasm"))]
 mod block;
 pub mod code;
@@ -42,6 +44,8 @@ mod config;
 pub mod engine;
 pub mod error;
 pub mod events;
+#[cfg(unix)]
+mod fds;
 #[cfg(not(target_family = "wasm"))]
 mod forward;
 pub mod handles;
