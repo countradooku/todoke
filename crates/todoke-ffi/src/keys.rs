@@ -14,8 +14,9 @@ use crate::error::TodokeError;
 use crate::hooks::{KeyStore, KeyStoreError};
 
 /// The source for the profile in `state_dir`: the app's key store if it
-/// gave one, else the platform's own where Rust reaches it (the macOS
-/// Keychain), else none (a private file, as the policy allows).
+/// gave one, else the platform's own where Rust reaches it (the macOS and
+/// iOS Keychain, needing the user's presence with `presence`), else none (a
+/// private file, as the policy allows).
 ///
 /// # Errors
 ///
@@ -25,13 +26,14 @@ pub(crate) fn source(
     state_dir: &Path,
     key_store: Option<Arc<dyn KeyStore>>,
     policy: KeyStorage,
+    presence: bool,
 ) -> Result<Selected, TodokeError> {
     let platform: Option<Box<dyn PlatformKeyStore>> = match key_store {
         Some(store) => Some(Box::new(App {
             store,
             profile: profile(state_dir)?,
         })),
-        None => native(state_dir)?,
+        None => native(state_dir, presence)?,
     };
     Ok(Selected::new(state_dir, platform, policy))
 }
@@ -44,17 +46,24 @@ fn profile(state_dir: &Path) -> Result<String, TodokeError> {
     })
 }
 
-#[cfg(target_os = "macos")]
-fn native(state_dir: &Path) -> Result<Option<Box<dyn PlatformKeyStore>>, TodokeError> {
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn native(
+    state_dir: &Path,
+    presence: bool,
+) -> Result<Option<Box<dyn PlatformKeyStore>>, TodokeError> {
     let id = profile(state_dir)?;
-    Ok(Some(Box::new(Keychain(
-        todoke_sys_macos::keychain::Keychain::for_profile(&id),
-    ))))
+    let keychain = todoke_sys_macos::keychain::Keychain::for_profile(&id);
+    let keychain = if presence {
+        keychain.requiring_presence()
+    } else {
+        keychain
+    };
+    Ok(Some(Box::new(Keychain(keychain))))
 }
 
-#[cfg(not(target_os = "macos"))]
-#[expect(clippy::unnecessary_wraps, reason = "fallible on macOS")]
-fn native(_: &Path) -> Result<Option<Box<dyn PlatformKeyStore>>, TodokeError> {
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[expect(clippy::unnecessary_wraps, reason = "fallible on Apple platforms")]
+fn native(_: &Path, _: bool) -> Result<Option<Box<dyn PlatformKeyStore>>, TodokeError> {
     Ok(None)
 }
 
@@ -107,11 +116,11 @@ impl PlatformKeyStore for App {
     }
 }
 
-/// The macOS Keychain, as the core sees it.
-#[cfg(target_os = "macos")]
+/// The macOS or iOS Keychain, as the core sees it.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 struct Keychain(todoke_sys_macos::keychain::Keychain);
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 impl PlatformKeyStore for Keychain {
     fn protection(&self) -> todoke_core::api::KeyProtection {
         match self.0.protection() {

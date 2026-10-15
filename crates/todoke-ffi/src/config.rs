@@ -88,6 +88,9 @@ pub(crate) fn start_error(error: todoke_core::runtime::StartError) -> TodokeErro
         StartError::Profile(todoke_core::profile::ProfileError::StorageKey) => {
             TodokeError::KeyStore { message }
         }
+        StartError::Profile(todoke_core::profile::ProfileError::StorageKeyRefused) => {
+            TodokeError::Locked { message }
+        }
         StartError::Profile(_) | StartError::Quarantine(_) => TodokeError::Profile { message },
         StartError::Io(_) | StartError::Thread => TodokeError::Internal { message },
     }
@@ -199,6 +202,7 @@ mod tests {
         let cases = [
             (StartError::Disabled, "Disabled"),
             (StartError::Profile(ProfileError::StorageKey), "KeyStore"),
+            (StartError::Profile(ProfileError::StorageKeyRefused), "Locked"),
             (StartError::Profile(ProfileError::Random), "Profile"),
             (
                 StartError::Profile(ProfileError::Corrupt("the identity")),
@@ -218,6 +222,7 @@ mod tests {
             let named = match &mapped {
                 TodokeError::Disabled { .. } => "Disabled",
                 TodokeError::KeyStore { .. } => "KeyStore",
+                TodokeError::Locked { .. } => "Locked",
                 TodokeError::Profile { .. } => "Profile",
                 TodokeError::Internal { .. } => "Internal",
                 _ => "other",

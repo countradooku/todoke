@@ -280,7 +280,7 @@ impl State {
         // Asked once: a platform store may cost a round trip (or a prompt).
         let key = key_source
             .storage_key()
-            .map_err(|_| StartError::Profile(crate::profile::ProfileError::StorageKey))?;
+            .map_err(|error| StartError::Profile(crate::profile::ProfileError::storage_key(&error)))?;
         let key_protection = key_source.protection();
         let fetched = crate::storage_key::Fetched(Zeroizing::new(*key));
         let profile =

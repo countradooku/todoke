@@ -336,14 +336,20 @@ class BindingsTest {
     }
 
     /**
-     * A key store that refuses, throws something it does not declare, or
-     * hands back something that is not a key stops the start with a key
-     * store error.
+     * A key store that throws something it does not declare, or hands back
+     * something that is not a key, stops the start with a key store error;
+     * one that refuses (the user did not unlock) with Locked.
      */
     @Test
     fun failingKeyStoresStopTheStart() = runBlocking(Dispatchers.IO) {
+        // Refused: the user did not unlock; the app asks again.
+        assertFailsWith<TodokeError.Locked> {
+            Core(
+                settings(home("refusing"), KeyStoragePolicy.PLATFORM),
+                CannedKeyStore({ null }, { throw KeyStoreError.Refused("no") }),
+            )
+        }
         val stores = listOf(
-            CannedKeyStore({ null }, { throw KeyStoreError.Refused("no") }),
             CannedKeyStore({ null }, { throw IllegalStateException("undeclared") }),
             CannedKeyStore({ throw IllegalStateException("undeclared") }, {}),
             CannedKeyStore({ throw KeyStoreError.Unavailable("locked") }, {}),

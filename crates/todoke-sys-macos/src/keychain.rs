@@ -1,12 +1,20 @@
-//! The storage key in the Keychain (§16 O9).
+//! The storage key in the Keychain (§16 O9), on macOS and iOS.
 //!
-//! In a signed build entitled to a Keychain access group, the key lives in
-//! the data-protection keychain, readable only while this Mac is unlocked,
-//! never synchronised or migrated to another device, and stored wrapped by
-//! a P-256 key in the Secure Enclave (ECIES, X9.63 SHA-256, AES-GCM): the
-//! stored item alone opens nothing off this machine. Without that
-//! entitlement (development builds) it lives in the login keychain, whose
-//! access list names the binary that created it.
+//! In a signed build entitled to a Keychain access group (every iOS app
+//! is), the key lives in the data-protection keychain, readable only while
+//! the device is unlocked, never synchronised, backed up, or migrated to
+//! another device, and stored wrapped by a P-256 key in the Secure Enclave
+//! (ECIES, X9.63 SHA-256, AES-GCM): the stored item alone opens nothing off
+//! this device. Without that entitlement (macOS development builds) it
+//! lives in the login keychain, whose access list names the binary that
+//! created it; iOS has no such fallback.
+//!
+//! With [`Keychain::requiring_presence`], using the key needs the user:
+//! Face ID, Touch ID, or the device passcode, asked by the system
+//! (`LocalAuthentication`) each time the key is unwrapped. The access control
+//! sits on the Secure Enclave key, or on the item where there is no Secure
+//! Enclave (the iOS Simulator). A refused or cancelled prompt is
+//! [`io::ErrorKind::PermissionDenied`].
 
 use std::io;
 use std::sync::Mutex;
@@ -27,6 +35,9 @@ const NOT_FOUND: i32 = -25_300;
 const MISSING_ENTITLEMENT: i32 = -34_018;
 /// `errSecDuplicateItem`.
 const DUPLICATE: i32 = -25_299;
+/// `errSecUserCanceled`, `errSecAuthFailed`, and
+/// `errSecInteractionNotAllowed`: the user did not (or could not) unlock.
+const REFUSED: [i32; 3] = [-128, -25_293, -25_308];
 
 /// A stored blob: one format byte, then the payload.
 const RAW: u8 = 1;
@@ -45,6 +56,8 @@ pub enum KeyProtection {
 pub struct Keychain {
     account: String,
     wrap_label: String,
+    /// Whether a key stored from now on needs the user's presence.
+    presence: bool,
     protection: Mutex<KeyProtection>,
 }
 
@@ -57,6 +70,9 @@ impl core::fmt::Debug for Keychain {
 }
 
 fn os(error: security_framework::base::Error) -> io::Error {
+    if REFUSED.contains(&error.code()) {
+        return io::Error::new(io::ErrorKind::PermissionDenied, "the unlock was refused");
+    }
     io::Error::other(format!("Keychain error {}", error.code()))
 }
 
@@ -93,7 +109,26 @@ impl Keychain {
         Self {
             account: format!("storage key: {profile}"),
             wrap_label: format!("{SERVICE} wrap: {profile}"),
+            presence: false,
             protection: Mutex::new(KeyProtection::Keychain),
+        }
+    }
+
+    /// A key stored from now on needs the user's presence to be used (the
+    /// access control is fixed when the key is stored; one stored already
+    /// keeps its own).
+    #[must_use]
+    pub fn requiring_presence(mut self) -> Self {
+        self.presence = true;
+        self
+    }
+
+    /// The access-control flags of what this store creates.
+    fn flags(&self, base: AccessControlOptions) -> AccessControlOptions {
+        if self.presence {
+            base | AccessControlOptions::USER_PRESENCE
+        } else {
+            base
         }
     }
 
@@ -117,9 +152,14 @@ impl Keychain {
         let protected = match generic_password(self.protected()) {
             Ok(blob) => return Ok((Some(blob), true)),
             Err(error) if error.code() == NOT_FOUND => true,
+            // iOS apps are always entitled: no weaker item to fall back to.
+            #[cfg(target_os = "macos")]
             Err(error) if error.code() == MISSING_ENTITLEMENT => false,
             Err(error) => return Err(os(error)),
         };
+        if cfg!(target_os = "ios") {
+            return Ok((None, protected));
+        }
         match generic_password(self.legacy()) {
             Ok(blob) => Ok((Some(blob), false)),
             Err(error) if error.code() == NOT_FOUND => Ok((None, protected)),
@@ -129,24 +169,28 @@ impl Keychain {
 
     /// The Secure Enclave key that wraps this profile's storage key.
     fn wrapping_key(&self) -> Option<SecKey> {
-        let found = ItemSearchOptions::new()
+        let mut search = ItemSearchOptions::new();
+        search
             .class(ItemClass::key())
             .label(&self.wrap_label)
-            .ignore_legacy_keychains()
-            .load_refs(true)
+            .load_refs(true);
+        #[cfg(target_os = "macos")]
+        search.ignore_legacy_keychains();
+        search
             .search()
-            .ok()?;
-        found.into_iter().find_map(|result| match result {
-            SearchResult::Ref(Reference::Key(key)) => Some(key),
-            _ => None,
-        })
+            .ok()?
+            .into_iter()
+            .find_map(|result| match result {
+                SearchResult::Ref(Reference::Key(key)) => Some(key),
+                _ => None,
+            })
     }
 
     /// Creates the wrapping key in the Secure Enclave, where present.
     fn new_wrapping_key(&self) -> Option<SecKey> {
         let access = SecAccessControl::create_with_protection(
             Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            AccessControlOptions::PRIVATE_KEY_USAGE.bits(),
+            self.flags(AccessControlOptions::PRIVATE_KEY_USAGE).bits(),
         )
         .ok()?;
         let mut options = GenerateKeyOptions::default();
@@ -218,12 +262,28 @@ impl Keychain {
                         "the Secure Enclave key that wraps the storage key is gone",
                     )
                 })?;
+                // With a presence requirement, the system asks the user here.
                 let plain = key
                     .decrypt_data(
                         Algorithm::ECIESEncryptionCofactorVariableIVX963SHA256AESGCM,
                         payload,
                     )
-                    .map_err(|_| io::Error::other("the Secure Enclave refused to unwrap"))?;
+                    .map_err(|error| {
+                        // A cancelled or failed prompt: an OSStatus code, or
+                        // LocalAuthentication's own domain.
+                        let refused = error.domain().to_string().contains("LocalAuthentication")
+                            || REFUSED.iter().any(|code| {
+                                isize::try_from(*code).is_ok_and(|code| code == error.code())
+                            });
+                        if refused {
+                            io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "the unlock was refused",
+                            )
+                        } else {
+                            io::Error::other("the Secure Enclave refused to unwrap")
+                        }
+                    })?;
                 Zeroizing::new(plain)
             }
             _ => {
@@ -318,9 +378,16 @@ impl Keychain {
             blob.extend_from_slice(key);
         }
         let mut options = self.protected();
+        // The wrapped key's presence requirement is on the Secure Enclave
+        // key; a raw key (no Secure Enclave) carries it on the item.
+        let item_flags = if protection == KeyProtection::SecureEnclave {
+            AccessControlOptions::empty()
+        } else {
+            self.flags(AccessControlOptions::empty())
+        };
         let access = SecAccessControl::create_with_protection(
             Some(ProtectionMode::AccessibleWhenUnlockedThisDeviceOnly),
-            0,
+            item_flags.bits(),
         )?;
         options.set_access_control(access);
         add(&blob, &options)?;

@@ -287,12 +287,17 @@ final class TodokeTests: XCTestCase {
         a.clearNotifier()
     }
 
-    /// A key store that refuses, fails with an error it does not declare,
-    /// or hands back something that is not a key stops the start with a
-    /// key store error.
+    /// A key store that fails with an error it does not declare, or hands
+    /// back something that is not a key, stops the start with a key store
+    /// error; one that refuses (the user did not unlock) with `locked`.
     func testFailingKeyStoresStopTheStart() throws {
+        let refusing = CannedKeyStore(load: { nil }, store: { throw KeyStoreError.refused(message: "no") })
+        XCTAssertThrowsError(
+            try Core(withKeyStore: Scratch("refusing").settings(keyStorage: .platform), keyStore: refusing)
+        ) { error in
+            guard case TodokeError.locked = error else { return XCTFail("\(error)") }
+        }
         let stores = [
-            CannedKeyStore(load: { nil }, store: { throw KeyStoreError.refused(message: "no") }),
             CannedKeyStore(load: { nil }, store: { throw Oops() }),
             CannedKeyStore(load: { throw Oops() }, store: {}),
             CannedKeyStore(load: { throw KeyStoreError.unavailable(message: "locked") }, store: {}),

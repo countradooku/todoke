@@ -110,18 +110,20 @@ impl Core {
     fn start(
         settings: &Settings,
         key_store: Option<Arc<dyn KeyStore>>,
+        presence: bool,
     ) -> Result<Self, TodokeError> {
         #[cfg(target_family = "wasm")]
         {
-            let _ = (settings, key_store);
+            let _ = (settings, key_store, presence);
             Err(unsupported())
         }
         #[cfg(not(target_family = "wasm"))]
         {
             #[cfg(target_os = "android")]
             crate::android::record_api_level();
-            let config = crate::config::core_config(settings, key_store.is_some())?;
-            let source = crate::keys::source(&config.state_dir, key_store, config.key_storage)?;
+            let config = crate::config::core_config(settings, key_store.is_some() || presence)?;
+            let source =
+                crate::keys::source(&config.state_dir, key_store, config.key_storage, presence)?;
             let core = todoke_core::runtime::Core::start(config, Box::new(source))
                 .map_err(crate::config::start_error)?;
             let subscribers = Arc::new(Subscribers::default());
@@ -155,10 +157,10 @@ impl Core {
 #[export]
 impl Core {
     /// Starts the core for the profile in `settings.home` with no key store
-    /// of the app's: the storage key in the macOS Keychain (natively,
-    /// nothing crosses), or with `KeyStoragePolicy::File` a private file.
-    /// On Android and iOS, use [`Core::with_key_store`] (or ask for a file
-    /// explicitly). Blocks while the profile opens: call it off the UI
+    /// of the app's: the storage key in the macOS or iOS Keychain, wrapped
+    /// by the Secure Enclave where there is one (natively, nothing crosses),
+    /// or with `KeyStoragePolicy::File` a private file. On Android, use
+    /// [`Core::with_key_store`] (or ask for a file explicitly). Blocks while the profile opens: call it off the UI
     /// thread.
     ///
     /// # Errors
@@ -168,7 +170,30 @@ impl Core {
     /// [`TodokeError::Profile`] or [`TodokeError::KeyStore`] when the
     /// profile cannot be opened.
     pub fn new(settings: Settings) -> Result<Self, TodokeError> {
-        Self::start(&settings, None)
+        Self::start(&settings, None, false)
+    }
+
+    /// Starts the core as [`Core::new`] does on macOS and iOS, with a
+    /// storage key that needs the user's presence: the system asks for
+    /// Face ID, Touch ID, or the passcode (`LocalAuthentication`) while this
+    /// blocks, each time the core starts. The requirement is set when the
+    /// key is first stored; a key stored without it keeps none.
+    /// `settings.key_storage` must be `KeyStoragePolicy::Platform` (the key
+    /// never falls back to a file).
+    ///
+    /// # Errors
+    ///
+    /// As [`Core::new`]; [`TodokeError::Locked`] when the user did not
+    /// unlock (ask again); [`TodokeError::Unsupported`] off Apple
+    /// platforms.
+    pub fn with_presence(settings: Settings) -> Result<Self, TodokeError> {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
+            Self::start(&settings, None, true)
+        } else {
+            Err(TodokeError::Unsupported {
+                message: "a key needing the user's presence is for macOS and iOS".to_owned(),
+            })
+        }
     }
 
     /// Starts the core with the app's key store for the storage key
@@ -186,7 +211,7 @@ impl Core {
         settings: Settings,
         key_store: Arc<dyn KeyStore>,
     ) -> Result<Self, TodokeError> {
-        Self::start(&settings, Some(key_store))
+        Self::start(&settings, Some(key_store), false)
     }
 
     /// This library's version.

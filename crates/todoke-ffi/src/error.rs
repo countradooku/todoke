@@ -57,6 +57,12 @@ pub enum TodokeError {
         /// For people.
         message: String,
     },
+    /// The platform's key store waits for the user to unlock (Face ID,
+    /// Touch ID, the passcode, a biometric prompt): ask, then start again.
+    Locked {
+        /// For people.
+        message: String,
+    },
     /// The profile could not be opened.
     Profile {
         /// For people.
@@ -107,6 +113,7 @@ impl TodokeError {
             | Self::Pairing { message }
             | Self::Source { message }
             | Self::KeyStore { message }
+            | Self::Locked { message }
             | Self::Profile { message }
             | Self::Internal { message } => message,
         }
@@ -199,6 +206,9 @@ mod tests {
             },
             TodokeError::KeyStore {
                 message: "b".into(),
+            },
+            TodokeError::Locked {
+                message: "d".into(),
             },
             TodokeError::Profile {
                 message: "c".into(),
