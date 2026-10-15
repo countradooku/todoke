@@ -169,6 +169,16 @@ class Prefs(application: Application) {
         get() = store.getBoolean("hidden", false)
         set(value) = store.edit().putBoolean("hidden", value).apply()
 
+    /** The key Direct Share shortcut IDs are made with (random, made once;
+     * it only keeps fingerprints out of the system's shortcut store). */
+    @Synchronized
+    fun shortcutKey(): ByteArray {
+        store.getString("shortcut-key", null)?.let { return android.util.Base64.decode(it, android.util.Base64.NO_WRAP) }
+        val key = ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        store.edit().putString("shortcut-key", android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)).apply()
+        return key
+    }
+
     /** The folder received files are exported to (a SAF tree URI). */
     var exportTree: String?
         get() = store.getString("export-tree", null)

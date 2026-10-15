@@ -100,7 +100,7 @@ class MainActivity : FragmentActivity() {
                     ShareSheet(
                         contacts = ui.contacts,
                         count = files.uris.size,
-                        preselected = files.contact,
+                        preselected = files.shortcut?.let { Shortcuts.contact(this@MainActivity, it, ui.contacts) },
                         onSend = { contact ->
                             shared.value = null
                             model.send(contact, files.picked(this@MainActivity))
@@ -187,9 +187,9 @@ class MainActivity : FragmentActivity() {
     }
 }
 
-/** Files another app shared with todoke, and the contact if a Direct Share
- * shortcut was used. */
-class SharedFiles(val uris: List<Uri>, val contact: String?) {
+/** Files another app shared with todoke, and the Direct Share shortcut if
+ * one was used. */
+class SharedFiles(val uris: List<Uri>, val shortcut: String?) {
     fun picked(activity: MainActivity) = uris.map { org.todoke.android.core.Picked(it, org.todoke.android.ui.displayName(activity, it)) }
 
     companion object {
