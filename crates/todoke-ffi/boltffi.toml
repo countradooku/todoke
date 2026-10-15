@@ -9,6 +9,7 @@ global_args = []
 
 [package]
 name = "todoke"
+crate = "todoke_ffi"
 
 [targets.apple]
 enabled = true
@@ -65,9 +66,15 @@ triple = "wasm32-unknown-unknown"
 profile = "release"
 output = "dist/wasm"
 
+# wasm-opt shrinks the module for the browser; browser mode (P21) turns it
+# on with a pinned binaryen. Until then the core does not run in a browser.
 [targets.wasm.optimize]
+enabled = false
 
 [targets.wasm.npm]
+# Never published by CI (packaging/README.md).
+package_name = "@todoke/core"
+targets = ["bundler", "web", "nodejs"]
 
 [targets.java.jvm]
 enabled = false

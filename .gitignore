@@ -81,3 +81,4 @@ __pycache__/
 /crates/todoke-ffi/dist/
 /crates/todoke-ffi/target-tests/
 /crates/todoke-ffi/swift/.build/
+/crates/todoke-ffi/node_modules/
