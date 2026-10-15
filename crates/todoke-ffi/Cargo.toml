@@ -28,3 +28,39 @@ undocumented_unsafe_blocks = "deny"
 
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
+
+[lib]
+# The static and dynamic libraries the Swift package, the Android AAR, and
+# the npm package link; the rlib lets the workspace test it.
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[features]
+# Sessions and code pairing (PROTOCOL §16 gates): development builds only,
+# as for the desktop app and the daemon. Without it the core refuses to
+# start (TodokeError::Disabled).
+unaudited-dev = ["todoke-core/unaudited-dev"]
+
+[dependencies]
+todoke-core.workspace = true
+boltffi.workspace = true
+# The pairing QR code, drawn as modules here: the offer's text crosses only
+# when an app asks for it explicitly.
+qrcode.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# The core's event stream (a broadcast channel), read on a thread of ours.
+tokio = { workspace = true, features = ["sync"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# The storage key in the Keychain (and the Secure Enclave) without crossing
+# the boundary.
+todoke-sys-macos.workspace = true
+
+[dev-dependencies]
+# Sessions in the tests: a development dependency may enable them, as the
+# desktop app's and the CLI's tests do.
+todoke-core = { workspace = true, features = ["unaudited-dev"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
+getrandom.workspace = true
+

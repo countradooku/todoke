@@ -86,6 +86,10 @@ gpui-kit = "=0.7.3"
 tray-icon = { version = "=0.26.1", default-features = false, features = ["ksni"] }
 # The global shortcut (Windows, macOS, X11).
 global-hotkey = "=0.8.0"
+# The binding generator of todoke-ffi (Swift, Kotlin, WASM/TypeScript),
+# pinned exactly: every upgrade is a review of the glue it generates
+# (docs/adr/0012-bindings.md).
+boltffi = { version = "=0.31.1", default-features = false }
 # Windows: WinRT and COM projections (the desktop pieces of
 # todoke-sys-windows, and the Explorer command); features per crate.
 windows = { version = "=0.62.2", default-features = false }

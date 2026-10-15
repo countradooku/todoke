@@ -1,0 +1,17 @@
+# Overlay for the binding tests on a developer machine or a CI runner:
+# only the host's slice, and development sessions (the core starts).
+[cargo]
+global_args = ["--features", "unaudited-dev"]
+
+[targets.apple]
+ios_architectures = []
+simulator_architectures = []
+include_macos = true
+macos_architectures = ["arm64"]
+output = "target-tests/apple"
+
+[targets.android]
+output = "target-tests/android"
+
+[targets.wasm]
+output = "target-tests/wasm"
