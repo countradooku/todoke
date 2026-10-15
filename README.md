@@ -7,7 +7,7 @@ todoke aims to be the best free, open-source, cross-platform file transfer app: 
 ## Security model — five lines
 
 1. Every session must authenticate with Noise IKpsk2 / KKpsk2 / XXpsk3, hybrid X25519 + ML-KEM-768, and a pairing PSK ratcheted per session.
-2. BLE, Wi-Fi P2P, AWDL, USB, LAN, and QUIC relay are untrusted pipes; transport access never establishes identity or consent.
+2. The LAN, Wi-Fi peer-to-peer links, AWDL, and the QUIC relay are untrusted pipes (no Bluetooth or USB); transport access never establishes identity or consent.
 3. Each file must use AES-256-GCM STREAM encryption (XChaCha20-Poly1305 fallback) and BLAKE3/bao verified chunks.
 4. The Rust core must enforce consent: no file byte is accepted before a signed AcceH.
 5. Use libcrux where it covers, otherwise RustCrypto/dalek; zeroize secrets, expose none through logs or FFI, forbid unsafe outside FFI/platform crates, reject hostile input without panics, and collect no telemetry.

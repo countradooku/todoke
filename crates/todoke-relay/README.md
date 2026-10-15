@@ -114,4 +114,4 @@ A device only reads lists from files its user chose; nothing is fetched. An entr
 - At most 1 MiB is buffered in each direction of a tunnel.
 - Every new address is sent a QUIC Retry first, so a spoofed source gets one packet back and no connection.
 - TLS 1.3 only, X25519MLKEM768 preferred, no 0-RTT, no session tickets.
-- It adds no candidates of its own, and devices never hole-punch (§16 O7): every byte goes through the relay.
+- It adds no candidates of its own, and devices never hole-punch (§10: relay-only in v1): every byte goes through the relay.

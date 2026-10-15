@@ -123,18 +123,15 @@ pub trait Notifier: Send + Sync {
     fn missed(&self);
 }
 
-/// What kind of radio a link uses.
+/// What kind of radio a link uses. todoke uses no Bluetooth and no USB
+/// (PROTOCOL §10.1).
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkKind {
-    /// Bluetooth Low Energy.
-    Ble,
-    /// Wi-Fi Direct (Android) or Wi-Fi Aware.
+    /// A Wi-Fi Aware data path, a Wi-Fi Direct group, or a hotspot (§10.2).
     WifiP2p,
-    /// Apple Wireless Direct Link.
+    /// Apple peer-to-peer Wi-Fi (AWDL) or Apple Wi-Fi Aware.
     Awdl,
-    /// A USB cable.
-    Usb,
 }
 
 /// Why a link failed.
@@ -168,11 +165,12 @@ impl From<boltffi::UnexpectedFfiCallbackError> for LinkError {
     }
 }
 
-/// A byte pipe over a platform radio, for the core to run a session on.
+/// A byte pipe over a platform Wi-Fi link, for the core to run a session on
+/// (PROTOCOL §10.1 to §10.3).
 ///
-/// Reserved: PROTOCOL §16 O7 keeps these transports disabled, so
-/// `Core::attach_link` refuses every link for now. The shape is fixed here
-/// so the apps can be written against it.
+/// Reserved: the adapters are not built yet, so `Core::attach_link`
+/// refuses every link for now. The shape is fixed here so the apps can be
+/// written against it.
 #[export]
 pub trait RadioLink: Send + Sync {
     /// The radio.

@@ -151,8 +151,9 @@ that closes O4 and assigns the enrollment messages.
 
 ### Not built: BLE adverts
 
-BLE carries the same 19-byte record, but §9 leaves its service UUID and
-GATT allocation unassigned and forbids inventing one (§16 O7).
+BLE would carry the same 19-byte record, but §9 left its allocation open
+(§16 O7). O7 has since been closed without Bluetooth: todoke uses no
+Bluetooth and no USB at all ([ADR 0014](0014-local-links.md)).
 
 ## Consequences
 
@@ -184,4 +185,4 @@ GATT allocation unassigned and forbids inventing one (§16 O7).
   checks it inside the handshake.
 - **The benchmark ran on one machine** (Apple M5 Pro); x86_64 and phone
   numbers are still to measure.
-- **Multi-device and BLE** wait on O4 and O7 (above).
+- **Multi-device** waits on O4 (above); BLE is out by decision (ADR 0014).

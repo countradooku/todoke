@@ -411,16 +411,16 @@ impl Core {
         drop(previous);
     }
 
-    /// Offers a radio link for sessions.
+    /// Offers a Wi-Fi link for sessions (PROTOCOL §10.1 to §10.3).
     ///
     /// # Errors
     ///
-    /// Always [`TodokeError::Disabled`] for now: PROTOCOL §16 O7 keeps
-    /// radio transports disabled.
+    /// Always [`TodokeError::Disabled`] for now: the Wi-Fi link adapters
+    /// are not built yet.
     pub fn attach_link(&self, link: Arc<dyn RadioLink>) -> Result<(), TodokeError> {
         link.close();
         Err(TodokeError::Disabled {
-            message: "radio links are disabled (PROTOCOL §16 O7)".to_owned(),
+            message: "Wi-Fi links are not available yet".to_owned(),
         })
     }
 }

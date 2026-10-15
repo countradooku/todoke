@@ -582,7 +582,7 @@ struct Link(std::sync::atomic::AtomicBool);
 
 impl RadioLink for Link {
     fn kind(&self) -> LinkKind {
-        LinkKind::Ble
+        LinkKind::WifiP2p
     }
     fn send(&self, _: Vec<u8>) -> Result<(), LinkError> {
         Err(LinkError::Closed)
@@ -592,7 +592,7 @@ impl RadioLink for Link {
     }
 }
 
-/// Radio links are refused while §16 O7 keeps them disabled, and the link
+/// Wi-Fi links are refused until their adapters are built, and the link
 /// offered is closed rather than left open in the app.
 #[test]
 fn radio_links_are_refused_and_closed() -> TestResult {

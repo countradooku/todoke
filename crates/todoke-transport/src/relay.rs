@@ -8,9 +8,9 @@
 //! byte (§4, §5); a relay that tampers with, replays, or drops tunnel
 //! bytes breaks the session, never its confidentiality or integrity.
 //!
-//! This client sends no direct-path candidates and never probes: §10 and
-//! §16 (O7) keep hole punching disabled until a direct-path profile is
-//! ratified. Candidates and `Punch` from the relay are ignored.
+//! This client sends no direct-path candidates and never probes: in v1
+//! non-local paths are relay-only (§10). Candidates and `Punch` from the
+//! relay are ignored.
 
 use core::fmt;
 use core::pin::Pin;

@@ -293,10 +293,12 @@ fn frame_type_registry() {
     for value in [1, 2, 3, 4, 6, 7, 8, 9] {
         assert_eq!(class(value), FrameClass::Session, "{value}");
     }
-    for value in [5, 0x10, 0x15, 0x1c, 0x40] {
+    for value in [5, 0x10, 0x15, 0x1c, 0x20, 0x21, 0x22, 0x40] {
         assert_eq!(class(value), FrameClass::Application, "{value}");
     }
-    for value in [0, 0x0a, 0x0f, 0x1d, 0x3f, 0x41, 0x100, 0x6ff, 0x7fff] {
+    for value in [
+        0, 0x0a, 0x0f, 0x1d, 0x1f, 0x23, 0x3f, 0x41, 0x100, 0x6ff, 0x7fff,
+    ] {
         assert_eq!(class(value), FrameClass::UnsupportedCritical, "{value}");
     }
     for value in [0x8000, 0x9abc, 0xbfff] {
