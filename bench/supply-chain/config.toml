@@ -167,10 +167,20 @@ version = "1.19.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.fastrand]]
+version = "2.5.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for mdns-sd (random query delays), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
+
 [[exemptions.find-msvc-tools]]
 version = "0.1.14"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.flume]]
+version = "0.12.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for mdns-sd (channels to its daemon thread), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
 
 [[exemptions.futures-io]]
 version = "0.3.34"
@@ -231,6 +241,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for todoke-crypto (HMAC-BLAKE3
 version = "0.4.15"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.if-addrs]]
+version = "0.15.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for mdns-sd (interface enumeration), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
 
 [[exemptions.itoa]]
 version = "1.0.18"
@@ -327,10 +342,20 @@ version = "0.8.9"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.lock_api]]
+version = "0.4.14"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for spin (flume), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
+
 [[exemptions.log]]
 version = "0.4.34"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.mdns-sd]]
+version = "0.21.5"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for todoke-discovery (mDNS, PROTOCOL §9; logging feature off), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
 
 [[exemptions.memchr]]
 version = "2.8.3"
@@ -412,6 +437,11 @@ version = "1.0.23"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.scopeguard]]
+version = "1.2.0"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for lock_api (flume), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
+
 [[exemptions.serde]]
 version = "1.0.229"
 criteria = "safe-to-run"
@@ -452,10 +482,20 @@ version = "0.10.0"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.socket-pktinfo]]
+version = "0.4.1"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for mdns-sd (receiving interface of each packet), through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
+
 [[exemptions.socket2]]
 version = "0.6.5"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the LAN benchmark (todoke-transport's dual-stack listener), a development dependency only; replace with an audit or imported audit."
+
+[[exemptions.spin]]
+version = "0.9.9"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-15 for flume, through todoke-discovery in the discovery benchmark (a development dependency only); the root store exempts the same version; replace with an audit or imported audit."
 
 [[exemptions.syn]]
 version = "2.0.119"

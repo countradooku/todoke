@@ -186,6 +186,22 @@ impl DiscoveryTable {
         Ok(table)
     }
 
+    /// A table at `now` for `contacts` (device, committed pair PSK,
+    /// generation), as [`ContactStore::discovery_table`] builds it. For the
+    /// matching benchmark only (the `bench-support` feature): a shipped
+    /// table comes from the contact store.
+    ///
+    /// # Errors
+    ///
+    /// [`DiscoveryError`] if a derivation fails.
+    #[cfg(feature = "bench-support")]
+    pub fn from_pair_psks<'a>(
+        now: UnixTime,
+        contacts: impl IntoIterator<Item = (Ed25519PublicKey, &'a [u8; 32], u64)>,
+    ) -> Result<Self, DiscoveryError> {
+        Self::build(now, contacts.into_iter())
+    }
+
     /// `device`'s rendezvous token for the table's epoch (§9, §10): what
     /// both devices register with at a relay to meet. Linkable within the
     /// epoch, and seen by the relay; it authenticates nothing.

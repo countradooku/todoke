@@ -17,7 +17,8 @@
 #   PROTOCOL §16 production gates for suite 0x0001 and, through O2, human-code
 #   pairing) and `insecure-content-without-accept` (seals and opens content
 #   without a signed Accept, bypassing the PROTOCOL §7.2 consent gate; used
-#   only by benchmarks), or Snow's `risky-raw-split` (traffic-key export, used
+#   only by benchmarks), todoke-crypto's `bench-support` (discovery tables
+#   built from raw pair PSKs, for the matching benchmark), or Snow's `risky-raw-split` (traffic-key export, used
 #   only by the offline fixture generator), todoke-desktop's `mock` (a
 #   scripted core and GPUI test support, for screenshots), and todoke-ffi's
 #   `unaudited-dev` and `test-support` (sessions, and loopback discovery, in
@@ -26,11 +27,12 @@
 #   resolver version 2"), and `cargo tree -e no-dev` reports that non-dev
 #   feature resolution.
 # - No target's full graph, dev-dependencies included, may enable a feature in
-#   forbidden_dev_features: `insecure-content-without-accept`. `cargo test
-#   --workspace` and `--all-targets` builds unify every member's
-#   dev-dependency features, so one member enabling it would compile every
-#   shipped crate's tests against the consent bypass. The benchmarks that
-#   need it live in the isolated `bench/` workspace.
+#   forbidden_dev_features: `insecure-content-without-accept` and
+#   `bench-support`. `cargo test --workspace` and `--all-targets` builds
+#   unify every member's dev-dependency features, so one member enabling
+#   either would compile every shipped crate's tests against the consent
+#   bypass, or expose raw-PSK discovery tables to them. The benchmarks that
+#   need them live in the isolated `bench/` workspace.
 # - Neither LIBCRUX_DISABLE_SIMD256 nor LIBCRUX_DISABLE_SIMD128 may be set in
 #   this environment or in any repository workflow or `.cargo/config*` file.
 #   libcrux-aes's build script then aliases its hardware AES-GCM to the
@@ -86,6 +88,7 @@ forbidden_features=(
     "todoke-crypto:unaudited-suite-0001"
     "todoke-crypto:unaudited-code-pairing"
     "todoke-crypto:insecure-content-without-accept"
+    "todoke-crypto:bench-support"
     "snow:risky-raw-split"
     "todoke-core:unaudited-dev"
     "todoke-desktop:mock"
@@ -96,6 +99,7 @@ forbidden_features=(
 # Features the root workspace may not enable even through dev-dependencies.
 forbidden_dev_features=(
     "todoke-crypto:insecure-content-without-accept"
+    "todoke-crypto:bench-support"
 )
 
 # Workspace members excluded from deny.toml's graph, as cargo tree arguments.
