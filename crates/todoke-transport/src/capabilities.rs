@@ -1,40 +1,27 @@
 //! Which link kinds this build can use.
 //!
-//! A transport is available only when it is implemented for the platform
-//! and the protocol assigns everything it needs. PROTOCOL §16 (O7) leaves
-//! BLE, Wi-Fi P2P, AWDL, USB, and direct QUIC unassigned and requires
-//! those adapters to stay disabled, whatever the platform could do.
+//! A transport is available only when it is implemented for the platform.
+//! PROTOCOL §10.1 defines every direct link as TCP carrying the unchanged
+//! session, and v1 has no Bluetooth, USB, or direct QUIC transport at all,
+//! so none is listed here.
 
 /// The transports `docs/DESIGN.md` assigns to this crate (PROTOCOL §9, §10).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Transport {
     /// TCP on the local network, found through mDNS.
     LanTcp,
-    /// QUIC directly between devices (on a LAN or after hole punching).
-    DirectQuic,
-    /// Bluetooth Low Energy.
-    Ble,
-    /// Wi-Fi Direct / Wi-Fi Aware.
+    /// TCP over a Wi-Fi Aware data path, a Wi-Fi Direct group, or a hotspot
+    /// set up inside a session (§10.2).
     WifiP2p,
-    /// Apple Wireless Direct Link.
+    /// TCP over Apple peer-to-peer Wi-Fi (AWDL) or Apple Wi-Fi Aware.
     Awdl,
-    /// USB.
-    Usb,
     /// QUIC to a relay that forwards opaque traffic (§10).
     Relay,
 }
 
 impl Transport {
     /// Every transport, in a fixed order.
-    pub const ALL: [Self; 7] = [
-        Self::LanTcp,
-        Self::DirectQuic,
-        Self::Ble,
-        Self::WifiP2p,
-        Self::Awdl,
-        Self::Usb,
-        Self::Relay,
-    ];
+    pub const ALL: [Self; 4] = [Self::LanTcp, Self::WifiP2p, Self::Awdl, Self::Relay];
 }
 
 /// Whether a transport can be used.
@@ -42,10 +29,8 @@ impl Transport {
 pub enum Availability {
     /// Implemented and allowed on this platform.
     Available,
-    /// The protocol does not assign what it needs yet (§16, O7): disabled
-    /// everywhere until a spec revision does.
-    SpecGated,
-    /// Allowed by the protocol but not implemented yet.
+    /// Defined by the protocol but not implemented yet (the Wi-Fi adapters
+    /// come with the mobile and desktop radio steps).
     NotImplemented,
     /// This platform has no such facility (for example, sockets on
     /// `wasm32-unknown-unknown`).
@@ -72,11 +57,7 @@ pub const fn availability(transport: Transport) -> Availability {
                 Availability::NotImplemented
             }
         }
-        Transport::DirectQuic
-        | Transport::Ble
-        | Transport::WifiP2p
-        | Transport::Awdl
-        | Transport::Usb => Availability::SpecGated,
+        Transport::WifiP2p | Transport::Awdl => Availability::NotImplemented,
     }
 }
 
@@ -94,7 +75,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn lan_and_relay_are_available_and_o7_transports_stay_gated() {
+    fn lan_and_relay_are_available_and_wifi_links_are_not_built_yet() {
         let expected = if cfg!(target_family = "wasm") {
             Vec::new()
         } else if cfg!(feature = "relay") {
@@ -103,14 +84,8 @@ mod tests {
             vec![Transport::LanTcp]
         };
         assert_eq!(available(), expected);
-        for transport in [
-            Transport::DirectQuic,
-            Transport::Ble,
-            Transport::WifiP2p,
-            Transport::Awdl,
-            Transport::Usb,
-        ] {
-            assert_eq!(availability(transport), Availability::SpecGated);
+        for transport in [Transport::WifiP2p, Transport::Awdl] {
+            assert_eq!(availability(transport), Availability::NotImplemented);
         }
     }
 }

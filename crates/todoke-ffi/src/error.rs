@@ -11,7 +11,7 @@ use todoke_core::api::ErrorCode;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TodokeError {
     /// Sessions are disabled in this build (PROTOCOL §16), or the feature
-    /// is (radio links, §16 O7).
+    /// is (Wi-Fi links, not built yet).
     Disabled {
         /// For people.
         message: String,

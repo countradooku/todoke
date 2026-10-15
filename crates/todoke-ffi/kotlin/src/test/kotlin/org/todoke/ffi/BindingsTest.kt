@@ -375,7 +375,7 @@ class BindingsTest {
     fun radioLinksAreRefusedAndClosed() = runBlocking(Dispatchers.IO) {
         val closed = AtomicBoolean(false)
         val link = object : RadioLink {
-            override fun kind() = LinkKind.USB
+            override fun kind() = LinkKind.WIFI_P2P
 
             override fun send(bytes: ByteArray): Unit = throw LinkError.Closed
 

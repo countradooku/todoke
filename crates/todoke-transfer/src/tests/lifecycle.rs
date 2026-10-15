@@ -459,14 +459,17 @@ fn peer_errors_and_revocations() -> TestResult {
     let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
     let result = link
         .b
-        .handle_frame(FrameType::LINK_ABILITIES, &[0x08, 0], link.now);
+        .handle_frame(FrameType::LINK_ABILITIES, &[0x08, 0, 0], link.now);
     assert_eq!(session_failure(result), Some(FailureCode::Malformed));
     let (mut link, _, _) = offered(&fixture, &standard_specs(), 3600, (16, 16))?;
-    link.b
-        .handle_frame(FrameType::LINK_ABILITIES, &[0b111, 0b100], link.now)?;
+    link.b.handle_frame(
+        FrameType::LINK_ABILITIES,
+        &[0b111, 0b100, 0b1_1111],
+        link.now,
+    )?;
     let result = link
         .b
-        .handle_frame(FrameType::LINK_ABILITIES, &[0, 0], link.now);
+        .handle_frame(FrameType::LINK_ABILITIES, &[0, 0, 0], link.now);
     assert_eq!(session_failure(result), Some(FailureCode::State));
     for (frame, body) in [
         (FrameType::LINK_OFFER, vec![1; 55]),

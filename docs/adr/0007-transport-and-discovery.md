@@ -167,7 +167,7 @@ these:
 
 QUIC (direct or relay), BLE, Wi-Fi P2P, AWDL, and USB (§16 O7; since
 resolved in the spec by [ADR 0014](0014-local-links.md): direct links are TCP
-like the LAN, no direct QUIC, BLE through a GATT profile); relay and
+like the LAN, no direct QUIC, and no Bluetooth or USB at all); relay and
 rendezvous (§10, a later step); how the core stores and reuses last known
 addresses; what the UI shows while a migration waits for the receiver's new
 Accept.

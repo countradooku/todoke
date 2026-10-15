@@ -1,5 +1,5 @@
 //! Discovery records (PROTOCOL §9): the 19-byte `DiscoveryRecord` embedded
-//! in mDNS (and, once allocated, BLE), its mDNS TXT string, and the mDNS
+//! in mDNS, its mDNS TXT string, and the mDNS
 //! instance label.
 //!
 //! Discovery never authenticates a peer. A record that decodes is only a

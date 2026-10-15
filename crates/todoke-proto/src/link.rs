@@ -3,9 +3,9 @@
 //! to a faster direct link, and the rule that picks the link and its host.
 //!
 //! The codecs check layout only: exact lengths, reserved bits, enum values,
-//! ranges (expiry, port, SSID and secret lengths), that the security fits
-//! the kind, that a passphrase is printable ASCII, and that an offer ID is
-//! not all zero. When each record may come is the session's job.
+//! ranges (expiry, port), that the security fits the kind, the exact SSID
+//! and passphrase shapes, and that an offer ID is not all zero. When each
+//! record may come is the session's job.
 //!
 //! An offer carries a Wi-Fi credential (a Wi-Fi Aware PMK or a passphrase):
 //! it is kept in zeroizing memory and never printed.
@@ -28,10 +28,15 @@ pub const MIN_PORT: u16 = 1024;
 pub const MAX_SSID_LEN: usize = 32;
 /// Wi-Fi Aware PMK length (§10.2).
 pub const PMK_LEN: usize = 32;
-/// Shortest and longest passphrase (§10.2).
-pub const PASSPHRASE_LEN: core::ops::RangeInclusive<usize> = 8..=63;
+/// Passphrase length (§10.2): 63 characters from `A-Z a-z 0-9 - _`.
+pub const PASSPHRASE_LEN: usize = 63;
+/// Hotspot SSID: `todoke-` and 16 lowercase hexadecimal digits (§10.2).
+pub const HOTSPOT_SSID_LEN: usize = 23;
+/// Wi-Fi Direct SSID: `DIRECT-`, 2 lowercase hexadecimal digits, `-tdk-`,
+/// and 16 lowercase hexadecimal digits (§10.2).
+pub const DIRECT_SSID_LEN: usize = 30;
 /// Length of a `LinkAbilities` body.
-pub const ABILITIES_LEN: usize = 2;
+pub const ABILITIES_LEN: usize = 3;
 /// Length of a `LinkAnswer` body.
 pub const ANSWER_LEN: usize = OFFER_ID_LEN + 1;
 /// Fixed part of a `LinkOffer` body (without SSID and secret).
@@ -94,6 +99,21 @@ pub enum LinkSecurity {
 }
 
 impl LinkSecurity {
+    /// Every value, strongest first within each kind.
+    pub const ALL: [Self; 5] = [
+        Self::Wpa3,
+        Self::Wpa3Transition,
+        Self::Wpa2,
+        Self::AwareSk256,
+        Self::AwareSk128,
+    ];
+
+    /// The value's bit in a `LinkAbilities` security mask.
+    #[must_use]
+    pub const fn bit(self) -> u8 {
+        1 << (self.code() - 1)
+    }
+
     /// The value in a `LinkOffer`.
     #[must_use]
     pub const fn code(self) -> u8 {
@@ -136,19 +156,26 @@ impl LinkSecurity {
 pub struct LinkAbilities {
     host: u8,
     join: u8,
+    join_security: u8,
 }
 
 /// Every defined kind bit.
 const KIND_BITS: u8 = 0b111;
+/// Every defined security bit.
+const SECURITY_BITS: u8 = 0b1_1111;
 
 impl LinkAbilities {
-    /// Abilities from the kinds this endpoint can host and join.
+    /// Abilities from the kinds this endpoint can host and join, and the
+    /// security it can join with.
     #[must_use]
-    pub fn new(host: &[LinkKind], join: &[LinkKind]) -> Self {
-        let mask = |kinds: &[LinkKind]| kinds.iter().fold(0, |mask, kind| mask | kind.bit());
+    pub fn new(host: &[LinkKind], join: &[LinkKind], join_security: &[LinkSecurity]) -> Self {
+        let kinds = |kinds: &[LinkKind]| kinds.iter().fold(0, |mask, kind| mask | kind.bit());
         Self {
-            host: mask(host),
-            join: mask(join),
+            host: kinds(host),
+            join: kinds(join),
+            join_security: join_security
+                .iter()
+                .fold(0, |mask, security| mask | security.bit()),
         }
     }
 
@@ -164,25 +191,37 @@ impl LinkAbilities {
         self.join & kind.bit() != 0
     }
 
+    /// The strongest security of `kind` this endpoint can join with.
+    #[must_use]
+    pub fn strongest(self, kind: LinkKind) -> Option<LinkSecurity> {
+        LinkSecurity::ALL
+            .into_iter()
+            .find(|security| security.fits(kind) && self.join_security & security.bit() != 0)
+    }
+
     /// The body.
     #[must_use]
     pub const fn encode(self) -> [u8; ABILITIES_LEN] {
-        [self.host, self.join]
+        [self.host, self.join, self.join_security]
     }
 
     /// Decodes a body.
     ///
     /// # Errors
     ///
-    /// [`DecodeError::Length`] for a body that is not 2 bytes;
-    /// [`DecodeError::Reserved`] for an undefined kind bit.
+    /// [`DecodeError::Length`] for a body that is not 3 bytes;
+    /// [`DecodeError::Reserved`] for an undefined kind or security bit.
     pub fn decode(body: &[u8]) -> Result<Self, DecodeError> {
-        let [host, join] =
+        let [host, join, join_security] =
             <[u8; ABILITIES_LEN]>::try_from(body).map_err(|_| DecodeError::Length)?;
-        if (host | join) & !KIND_BITS != 0 {
+        if (host | join) & !KIND_BITS != 0 || join_security & !SECURITY_BITS != 0 {
             return Err(DecodeError::Reserved);
         }
-        Ok(Self { host, join })
+        Ok(Self {
+            host,
+            join,
+            join_security,
+        })
     }
 }
 
@@ -195,25 +234,47 @@ pub enum LinkRole {
     Join,
 }
 
+/// The link two endpoints set up, its host, and its security.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkChoice {
+    /// The link kind.
+    pub kind: LinkKind,
+    /// This endpoint's role.
+    pub role: LinkRole,
+    /// The strongest security of the kind the joiner can join with.
+    pub security: LinkSecurity,
+}
+
 /// The link two endpoints set up (§10.2): the first kind, in order of
-/// preference, that one can host and the other join. If both can host it,
-/// the endpoint with the lexicographically smaller full device key hosts
-/// (`own_key_smaller`). `None` when no kind fits.
+/// preference, that one can host and the other can join with some
+/// security of that kind. If both can host it, the endpoint with the
+/// lexicographically smaller full device key hosts (`own_key_smaller`).
+/// The security is the strongest the joiner can join with. `None` when no
+/// kind fits.
 #[must_use]
 pub fn choose(
     own: LinkAbilities,
     peer: LinkAbilities,
     own_key_smaller: bool,
-) -> Option<(LinkKind, LinkRole)> {
+) -> Option<LinkChoice> {
     LinkKind::ALL.into_iter().find_map(|kind| {
-        let own_hosts = own.hosts(kind) && peer.joins(kind);
-        let peer_hosts = peer.hosts(kind) && own.joins(kind);
-        match (own_hosts, peer_hosts) {
-            (true, true) if own_key_smaller => Some((kind, LinkRole::Host)),
-            (_, true) => Some((kind, LinkRole::Join)),
-            (true, false) => Some((kind, LinkRole::Host)),
-            (false, false) => None,
-        }
+        let own_hosts = own.hosts(kind) && peer.joins(kind) && peer.strongest(kind).is_some();
+        let peer_hosts = peer.hosts(kind) && own.joins(kind) && own.strongest(kind).is_some();
+        let role = match (own_hosts, peer_hosts) {
+            (true, true) if own_key_smaller => LinkRole::Host,
+            (_, true) => LinkRole::Join,
+            (true, false) => LinkRole::Host,
+            (false, false) => return None,
+        };
+        let joiner = match role {
+            LinkRole::Host => peer,
+            LinkRole::Join => own,
+        };
+        Some(LinkChoice {
+            kind,
+            role,
+            security: joiner.strongest(kind)?,
+        })
     })
 }
 
@@ -269,13 +330,16 @@ impl LinkOffer {
         {
             return Err(DecodeError::Range);
         }
+        let passphrase = |secret: &[u8]| {
+            secret.len() == PASSPHRASE_LEN
+                && secret
+                    .iter()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        };
         let shaped = match self.kind {
             LinkKind::WifiAware => self.ssid.is_empty() && self.secret.len() == PMK_LEN,
-            LinkKind::WifiDirect | LinkKind::Hotspot => {
-                (1..=MAX_SSID_LEN).contains(&self.ssid.len())
-                    && PASSPHRASE_LEN.contains(&self.secret.len())
-                    && self.secret.iter().all(|byte| (0x20..=0x7e).contains(byte))
-            }
+            LinkKind::WifiDirect => direct_ssid(&self.ssid) && passphrase(&self.secret),
+            LinkKind::Hotspot => hotspot_ssid(&self.ssid) && passphrase(&self.secret),
         };
         if !shaped {
             return Err(DecodeError::Length);
@@ -376,6 +440,28 @@ impl LinkOffer {
             Zeroizing::new(secret.to_vec()),
         )
     }
+}
+
+/// Lowercase hexadecimal digits only.
+fn lower_hex(bytes: &[u8]) -> bool {
+    bytes
+        .iter()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
+}
+
+/// `todoke-` and 16 lowercase hexadecimal digits.
+fn hotspot_ssid(ssid: &[u8]) -> bool {
+    ssid.len() == HOTSPOT_SSID_LEN && ssid.strip_prefix(b"todoke-").is_some_and(lower_hex)
+}
+
+/// `DIRECT-`, 2 lowercase hexadecimal digits, `-tdk-`, and 16 lowercase
+/// hexadecimal digits (Android requires the `DIRECT-xy` prefix).
+fn direct_ssid(ssid: &[u8]) -> bool {
+    ssid.len() == DIRECT_SSID_LEN
+        && ssid.strip_prefix(b"DIRECT-").is_some_and(|rest| {
+            let (xy, rest) = rest.split_at(2);
+            lower_hex(xy) && rest.strip_prefix(b"-tdk-").is_some_and(lower_hex)
+        })
 }
 
 /// Redacted: the secret is a Wi-Fi credential.

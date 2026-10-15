@@ -21,8 +21,7 @@
 //!
 //! # Not here
 //!
-//! BLE discovery: §9 leaves its service UUID and GATT allocation unassigned
-//! (§16 O7), so no BLE advertising exists.
+//! Bluetooth discovery: todoke uses no Bluetooth (PROTOCOL §10.1).
 
 #![forbid(unsafe_code)]
 
