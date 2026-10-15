@@ -4,8 +4,9 @@ name: Android app
 # flavors built for release against the shipped libraries, each APK under
 # the 15 MB target, no proprietary dependency in the F-Droid flavor, and the
 # instrumented tests (every UI flow with accessibility checks, the export to
-# a chosen folder, two real cores in the app's sandbox) on an AOSP emulator
-# without Google services. Nothing is published or signed.
+# a chosen folder, two real cores in the app's sandbox) on AOSP emulators
+# without Google services: Android 7, 10, and 16. Nothing is published or
+# signed.
 on:
   push:
   pull_request:
@@ -89,9 +90,16 @@ jobs:
           retention-days: 14
 
   instrumented:
-    name: Instrumented tests (AOSP emulator, Android 16)
+    name: Instrumented tests (AOSP emulator, API ${{ matrix.api }})
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # 36: publication by renameat2. 29: Android 10, where apps get
+        # neither renameat2 nor hard links, so files publish by copying.
+        # 24: the minimum (Android 7).
+        api: [36, 29, 24]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,7 +133,7 @@ jobs:
       - name: Run the instrumented tests
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
-          api-level: 36
+          api-level: ${{ matrix.api }}
           target: default
           arch: x86_64
           disable-animations: true
@@ -135,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: todoke-android-tests
+          name: todoke-android-tests-${{ matrix.api }}
           path: |
             apps/android/app/build/outputs/androidTest-results/
             apps/android/app/build/outputs/connected_android_test_additional_output/
