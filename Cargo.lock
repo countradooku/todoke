@@ -8119,6 +8119,7 @@ dependencies = [
  "boltffi",
  "getrandom 0.4.3",
  "qrcode",
+ "rustix",
  "todoke-core",
  "todoke-sys-macos",
  "tokio",
