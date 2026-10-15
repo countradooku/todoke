@@ -257,6 +257,8 @@ adds: unspecified behavior must not be filled in by code.
 
 ## Not here
 
-Direct QUIC between peers and hole punching (O7), BLE and other adapters,
+Direct QUIC between peers and hole punching (O7; [ADR 0014](0014-local-links.md)
+since made relay-only non-local paths normative for v1, with no direct QUIC),
+BLE and other adapters,
 remote code-only pairing (O8), push wake-ups, and relay lists exchanged at
 pairing.

@@ -161,8 +161,9 @@ threads.
   offer is decided only in the app. Replacing or clearing it releases the
   old one outside the lock, since releasing calls into the app.
 - **`RadioLink`** (BLE, Wi-Fi P2P, AWDL, USB as byte pipes): the shape is
-  fixed, and `Core::attach_link` refuses every link while PROTOCOL §16 O7
-  keeps those transports disabled.
+  fixed, and `Core::attach_link` refuses every link until the adapters are
+  built (P18 to P20; PROTOCOL §9.1 and §10.1 to §10.3 since define them,
+  [ADR 0014](0014-local-links.md)).
 - **Loopback discovery** (`Settings::allow_loopback`, so two cores on one
   machine find each other) is refused unless the crate is built with its
   `test-support` feature, which only the binding tests enable;

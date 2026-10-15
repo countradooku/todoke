@@ -647,6 +647,8 @@ the session; its cipher state MUST NOT be reused on another pipe.
 | 0x0017 / 0x0018 | ResumeQuery / ResumeStatus, §7.5 |
 | 0x0019 / 0x001a | Cancel / CancelAck, §7.6 |
 | 0x001b / 0x001c | Complete / DeliveryReceipt, §7.7 |
+| 0x0020 | LinkAbilities, §10.2 |
+| 0x0021 / 0x0022 | LinkOffer / LinkAnswer, §10.2 |
 | 0x0040 | Revoke, §2 |
 | 0x0100..0x01ff | Reserved Tor |
 | 0x0200..0x02ff | Reserved PQ variants |
@@ -1226,12 +1228,61 @@ The TXT string is 41 bytes, carried with its standard DNS length octet. Instance
 labels rotate with the discovery epoch; cached data MUST expire within 120 seconds. Implementations
 MUST NOT put the device name into this service's instance label.
 
-BLE uses this same 19-byte application record as service data. Its service UUID,
-GATT service/characteristic allocation, and platform advertisement packaging are
-**not assigned** in this draft; implementations MUST NOT invent or ship a production
-allocation. This is a transport deployment blocker recorded in §16. Platform frames,
-Wi-Fi P2P/AWDL service descriptors, USB enumeration, and QUIC/TLS packets are governed
-by their respective standards, not new todoke application messages.
+BLE carries the same 19-byte records through the GATT profile of §9.1, not in the
+advertisement. Platform frames, Wi-Fi P2P/AWDL service descriptors, USB enumeration,
+and QUIC/TLS packets are governed by their respective standards, not new todoke
+application messages; §10.1 to §10.3 assign the direct links that carry the §4
+prelude and §5 records.
+
+### 9.1 BLE profile
+
+The todoke GATT service and its characteristics have random 128-bit UUIDs (no
+Bluetooth SIG allocation), all on one base:
+
+| Name | UUID | Properties | Value |
+| --- | --- | --- | --- |
+| service | `afe30001-0d2a-45f2-9ff9-682f27e28ba9` | primary service | |
+| paired_record | `afe30002-0d2a-45f2-9ff9-682f27e28ba9` | read, notify | 0 or 19 bytes: the paired DiscoveryRecord shown now |
+| stranger_record | `afe30003-0d2a-45f2-9ff9-682f27e28ba9` | read, notify | 0 or 19 bytes: the stranger DiscoveryRecord shown now |
+| l2cap_psm | `afe30004-0d2a-45f2-9ff9-682f27e28ba9` | read | u16: 0 (no channel) or an LE dynamic SPSM 0x0080..0x00ff |
+| pipe_rx | `afe30005-0d2a-45f2-9ff9-682f27e28ba9` | write without response | Pipe bytes from the central |
+| pipe_tx | `afe30006-0d2a-45f2-9ff9-682f27e28ba9` | notify | Pipe bytes from the peripheral |
+
+**Advertising.** A device that advertises on BLE sends connectable undirected
+advertisements whose only todoke content is the service UUID in a Complete List of
+128-bit Service Class UUIDs (plus Flags where the platform adds them). It MUST NOT
+advertise a local name, manufacturer data, service data, TX power, or any other
+identifier, and MUST use a private device address where the platform lets it choose
+(on Linux, BlueZ privacy `device` or `network`). The records are not in the
+advertisement: iOS and macOS apps cannot advertise service data, and a 128-bit UUID
+with a 19-byte record (37 bytes) exceeds the 31-byte legacy advertising payload. A
+device SHOULD restart advertising at each epoch boundary so that platforms that
+renew the private address with a new advertising set do so then.
+
+**Records.** `paired_record` and `stranger_record` hold exactly the records the
+§9 schedule shows at that moment on every bearer (mDNS shows the same records), or
+are empty when none is shown. Each value change is notified to subscribed centrals.
+They are readable and subscribable without BLE pairing, bonding, encryption, or
+authentication. A central MUST treat them exactly like mDNS records: candidate
+filters, rate-limited, never authentication.
+
+**Pipes.** A central that wants a session opens one pipe per connection:
+
+- An L2CAP connection-oriented channel when `l2cap_psm` is nonzero and the central
+  supports LE credit-based channels; it MUST read `l2cap_psm` again on every
+  connection. The channel requires no BLE security.
+- Otherwise the GATT pipe: the central subscribes to `pipe_tx`, then writes. Each
+  `pipe_rx` write and `pipe_tx` notification carries 1..(ATT_MTU-3) consecutive
+  bytes of the ordered stream, never an empty value. An implementation MUST NOT drop
+  a value: when the platform cannot queue one, it waits for capacity; a lost,
+  duplicated, or reordered value is detected by §5 decryption and closes the session.
+
+Either pipe carries exactly the §4 prelude followed by §5 records, as one ordered
+byte stream with no BLE-specific framing. The central is the stream opener and so
+the initiator for contact sessions (§4); QR and code roles are unchanged. BLE
+pairing and bonding MUST NOT be used: they add an OS-level identity key and UI, and
+todoke authentication never depends on the link. A pipe ends with its connection or
+channel; a new connection needs a new session.
 
 ## 10. Relay, rendezvous, and hole punching
 
@@ -1240,8 +1291,8 @@ QUIC v1/TLS 1.3 to protect against off-path manipulation and authenticate the se
 relay service, but the relay remains untrusted by endpoints. Certificate validation
 MUST be normal platform validation or an explicitly pinned relay key; failures MUST
 NOT disable validation. Relay-originated route suggestions never authenticate a peer.
-The exact direct-path QUIC bootstrap/ALPN and hole-punch platform profile remain a
-deployment gate (§16); the control record layout below is assigned independently.
+QUIC is used only between a device and a relay. Direct paths are the local links
+of §10.1 to §10.3; v1 assigns no hole punching (below).
 
 A relay control stream uses `length:u16 || type:u8 || body`, length 1..2048, counting
 type+body. Maximum two clients match one rendezvous_token. Room lifetimes are 120
@@ -1331,10 +1382,16 @@ limit. A direct pipe still MUST perform full todoke authentication.
 | delay_ms | 2 | u16, 0..2000, relative to receipt |
 | punch_nonce | 16 | Random per attempt |
 
-Total: 34 bytes. Endpoints try allowed direct candidates for at most 5 seconds,
-then MAY select relay forwarding. In the absence of the ratified direct-path profile,
-Punch MUST NOT initiate probes. A connectivity failure may change the pipe but
-MUST NOT alter the authenticated protocol or downgrade cryptography.
+Total: 34 bytes. In v1 non-local paths are relay-forwarded only: an endpoint MUST
+send `Candidates` with count zero (or none), MUST ignore `Punch` and start no probe,
+and a relay MUST NOT add an observed candidate. The candidate and punch layouts and
+bounds above are fixed for a later revision, which MUST at least: carry candidates
+only inside an authenticated session (never in this cleartext-to-relay record),
+learn a reflexive address only from the selected relay and only for the asking
+client, be enabled by the user, never gather from interfaces that bypass an active
+VPN, keep the bounds above, and start a fresh session and Accept on the direct path.
+A connectivity failure may change the pipe but MUST NOT alter the authenticated
+protocol or downgrade cryptography.
 
 `Forward` and `ForwardReady` have the same body:
 
@@ -1378,6 +1435,134 @@ analysis resistance. Relay implementations MUST NOT collect telemetry, persist r
 traffic metadata, or log tokens/IPs/identities as analytics. Minimal bounded in-memory
 abuse counters MAY be used and MUST expire with the room/connection. A malicious
 relay can disregard that policy; endpoint confidentiality must not depend on it.
+
+### 10.1 Direct IP links
+
+A direct link is an IP link between two devices without a relay: the LAN, an
+Android Wi-Fi Aware data path, a Wi-Fi Direct group, a hotspot one device hosts for
+the other (Android LocalOnlyHotspot, Windows Mobile Hotspot, a Linux access point),
+Apple peer-to-peer Wi-Fi (AWDL), an Apple Wi-Fi Aware connection, USB networking
+(Android USB tethering the user enabled, USB4/Thunderbolt networking, USB Ethernet
+adapters). Every one carries TCP: the §4 prelude and §5 records exactly as on the
+LAN. QUIC is not used on direct links: it requires TLS 1.3, which without a shared
+PKI authenticates nothing that Noise does not, and §5's single ordered stream gains
+nothing from QUIC streams.
+
+An endpoint connects to and accepts from only private (RFC 1918), unique local
+(RFC 4193), and link-local (169.254.0.0/16, fe80::/10 with an interface scope)
+addresses, on ports 1024..65535. On a link set up by §10.2, it connects only to the
+address the link API reports for that link (the Wi-Fi Aware peer address, the group
+owner or hotspot address) on the offered port, and the host accepts only on that
+link's interface. No address range identifies a link kind: Android picks a random
+private /24 for its groups and hotspots.
+
+Apple peer-to-peer Wi-Fi and Apple Wi-Fi Aware need no todoke negotiation: AWDL
+carries §9 mDNS discovery when peer-to-peer is enabled, and Apple Wi-Fi Aware connects
+devices the operating system paired; both carry the same TCP stream through the
+platform's peer-to-peer networking API. Their link-layer security is not relied on.
+
+USB byte-pipe adapters (iPhone usbmux, Android Open Accessory) are not enabled in
+v1. A later revision that enables one MUST carry exactly the §4 and §5 byte stream,
+MUST NOT treat operating-system USB trust as authentication, and MUST put no device
+name or user identifier in USB descriptors or identification strings.
+
+### 10.2 Link setup inside a session
+
+Over an authenticated contact session on any pipe (typically a BLE pipe), two
+devices MAY set up a faster direct link. Credentials for it are random per offer
+and travel only inside that session; nothing about the link is advertised.
+
+`LinkAbilities` (0x0020), sent at most once by each endpoint per session, after
+Capabilities (§6); an endpoint that sends none takes part in no link setup, and a
+`LinkOffer` or `LinkAnswer` it receives is STATE:
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| host_kinds | 1 | Bitmask of link kinds this endpoint can host now |
+| join_kinds | 1 | Bitmask of link kinds this endpoint can join now |
+
+Total: 2 bytes. Link kinds, in order of preference: bit 0 Wi-Fi Aware data path
+(kind 1), bit 1 Wi-Fi Direct group (kind 2), bit 2 hotspot (kind 3). Other bits are
+reserved zero. Once both endpoints have sent `LinkAbilities`, the first kind in that
+order that one endpoint can host and the other can join is chosen; if both can host
+it, the endpoint with the lexicographically smaller full device key hosts. Only the
+host sends `LinkOffer`.
+
+`LinkOffer` (0x0021):
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| offer_id | 16 | Fresh random value, not all zero |
+| kind | 1 | 1 Wi-Fi Aware, 2 Wi-Fi Direct, 3 hotspot |
+| security | 1 | Below |
+| expires_in | 1 | Seconds, 10..120 |
+| port | 2 | u16, 1024..65535; the host's listening port |
+| ssid_len | 1 | 0 for kind 1; 1..32 otherwise |
+| ssid | ssid_len | Network name |
+| secret_len | 1 | 32 for kind 1; 8..63 otherwise |
+| secret | secret_len | Kind 1: the data path PMK. Otherwise the passphrase, printable ASCII 0x20..0x7e |
+
+| security | Meaning | Kinds |
+| --- | --- | --- |
+| 1 | WPA3-Personal (SAE only) | 2, 3 |
+| 2 | WPA3-Personal transition (SAE or WPA2-PSK) | 2, 3 |
+| 3 | WPA2-PSK | 2, 3 |
+| 4 | Wi-Fi Aware NCS-SK-256 | 1 |
+| 5 | Wi-Fi Aware NCS-SK-128 | 1 |
+| Others | Reserved; open, WEP, and WPS are never offered | |
+
+Total: 23 + ssid_len + secret_len bytes, at most 118. An offer whose security does
+not belong to its kind, or whose lengths or characters break the rules here, is
+malformed. The host offers the strongest security it can
+host (1 before 2 before 3, 4 before 5); after a `failed` answer it MAY offer again
+with the next weaker one, at most twice per session. It generates
+`secret` from a CSPRNG: a 32-byte PMK, or a passphrase of 63 characters each drawn
+uniformly from the 64 characters `A-Z a-z 0-9 - _`. Only where the operating system
+assigns the passphrase itself (an Android LocalOnlyHotspot before Android 16) does
+the host send the assigned one. The SSID is random per offer apart from a prefix
+the platform requires (`DIRECT-xy` for Wi-Fi Direct) and contains no device name,
+model, or user identifier. For kind 1 the host publishes the Wi-Fi Aware service
+`todoke` with service-specific information exactly `offer_id[..8]`; the joiner
+subscribes and requests a data path only to that publisher, with the PMK and the
+offered security. WPS, open data paths, and persistent groups or saved networks MUST
+NOT be used.
+
+`LinkAnswer` (0x0022):
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| offer_id | 16 | The offer answered |
+| result | 1 | 1 joined, 2 declined, 3 failed |
+
+Total: 17 bytes. After answering `joined`, the joiner opens TCP to the host over the
+new link (§10.1) and runs a full contact handshake; it is the initiator. The host
+accepts one connection for the offer, only on that link, only before `expires_in`.
+Once the new session is established the endpoints close the old one; a transfer
+resumes on the new session with a fresh Accept (§5, §7.5). Each endpoint tears the
+link down when its session on it ends or the offer expires: it leaves or removes the
+group, hotspot, data path, and any network configuration it added, and keeps no
+copy of the secret. `LinkOffer` and `LinkAnswer` are idempotent per offer_id; a
+duplicate, unexpected, or malformed one is STATE.
+
+### 10.3 Platform requirements
+
+- **Permissions.** Implementations request the narrowest permission: on Android 12
+  and later the Bluetooth permissions, and on Android 13 and later
+  `NEARBY_WIFI_DEVICES`, with the `neverForLocation` flag; location only where the
+  platform has no other permission for the feature, and never background location.
+  Local-network and Bluetooth prompts are shown while the app is in the foreground,
+  in response to a user action.
+- **Background.** A transfer on Android runs in a foreground service of type
+  `connectedDevice` started by a user action; on iOS, in the foreground or in a
+  continued-processing background task the user started. An iOS app closes its
+  listeners when it goes to the background. A session interrupted by the platform
+  resumes with a fresh session and Accept (§7.5); no platform background mechanism
+  extends consent or §13 deadlines.
+- **No OS-level trust.** BLE bonding, Wi-Fi Direct invitations that ask the user to
+  accept a device, and USB "trust this computer" grants are never taken as todoke
+  authentication. Apple Wi-Fi Aware's operating-system pairing is a precondition the
+  platform imposes, not authentication: the todoke handshake still runs on every
+  connection.
 
 ## 11. Transfer and session state requirements
 
@@ -1483,6 +1668,8 @@ that every device has capacity for the maximum transfer.
 | Unknown noncritical frames | <=1024-byte body and <=32/session |
 | Revocation gossip | <=64 records/session |
 | Relay | §10 bounds, plus endpoint limits above |
+| BLE | <=4 concurrent connections as central; a connection without a pipe ends after 60 seconds, and the same peer address is not reconnected for 60 seconds; record notifications are candidate filters under §9's rate limit |
+| Link setup | <=1 LinkAbilities per endpoint, <=3 LinkOffers per session (one outstanding), offers expire after <=120 seconds; one accepted connection per offer |
 
 `Ping` and `Pong` share this body:
 
@@ -1630,8 +1817,9 @@ limits, and policies above are v1 design decisions; open gates do not weaken the
 | O4 | How are person roots provisioned, protected, backed up/recovered, and migrated; how is revocation freshness obtained without telemetry or an online dependency? How are new devices enrolled without transferring device secrets? | Root signatures/bindings/revocations are specified; remote enrollment, global freshness, and root recovery are not enabled. |
 | O5 | How does the Rust/platform boundary render/scan secret QR material and handle secret code entry without sending raw secrets across BoltFFI? What verified BoltFFI mobile/web APIs preserve this constraint? | No production pairing UI/binding implementation until resolved. |
 | O6 | Which libcrux/reference crate versions provide the required primitive coverage, strict verification, secret-state zeroization, constant-time behavior, target support, and accepted supply-chain audit evidence? | Reference fixtures are not production library approval. Scratch-state/secret-lifecycle coverage is a production gate. |
-| O7 | What registered BLE service UUID/GATT allocation, mobile permission/background behavior, AWDL/Wi-Fi P2P/USB packaging, and exact direct-path QUIC/ALPN/hole-punch profile are deployable on each platform? | Shared discovery/control encodings exist; unspecified transport adapters/probes stay disabled. |
+| O7 (resolved) | BLE allocation, mobile permission and background behavior, AWDL / Wi-Fi P2P / USB packaging, and the direct-path and hole-punch profile. Resolved by §9.1 (a random 128-bit GATT service, records read over GATT, L2CAP or GATT pipes, no BLE bonding), §10.1 (direct links are TCP with the unchanged prelude and records; no direct QUIC), §10.2 (link setup with per-offer random credentials inside a session), §10.3 (permissions, background, no OS-level trust), and §10 (relay-only non-local paths in v1). See [ADR 0014](../docs/adr/0014-local-links.md). | Each adapter needs device-lab evidence (T01) before it is enabled by default. USB byte-pipe adapters (usbmux, Android Open Accessory) and hole punching stay disabled until a later revision. |
 | O8 | How is a high-entropy rendezvous capability conveyed for remote human-code-only pairing without an offline dictionary oracle or trusted matching service? | Local code discovery and QR capability derivation are specified; remote code-only rendezvous disabled. |
 | O9 | What platform-specific filesystem publication, secret storage, preview isolation, collision mapping, and quota policies satisfy the core invariants on all targets? | No secure file-receipt/platform claim until implementation and adversarial OS tests. |
 | O10 | What independent implementation reproduces the hybrid handshakes, and what content encryption/Bao, state-machine, crash, identity/revocation, discovery-adapter, and relay transcripts establish full interoperability? | The six standalone fixture families and new reference handshake transcripts establish reproducibility, not independent full-protocol interoperability. |
 | O11 | Should the unused static ML-KEM credential in QR/DeviceBinding be removed before v1 release? | Retain its existing bytes and validation for now; signatures/pins authenticate the public credential only. It MUST NOT be used as an HFS ephemeral key or represented as a static-KEM possession proof. Any removal requires an explicit wire-format revision and regenerated affected fixtures. |
+| O12 | The contact Hello carries the pair's ratchet `generation` in the clear (§4.1). It grows by one per committed session, so a passive LAN or relay observer can link a pair's sessions across epochs whatever its discovery tokens do. The locator already depends on the generation's pair secret. What blinded form keeps a mismatch diagnosable without the cleartext counter? | Discovery unlinkability across epochs (§9) holds against observers who never see a Hello. A fix is a wire-format revision with regenerated handshake fixtures. |
