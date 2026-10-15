@@ -57,6 +57,26 @@ impl Shared {
         }
     }
 
+    /// Offers open `files` under `names` to `contact`, as `request` would
+    /// offer paths.
+    #[cfg(unix)]
+    pub(crate) fn send_files(
+        &self,
+        contact: String,
+        names: Vec<String>,
+        files: Vec<std::fs::File>,
+    ) -> Result<Response, TodokeError> {
+        let files = names
+            .into_iter()
+            .zip(files)
+            .map(|(name, file)| todoke_core::send::OpenFile { name, file })
+            .collect();
+        match crate::block::block_on(self.core.send_files(contact, files)) {
+            Response::Error { code, message } => Err(TodokeError::from_core(code, &message)),
+            response => Ok(response),
+        }
+    }
+
     /// Sends `request`, which answers `Done`.
     pub(crate) fn done(&self, request: Request) -> Result<(), TodokeError> {
         match self.request(request)? {

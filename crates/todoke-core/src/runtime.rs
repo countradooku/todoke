@@ -53,7 +53,23 @@ impl fmt::Display for StartError {
 
 impl std::error::Error for StartError {}
 
-type Envelope = (Request, oneshot::Sender<Response>);
+/// What the core thread is asked to do.
+#[cfg_attr(
+    not(feature = "unaudited-dev"),
+    expect(dead_code, reason = "without sessions no core thread reads commands")
+)]
+enum Command {
+    /// An API request (what the daemon's clients send too).
+    Api(Request),
+    /// Files handed over already open, to offer to a contact: in this
+    /// process only (an open file cannot cross the daemon's socket).
+    SendFiles {
+        contact: String,
+        files: Vec<crate::send::OpenFile>,
+    },
+}
+
+type Envelope = (Command, oneshot::Sender<Response>);
 
 /// A handle to the running core. Cloning shares it; the core stops when
 /// the last handle is dropped.
@@ -149,8 +165,20 @@ impl Core {
 
     /// Sends `request` and waits for the response.
     pub async fn request(&self, request: Request) -> Response {
+        self.command(Command::Api(request)).await
+    }
+
+    /// Offers `files`, handed over already open for the local user (an
+    /// Android document), to `contact`, as [`Request::Send`] offers paths:
+    /// the answer is `Offered`, or an error. Only regular files, each under
+    /// its own name (`crate::send::walk_open`).
+    pub async fn send_files(&self, contact: String, files: Vec<crate::send::OpenFile>) -> Response {
+        self.command(Command::SendFiles { contact, files }).await
+    }
+
+    async fn command(&self, command: Command) -> Response {
         let (reply, response) = oneshot::channel();
-        if self.requests.send((request, reply)).await.is_err() {
+        if self.requests.send((command, reply)).await.is_err() {
             return Response::error(crate::api::ErrorCode::Internal, "the core stopped");
         }
         response.await.unwrap_or_else(|_| {

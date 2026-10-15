@@ -12,6 +12,10 @@
 //! refused. The walk stops at the §13 bounds (10000 entries, 64 levels)
 //! before reading further.
 //!
+//! Files the platform hands over already open (an Android document) come
+//! with the name the user saw instead of a path ([`walk_open`]): only
+//! regular files, at the top level, under the same name rules.
+//!
 //! Every file is opened and hashed once ([`prepare`], on any thread) and
 //! stays open: what was hashed is what is sent, and a file changed
 //! afterwards fails the transfer rather than sending other bytes (§8). A
@@ -102,9 +106,19 @@ impl Walked {
     pub fn files(&self) -> usize {
         self.entries
             .iter()
-            .filter(|entry| matches!(entry, Walk::File { .. }))
+            .filter(|entry| matches!(entry, Walk::File { .. } | Walk::Opened { .. }))
             .count()
     }
+}
+
+/// A file the platform handed over already open for the local user (an
+/// Android document), with the name the user saw.
+#[derive(Debug)]
+pub struct OpenFile {
+    /// The name to offer it under (checked like a path's last component).
+    pub name: String,
+    /// The open file.
+    pub file: std::fs::File,
 }
 
 #[derive(Debug)]
@@ -123,6 +137,8 @@ enum Walk {
         path: PathBuf,
         metadata: std::fs::Metadata,
     },
+    /// A file handed over already open, at the top level.
+    Opened { name: String, file: std::fs::File },
 }
 
 /// Walks the chosen `paths` without following links.
@@ -140,6 +156,37 @@ pub fn walk(paths: &[PathBuf]) -> Result<Walked, SendError> {
         .iter()
         .all(|entry| matches!(entry, Walk::Directory { .. }))
     {
+        return Err(SendError::Empty);
+    }
+    Ok(walked)
+}
+
+/// Takes files handed over already open, each under its own name: the
+/// same name rules as a walk (a name another system could not use is
+/// skipped and counted; two with one name are refused), regular files only
+/// (anything else is skipped and counted), within the §13 bounds.
+///
+/// # Errors
+///
+/// [`SendError`]: [`SendError::Empty`] if nothing is left to send.
+pub fn walk_open(files: Vec<OpenFile>) -> Result<Walked, SendError> {
+    if files.len() > MAX_ENTRIES {
+        return Err(SendError::TooLarge);
+    }
+    let mut walked = Walked::default();
+    for OpenFile { name, file } in files {
+        let name: String = name.nfc().collect();
+        let regular = file.metadata().is_ok_and(|metadata| metadata.is_file());
+        if validate_name(name.as_bytes()).is_err() || !regular {
+            walked.skipped += 1;
+            continue;
+        }
+        if !walked.names.insert((None, name.clone())) {
+            return Err(SendError::Duplicate);
+        }
+        walked.entries.push(Walk::Opened { name, file });
+    }
+    if walked.entries.is_empty() {
         return Err(SendError::Empty);
     }
     Ok(walked)
@@ -365,6 +412,24 @@ pub fn prepare(walked: &Walked, now: UnixTime, preparer: &Preparer) -> Result<Pr
                 });
                 // Manifest IDs are 1-based walk positions (the builder
                 // numbers entries in the order they are added).
+                let id = u32::try_from(entries.len()).map_err(|_| SendError::TooLarge)?;
+                files.push((id, file));
+            }
+            Walk::Opened { name, file } => {
+                let file = file
+                    .try_clone()
+                    .map_err(|error| SendError::Unreadable(error.kind()))?;
+                let file = preparer.prepare_file(file).map_err(|error| match error {
+                    todoke_transfer::SourceError::Io(kind) => SendError::Unreadable(kind),
+                    todoke_transfer::SourceError::NotFound => {
+                        SendError::Unreadable(std::io::ErrorKind::NotFound)
+                    }
+                })?;
+                entries.push(PreparedEntry {
+                    parent: None,
+                    name: name.clone(),
+                    file: Some((file.size(), *file.root())),
+                });
                 let id = u32::try_from(entries.len()).map_err(|_| SendError::TooLarge)?;
                 files.push((id, file));
             }
