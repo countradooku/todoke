@@ -17,7 +17,8 @@
 #   PROTOCOL §16 production gates for suite 0x0001 and, through O2, human-code
 #   pairing) and `insecure-content-without-accept` (seals and opens content
 #   without a signed Accept, bypassing the PROTOCOL §7.2 consent gate; used
-#   only by benchmarks), or Snow's `risky-raw-split` (traffic-key export, used
+#   only by benchmarks), todoke-crypto's `bench-support` (discovery tables
+#   built from raw pair PSKs, for the matching benchmark), or Snow's `risky-raw-split` (traffic-key export, used
 #   only by the offline fixture generator), todoke-desktop's `mock` (a
 #   scripted core and GPUI test support, for screenshots), and todoke-ffi's
 #   `unaudited-dev` and `test-support` (sessions, and loopback discovery, in
@@ -86,6 +87,7 @@ forbidden_features=(
     "todoke-crypto:unaudited-suite-0001"
     "todoke-crypto:unaudited-code-pairing"
     "todoke-crypto:insecure-content-without-accept"
+    "todoke-crypto:bench-support"
     "snow:risky-raw-split"
     "todoke-core:unaudited-dev"
     "todoke-desktop:mock"

@@ -38,7 +38,9 @@ broken_intra_doc_links = "deny"
 # this feature allows (never in a shipped graph; see todoke-crypto's manifest).
 # The LAN benchmark runs suite 0x0001 sessions, which only
 # `unaudited-suite-0001` allows (PROTOCOL §16; never in a shipped graph).
-todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept", "unaudited-suite-0001"] }
+# The discovery benchmark builds tables from raw pair PSKs, which only
+# `bench-support` allows (never in a shipped graph).
+todoke-crypto = { path = "../crates/todoke-crypto", version = "0.1.0", features = ["insecure-content-without-accept", "unaudited-suite-0001", "bench-support"] }
 zeroize = "=1.9.1"
 
 [[bench]]
@@ -47,6 +49,10 @@ harness = false
 
 [[bench]]
 name = "lan"
+harness = false
+
+[[bench]]
+name = "discovery"
 harness = false
 
 # Default features off: no plotting or rayon; reports are text only. Not on
@@ -60,3 +66,8 @@ libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["m
 todoke-proto = { path = "../crates/todoke-proto", version = "0.1.0" }
 todoke-transport = { path = "../crates/todoke-transport", version = "0.1.0", default-features = false }
 tokio = { version = "=1.53.3", default-features = false, features = ["net", "time", "rt"] }
+# The discovery benchmark: contacts' device keys, random pair PSKs, and the
+# receiver's sighting path.
+ed25519-dalek = { version = "=3.0.0", default-features = false }
+getrandom = "=0.4.3"
+todoke-discovery = { path = "../crates/todoke-discovery", version = "0.1.0" }

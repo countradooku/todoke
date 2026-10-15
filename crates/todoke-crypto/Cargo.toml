@@ -38,6 +38,13 @@ unaudited-code-pairing = [
 # scripts/ci/deny-exceptions-dev-only.sh fails if any shipped graph does.
 # Not a default feature.
 insecure-content-without-accept = []
+# Exposes `discovery::DiscoveryTable::from_pair_psks()`, so the matching
+# benchmark (bench/benches/discovery.rs) can build a table of 1,000 contacts
+# without pairing each one. It takes raw pair PSKs, which no shipped caller
+# may hold outside a contact store: benchmark builds only;
+# scripts/ci/deny-exceptions-dev-only.sh fails if any shipped graph enables
+# it. Not a default feature.
+bench-support = []
 
 # Versions are the reviewed vector-tool pins (workspace dependencies). Fixture use
 # is not production approval: zeroization and cargo-vet evidence remain open (O6).
