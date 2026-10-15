@@ -1,4 +1,5 @@
 use core::time::Duration;
+use std::collections::BTreeMap;
 
 use todoke_proto::discovery::EPOCH_SECONDS;
 
@@ -79,7 +80,7 @@ async fn nothing_is_advertised_without_contacts_or_randomness() -> TestResult {
     Ok(())
 }
 
-/// A priority contact gets every other slot; with one contact it is the
+/// A priority contact gets every other turn; with one contact it is the
 /// only record anyway, and an unknown priority changes nothing.
 #[tokio::test]
 async fn a_priority_contact_takes_even_slots() -> TestResult {
@@ -88,7 +89,7 @@ async fn a_priority_contact_takes_even_slots() -> TestResult {
     let mut advertiser = Advertiser::new();
     let mut random = Counter(0);
     for slot in 0..6_u64 {
-        let mono = ROTATION * u32::try_from(slot)?;
+        let mono = ROTATION_MAX * u32::try_from(slot)?;
         let plan = advertiser.plan(&table, Some(&bob.key()), time(WALL)?, mono, &mut random);
         assert_eq!(
             plan.paired.map(|a| a.record),
@@ -222,54 +223,224 @@ impl Random for Script {
     }
 }
 
-/// R3: with several contacts, each gets `ROTATION` in turn, in key order;
-/// a priority contact takes every even slot and the others share the odd
-/// ones; a priority that is not a contact changes nothing.
+/// `SplitMix64`: deterministic, well-mixed bytes, so the statistical tests
+/// below give the same verdict on every run.
+struct SplitMix(u64);
+
+impl Random for SplitMix {
+    fn bytes(&mut self) -> Option<[u8; 8]> {
+        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        Some((z ^ (z >> 31)).to_be_bytes())
+    }
+}
+
+/// The contact whose record `record` is.
+fn whose(
+    table: &DiscoveryTable,
+    record: Option<DiscoveryRecord>,
+) -> Result<Ed25519PublicKey, Box<dyn std::error::Error>> {
+    let record = record.ok_or("nothing advertised")?;
+    table
+        .contacts()
+        .find(|contact| table.advertisement(contact) == Some(record))
+        .copied()
+        .ok_or_else(|| "a record of nobody".into())
+}
+
+/// Each turn from the start: the contact shown, and for how long, asking
+/// exactly when each turn ends.
+fn turns(
+    advertiser: &mut Advertiser,
+    table: &DiscoveryTable,
+    priority: Option<&Ed25519PublicKey>,
+    wall: UnixTime,
+    count: usize,
+    random: &mut impl Random,
+) -> Result<Vec<(Ed25519PublicKey, Duration)>, Box<dyn std::error::Error>> {
+    let mut mono = Duration::ZERO;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let plan = advertiser.plan(table, priority, wall, mono, random);
+        let until = advertiser.rotation.until;
+        out.push((
+            whose(table, plan.paired.map(|a| a.record))?,
+            until.saturating_sub(mono),
+        ));
+        mono = until;
+    }
+    Ok(out)
+}
+
+/// §9 rotation, randomised: every round shows each contact exactly once,
+/// all six orders of three contacts come up about equally often (a
+/// chi-square test, 5 degrees of freedom, against 30: p < 2e-5), and each
+/// record stays up between 2 and 4 seconds, about 3 on average and
+/// spreading over the whole range.
 #[test]
-fn records_rotate_over_contacts_and_a_priority_takes_even_slots() -> TestResult {
+fn rounds_show_every_contact_once_in_a_random_order_for_a_random_time() -> TestResult {
     let fixture = crate::support::fixture()?;
     let table = fixture.tables.first().ok_or("table")?;
-    let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let mut contacts: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
+    contacts.sort();
     assert_eq!(contacts.len(), 3);
+    let rounds = 6000;
+    let turns = turns(
+        &mut Advertiser::new(),
+        table,
+        None,
+        wall,
+        rounds * 3,
+        &mut SplitMix(1),
+    )?;
+    let mut orders: BTreeMap<Vec<usize>, u32> = BTreeMap::new();
+    for round in turns.chunks(3) {
+        let mut order = Vec::new();
+        for (device, _) in round {
+            order.push(contacts.binary_search(device).map_err(|_| "unknown")?);
+        }
+        let mut sorted = order.clone();
+        sorted.sort_unstable();
+        assert_eq!(sorted, [0, 1, 2], "a round is not a permutation");
+        *orders.entry(order).or_default() += 1;
+    }
+    assert_eq!(orders.len(), 6);
+    let expected = f64::from(u32::try_from(rounds)?) / 6.0;
+    let chi_square: f64 = orders
+        .values()
+        .map(|&seen| (f64::from(seen) - expected).powi(2) / expected)
+        .sum();
+    assert!(
+        chi_square < 30.0,
+        "orders are skewed: chi-square {chi_square}"
+    );
+
+    let dwells: Vec<Duration> = turns.iter().map(|(_, dwell)| *dwell).collect();
+    assert!(
+        dwells
+            .iter()
+            .all(|dwell| (ROTATION_MIN..=ROTATION_MAX).contains(dwell))
+    );
+    let mean = dwells.iter().sum::<Duration>() / u32::try_from(dwells.len())?;
+    assert!(
+        mean.abs_diff(Duration::from_secs(3)) < Duration::from_millis(30),
+        "{mean:?}"
+    );
+    assert!(
+        dwells
+            .iter()
+            .any(|dwell| *dwell < ROTATION_MIN + Duration::from_millis(50))
+    );
+    assert!(
+        dwells
+            .iter()
+            .any(|dwell| *dwell > ROTATION_MAX.saturating_sub(Duration::from_millis(50)))
+    );
+    Ok(())
+}
+
+/// A priority contact takes every other turn, and the turns between still
+/// go round all the contacts, the priority one included; a priority that is
+/// not a contact changes nothing.
+#[test]
+fn a_priority_contact_takes_every_other_turn() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let table = fixture.tables.first().ok_or("table")?;
+    let wall = time(*fixture.walls.first().ok_or("wall")?)?;
+    let priority = *fixture.contacts.get(2).ok_or("contact")?;
+    let turns = turns(
+        &mut Advertiser::new(),
+        table,
+        Some(&priority),
+        wall,
+        60,
+        &mut SplitMix(2),
+    )?;
+    for (index, (device, _)) in turns.iter().enumerate() {
+        if index % 2 == 0 {
+            assert_eq!(*device, priority, "turn {index}");
+        }
+    }
+    for round in turns
+        .iter()
+        .skip(1)
+        .step_by(2)
+        .collect::<Vec<_>>()
+        .chunks(3)
+    {
+        let mut seen: Vec<Ed25519PublicKey> = round.iter().map(|(device, _)| *device).collect();
+        seen.sort();
+        let mut all: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
+        all.sort();
+        assert_eq!(seen, all);
+    }
+    // Alice herself is no contact: the same as no priority.
+    let unknown = turns_for(table, Some(&fixture.alice), wall)?;
+    let none = turns_for(table, None, wall)?;
+    assert_eq!(unknown, none);
+    Ok(())
+}
+
+fn turns_for(
+    table: &DiscoveryTable,
+    priority: Option<&Ed25519PublicKey>,
+    wall: UnixTime,
+) -> Result<Vec<(Ed25519PublicKey, Duration)>, Box<dyn std::error::Error>> {
+    turns(
+        &mut Advertiser::new(),
+        table,
+        priority,
+        wall,
+        30,
+        &mut SplitMix(3),
+    )
+}
+
+/// A contact that leaves the table (ratchet-uncertain) is replaced at once,
+/// and never shown again while it is out.
+#[test]
+fn a_contact_that_leaves_is_not_shown() -> TestResult {
+    let fixture = crate::support::fixture()?;
+    let full = fixture.tables.first().ok_or("table")?;
+    let gone = *fixture.contacts.first().ok_or("contact")?;
+    assert!(fixture.reduced.advertisement(&gone).is_none());
     let wall = time(*fixture.walls.first().ok_or("wall")?)?;
     let mut advertiser = Advertiser::new();
-    let mut random = Counter(0);
-    let mut seen = Vec::new();
-    for second in 0..18_u64 {
-        let mono = SECOND * u32::try_from(second)?;
-        let slot = usize::try_from(second / ROTATION.as_secs())?;
-        let record = advertiser
-            .plan(table, None, wall, mono, &mut random)
-            .paired
-            .map(|a| a.record);
-        let expected = contacts.get(slot % contacts.len()).ok_or("contact")?;
-        assert_eq!(record, table.advertisement(expected), "second {second}");
-        seen.push(record);
-        let unknown = advertiser
-            .plan(table, Some(&fixture.alice), wall, mono, &mut random)
-            .paired
-            .map(|a| a.record);
-        assert_eq!(unknown, record);
-        let priority = *contacts.get(2).ok_or("contact")?;
-        let with_priority = advertiser
-            .plan(table, Some(priority), wall, mono, &mut random)
-            .paired
-            .map(|a| a.record);
-        let expected = if slot.is_multiple_of(2) {
-            priority
-        } else {
-            expected
-        };
-        assert_eq!(
-            with_priority,
-            table.advertisement(expected),
-            "second {second}"
-        );
+    let mut random = SplitMix(4);
+    // Turn until the leaving contact is shown, then switch tables.
+    let mut mono = Duration::ZERO;
+    loop {
+        let plan = advertiser.plan(full, None, wall, mono, &mut random);
+        if whose(full, plan.paired.map(|a| a.record))? == gone {
+            break;
+        }
+        mono = advertiser.rotation.until;
     }
-    // One record at a time, and every contact's in turn.
-    seen.dedup();
-    assert_eq!(seen.len(), 6);
+    for _ in 0..30 {
+        let plan = advertiser.plan(&fixture.reduced, None, wall, mono, &mut random);
+        assert_ne!(
+            whose(&fixture.reduced, plan.paired.map(|a| a.record))?,
+            gone
+        );
+        mono = advertiser.rotation.until;
+    }
     Ok(())
+}
+
+/// Rejection sampling: a source that only gives rejected values ends in
+/// `None` rather than a hang, and a value just below the zone is accepted.
+#[test]
+fn uniform_draws_reject_the_partial_run() {
+    // For bound 3, u64::MAX % 3 == 0, so the zone is u64::MAX: only
+    // u64::MAX itself is rejected.
+    let mut rejected = Script(vec![[0xff; 8]; 64]);
+    assert_eq!(below(3, &mut rejected), None);
+    let mut accepted = Script(vec![[0xff; 8], (u64::MAX - 1).to_be_bytes()]);
+    assert_eq!(below(3, &mut accepted), Some((u64::MAX - 1) % 3));
+    assert_eq!(below(1, &mut Counter(0)), Some(0));
 }
 
 /// R3: no randomness when a stranger token is due to rotate ends stranger
@@ -400,10 +571,70 @@ mod model {
     struct Model {
         random: Switchable,
         label: Option<(Epoch, InstanceLabel)>,
+        shown: Option<Ed25519PublicKey>,
+        until: Duration,
+        priority_turn: bool,
+        left: Vec<Ed25519PublicKey>,
         stranger: Option<Stranger>,
     }
 
     impl Model {
+        /// A uniform draw below `bound`, rejecting the partial run.
+        fn uniform(&mut self, bound: u64) -> Option<u64> {
+            for _ in 0..64 {
+                let value = u64::from_be_bytes(self.random.bytes()?);
+                if value < u64::MAX - u64::MAX % bound {
+                    return Some(value % bound);
+                }
+            }
+            None
+        }
+
+        /// Who is shown: the current one until its time is up; then the
+        /// priority if it did not have the last turn; else the next of the
+        /// round, a new shuffled round when it is used up.
+        fn turn(
+            &mut self,
+            table: &DiscoveryTable,
+            priority: Option<&Ed25519PublicKey>,
+            mono: Duration,
+        ) -> Option<Ed25519PublicKey> {
+            let listed = |device: &Ed25519PublicKey| table.advertisement(device).is_some();
+            if let Some(shown) = self.shown
+                && mono < self.until
+                && listed(&shown)
+            {
+                return Some(shown);
+            }
+            let (device, priority_turn) = match priority.filter(|device| listed(device)) {
+                Some(device) if !self.priority_turn => (*device, true),
+                _ => {
+                    let mut next = None;
+                    while let Some(device) = self.left.pop() {
+                        if listed(&device) {
+                            next = Some(device);
+                            break;
+                        }
+                    }
+                    if next.is_none() {
+                        let mut round: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
+                        for last in (1..round.len()).rev() {
+                            let pick = self.uniform(u64::try_from(last).ok()? + 1)?;
+                            round.swap(last, usize::try_from(pick).ok()?);
+                        }
+                        next = round.pop();
+                        self.left = round;
+                    }
+                    (next?, false)
+                }
+            };
+            let dwell = 2000 + self.uniform(2001)?;
+            self.shown = Some(device);
+            self.until = mono + Duration::from_millis(dwell);
+            self.priority_turn = priority_turn;
+            Some(device)
+        }
+
         fn stranger_record(&mut self, wall: UnixTime) -> Option<Advertisement> {
             let token = self.random.bytes()?;
             let label = InstanceLabel::from_random(self.random.bytes()?).ok()?;
@@ -431,15 +662,10 @@ mod model {
                     label
                 }
             };
-            let contacts: Vec<&Ed25519PublicKey> = table.contacts().collect();
-            let slot = mono.as_secs() / 3;
-            let device = match priority {
-                Some(device) if contacts.contains(&device) && slot.is_multiple_of(2) => device,
-                _ => *contacts.get(usize::try_from(slot).ok()? % contacts.len())?,
-            };
+            let device = self.turn(table, priority, mono)?;
             Some(Advertisement {
                 label,
-                record: table.advertisement(device)?,
+                record: table.advertisement(&device)?,
             })
         }
 
@@ -473,8 +699,9 @@ mod model {
         #![proptest_config(ProptestConfig::with_cases(128))]
 
         /// R3: the schedule against a plain model: one paired record at a
-        /// time rotating over the contacts every 3 seconds (a priority
-        /// contact on even slots), a label per epoch, nothing paired from a
+        /// time, rotating over the contacts in shuffled rounds for 2 to 4
+        /// seconds each (a priority contact every other turn), a label per
+        /// epoch, nothing paired from a
         /// stale or empty table; stranger mode only after an enable, for at
         /// most 300 seconds, a new token and label every 60, and off when
         /// randomness fails.

@@ -1,12 +1,15 @@
 //! What this device advertises, and when (PROTOCOL §9).
 //!
 //! - **Paired:** one record at a time, rotating over the available contacts
-//!   every [`ROTATION`] (§9: a pair advertises one token at a time, and a
-//!   device with several contacts rotates entries rather than broadcast
-//!   its contact graph in one record). The record is the contact's token
-//!   for the current epoch, so it changes at every epoch boundary and after
-//!   every committed session (a new table). The instance label is fresh
-//!   random for every epoch, and never a device name.
+//!   (§9: a pair advertises one token at a time, and a device with several
+//!   contacts rotates entries rather than broadcast its contact graph in
+//!   one record). Each round shows every contact once, in a fresh uniformly
+//!   random order, each for a random time between [`ROTATION_MIN`] and
+//!   [`ROTATION_MAX`]: an observer learns neither the order nor a fixed
+//!   period to count contacts by. The record is the contact's token for the
+//!   current epoch, so it changes at every epoch boundary and after every
+//!   committed session (a new table). The instance label is fresh random
+//!   for every epoch, and never a device name.
 //! - **Stranger:** only after an explicit local enable, for at most
 //!   [`STRANGER_LIFETIME`], with a new token and a fresh random label every
 //!   [`STRANGER_ROTATION`]. For code pairing the token is random; while a
@@ -26,8 +29,11 @@ use todoke_proto::discovery::{
 };
 use todoke_proto::time::UnixTime;
 
-/// How long each contact's record is shown before the next one's.
-pub const ROTATION: Duration = Duration::from_secs(3);
+/// The shortest time a contact's record is shown before the next one's.
+pub const ROTATION_MIN: Duration = Duration::from_secs(2);
+/// The longest; each record's time is uniform in between, to the
+/// millisecond.
+pub const ROTATION_MAX: Duration = Duration::from_secs(4);
 /// How long stranger mode lasts after it is enabled (§9).
 pub const STRANGER_LIFETIME: Duration = Duration::from_secs(300);
 /// How often the stranger token (and its label) changes (§9).
@@ -99,11 +105,24 @@ enum Tokens {
     Qr(QrStrangerTokens),
 }
 
+/// The paired rotation: who is shown, until when, and who is left in this
+/// round.
+#[derive(Clone, Debug, Default)]
+struct Rotation {
+    shown: Option<Ed25519PublicKey>,
+    until: Duration,
+    /// Whether the record shown is the priority contact's turn.
+    priority_turn: bool,
+    /// The rest of this round, next last.
+    left: Vec<Ed25519PublicKey>,
+}
+
 /// The advertising schedule. Times: `wall` is the trusted wall clock (for
 /// epochs), `mono` the caller's monotonic clock.
 #[derive(Debug, Default)]
 pub struct Advertiser {
     label: Option<(Epoch, InstanceLabel)>,
+    rotation: Rotation,
     stranger: Option<Stranger>,
 }
 
@@ -169,9 +188,9 @@ impl Advertiser {
 
     /// What to advertise at `wall` / `mono`, given the contacts in `table`.
     /// A table built for another epoch than `wall`'s advertises nothing
-    /// paired; rebuild it at each epoch and after each committed session. `priority`, if it is in the table, gets
-    /// every other slot: a device the user is about to send to or expects
-    /// a file from.
+    /// paired; rebuild it at each epoch and after each committed session.
+    /// `priority`, if it is in the table, gets every other turn: a device
+    /// the user is about to send to or expects a file from.
     pub fn plan(
         &mut self,
         table: &DiscoveryTable,
@@ -211,16 +230,8 @@ impl Advertiser {
                 label
             }
         };
-        let slot = mono.as_secs() / ROTATION.as_secs().max(1);
-        let device = match priority.filter(|device| contacts.contains(device)) {
-            Some(device) if slot.is_multiple_of(2) => device,
-            _ => {
-                let count = u64::try_from(contacts.len()).ok()?;
-                let index = usize::try_from(slot % count).ok()?;
-                *contacts.get(index)?
-            }
-        };
-        let record = table.advertisement(device)?;
+        let device = self.turn(table, priority, mono, random)?;
+        let record = table.advertisement(&device)?;
         Some(Advertisement { label, record })
     }
 
@@ -252,6 +263,92 @@ impl Advertiser {
         }
         Some(current.advertisement)
     }
+}
+
+impl Advertiser {
+    /// The contact whose record is shown at `mono`: the current one until
+    /// its time is up (or it left the table), then the priority contact if
+    /// the last turn was not its, else the next of this round's shuffled
+    /// order. `None` without randomness for a new order or time.
+    fn turn(
+        &mut self,
+        table: &DiscoveryTable,
+        priority: Option<&Ed25519PublicKey>,
+        mono: Duration,
+        random: &mut impl Random,
+    ) -> Option<Ed25519PublicKey> {
+        let rotation = &mut self.rotation;
+        if let Some(shown) = rotation.shown
+            && mono < rotation.until
+            && table.advertisement(&shown).is_some()
+        {
+            return Some(shown);
+        }
+        let priority = priority.filter(|device| table.advertisement(device).is_some());
+        let (device, priority_turn) = match priority {
+            Some(device) if !rotation.priority_turn => (*device, true),
+            _ => (next_in_round(&mut rotation.left, table, random)?, false),
+        };
+        let dwell = dwell(random)?;
+        *rotation = Rotation {
+            shown: Some(device),
+            until: mono + dwell,
+            priority_turn,
+            left: core::mem::take(&mut rotation.left),
+        };
+        Some(device)
+    }
+}
+
+/// The next contact of the round in `left` that is still in `table`; a new
+/// round, shuffled, when none is left.
+fn next_in_round(
+    left: &mut Vec<Ed25519PublicKey>,
+    table: &DiscoveryTable,
+    random: &mut impl Random,
+) -> Option<Ed25519PublicKey> {
+    while let Some(device) = left.pop() {
+        if table.advertisement(&device).is_some() {
+            return Some(device);
+        }
+    }
+    let mut round: Vec<Ed25519PublicKey> = table.contacts().copied().collect();
+    shuffle(&mut round, random)?;
+    let device = round.pop()?;
+    *left = round;
+    Some(device)
+}
+
+/// Fisher–Yates with unbiased indices.
+fn shuffle<T>(items: &mut [T], random: &mut impl Random) -> Option<()> {
+    for last in (1..items.len()).rev() {
+        let pick = below(u64::try_from(last).ok()? + 1, random)?;
+        items.swap(last, usize::try_from(pick).ok()?);
+    }
+    Some(())
+}
+
+/// How long the next record is shown: uniform in
+/// [`ROTATION_MIN`]..=[`ROTATION_MAX`], to the millisecond.
+fn dwell(random: &mut impl Random) -> Option<Duration> {
+    let min = u64::try_from(ROTATION_MIN.as_millis()).ok()?;
+    let max = u64::try_from(ROTATION_MAX.as_millis()).ok()?;
+    Some(Duration::from_millis(min + below(max - min + 1, random)?))
+}
+
+/// A uniform integer in `0..bound` (`bound` > 0), by rejection: values in
+/// the last, partial run of `bound` are drawn again. A source that keeps
+/// giving rejected values (a broken one: each draw is rejected with
+/// probability below `bound / 2^64`) gives `None` after 64 draws.
+fn below(bound: u64, random: &mut impl Random) -> Option<u64> {
+    let zone = u64::MAX - u64::MAX % bound;
+    for _ in 0..64 {
+        let value = u64::from_be_bytes(random.bytes()?);
+        if value < zone {
+            return Some(value % bound);
+        }
+    }
+    None
 }
 
 fn stranger(tokens: &Tokens, wall: UnixTime, random: &mut impl Random) -> Option<Advertisement> {
