@@ -1,4 +1,6 @@
 use super::*;
+use todoke_proto::discovery::EPOCH_SECONDS;
+
 use crate::identity::contacts::PairPsk;
 use crate::identity::test_support::{Enrolled, T0, sealer, time};
 use crate::identity::{KeyStore as _, MemoryStorage, SoftwareSealer, TrustOrigin};
@@ -312,5 +314,174 @@ fn errors_and_empty_tables() -> TestResult {
     assert!(table.is_empty());
     let (table, _) = fixture_table()?;
     assert!(!table.is_empty());
+    Ok(())
+}
+
+/// Bit statistics of a run of tokens, against independent uniform 64-bit
+/// values: overall and per-position balance within six standard
+/// deviations, the Hamming distance between neighbours with mean 32 and
+/// variance 16, and no repeats. The inputs are fixed, so the verdict is
+/// the same on every run.
+fn random_looking(tokens: &[[u8; DISCOVERY_TOKEN_LEN]]) -> TestResult {
+    let count = u32::try_from(tokens.len())?;
+    let n = f64::from(count);
+    let words: Vec<u64> = tokens
+        .iter()
+        .map(|token| u64::from_be_bytes(*token))
+        .collect();
+
+    // Each bit position is 1 about half the time: sigma = sqrt(n) / 2.
+    for position in 0..64 {
+        let ones = words
+            .iter()
+            .filter(|word| *word >> position & 1 == 1)
+            .count();
+        let ones = f64::from(u32::try_from(ones)?);
+        check((ones - n / 2.0).abs() < 6.0 * n.sqrt() / 2.0, || {
+            format!("bit {position}: {ones} of {n}")
+        })?;
+    }
+    let total = f64::from(words.iter().map(|word| word.count_ones()).sum::<u32>());
+    let bits = 64.0 * n;
+    check((total - bits / 2.0).abs() < 6.0 * bits.sqrt() / 2.0, || {
+        format!("{total} ones of {bits}")
+    })?;
+
+    // Neighbours share nothing: their distance is Binomial(64, 1/2).
+    let distances: Vec<f64> = words
+        .windows(2)
+        .map(|pair| f64::from((pair[0] ^ pair[1]).count_ones()))
+        .collect();
+    let pairs = f64::from(u32::try_from(distances.len())?);
+    let mean = distances.iter().sum::<f64>() / pairs;
+    let variance = distances.iter().map(|d| (d - mean).powi(2)).sum::<f64>() / pairs;
+    // Standard errors: 4 / sqrt(pairs) for the mean, about
+    // 16 * sqrt(2 / pairs) for the variance.
+    check((mean - 32.0).abs() < 6.0 * 4.0 / pairs.sqrt(), || {
+        format!("mean distance {mean}")
+    })?;
+    check(
+        (variance - 16.0).abs() < 6.0 * 16.0 * (2.0 / pairs).sqrt(),
+        || format!("distance variance {variance}"),
+    )?;
+
+    let mut sorted = words.clone();
+    sorted.sort_unstable();
+    sorted.dedup();
+    check(sorted.len() == words.len(), || "a token repeats".to_owned())
+}
+
+fn check(holds: bool, what: impl FnOnce() -> String) -> TestResult {
+    if holds { Ok(()) } else { Err(what().into()) }
+}
+
+/// §9 unlinkability across epochs: one pair's tokens over 20,000
+/// consecutive epochs (about seven months) look like independent random
+/// values, so one epoch's token says nothing about the next one's.
+#[test]
+fn a_pairs_tokens_are_unlinkable_across_epochs() -> TestResult {
+    let keys = PairKeys::derive(&[0x5a; 32])?;
+    let first = Epoch::of(time(T0)?).get();
+    let mut tokens = Vec::with_capacity(20_000);
+    for epoch in first..first + 20_000 {
+        tokens.push(keys.token(Epoch::new(epoch)?)?);
+    }
+    random_looking(&tokens)
+}
+
+/// §9 unlinkability across pairs and ratchets: 2,000 pairs (or one pair
+/// over 2,000 ratchet generations, each a fresh PSK) in one epoch give
+/// tokens that look independent of each other.
+#[test]
+fn tokens_of_different_pairs_are_unlinkable() -> TestResult {
+    let epoch = Epoch::of(time(T0)?);
+    let tokens = (0..2_000_u32)
+        .map(|index| {
+            let mut psk = [0_u8; 32];
+            psk[..4].copy_from_slice(&index.to_be_bytes());
+            PairKeys::derive(&psk)?.token(epoch)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    random_looking(&tokens)
+}
+
+/// The statistics above have teeth: tokens that count up, drift a bit at a
+/// time, or repeat are refused, so passing them means something.
+#[test]
+fn the_statistics_refuse_linkable_tokens() -> TestResult {
+    let counting: Vec<[u8; DISCOVERY_TOKEN_LEN]> = (0..2_000_u64)
+        .map(|n| (n * 0x0101_0101).to_be_bytes())
+        .collect();
+    assert!(random_looking(&counting).is_err());
+    // A random-looking start, then one bit flipped per epoch.
+    let mut word = 0x9e37_79b9_7f4a_7c15_u64;
+    let drifting: Vec<[u8; DISCOVERY_TOKEN_LEN]> = (0..2_000_u32)
+        .map(|n| {
+            word ^= 1 << (n % 64);
+            word.to_be_bytes()
+        })
+        .collect();
+    assert!(random_looking(&drifting).is_err());
+    // Real tokens, but the epochs come round twice.
+    let keys = PairKeys::derive(&[1; 32])?;
+    let mut repeating = Vec::new();
+    for epoch in 0..1_000 {
+        repeating.push(keys.token(Epoch::new(epoch % 500)?)?);
+    }
+    assert!(random_looking(&repeating).is_err());
+    Ok(())
+}
+
+/// Whether a record `advertiser` shows at `at` for `receiver`'s pair is
+/// matched by `receiver` whose clock reads `seen`.
+fn matched(psk: &[u8; 32], at: u64, seen: u64) -> Result<bool, Box<dyn std::error::Error>> {
+    let (advertiser, receiver) = (device()?, device()?);
+    let shown = DiscoveryTable::build(time(at)?, [(receiver, psk, 1)].into_iter())?;
+    let record = shown.advertisement(&receiver).ok_or("no record")?;
+    let table = DiscoveryTable::build(time(seen)?, [(advertiser, psk, 1)].into_iter())?;
+    Ok(table.candidates(&record) == [advertiser])
+}
+
+/// §9 skew: peers whose clocks differ by up to the §1 120 seconds match
+/// on both sides of an epoch boundary; any skew that leaves them in
+/// adjacent epochs matches (up to 900 seconds and beyond, depending on
+/// where in the epoch), and two epochs apart never does.
+#[test]
+fn clock_skew_is_tolerated_across_epoch_boundaries() -> TestResult {
+    let psk = [0x33; 32];
+    let boundary = (Epoch::of(time(T0)?).get() + 1) * EPOCH_SECONDS;
+    for at in [
+        boundary - 120,
+        boundary - 1,
+        boundary,
+        boundary + 1,
+        boundary + 119,
+    ] {
+        for skew in [-120_i64, -61, -1, 0, 1, 59, 120] {
+            let seen = at.checked_add_signed(skew).ok_or("time")?;
+            assert!(matched(&psk, at, seen)?, "shown at {at}, seen at {seen}");
+        }
+    }
+    // A whole epoch apart, either way: still a neighbour.
+    assert!(matched(&psk, boundary, boundary + EPOCH_SECONDS)?);
+    assert!(matched(&psk, boundary + EPOCH_SECONDS - 1, boundary - 1)?);
+    // Two epochs apart: never.
+    assert!(!matched(&psk, boundary, boundary + 2 * EPOCH_SECONDS)?);
+    assert!(!matched(&psk, boundary + 2 * EPOCH_SECONDS, boundary - 1)?);
+    Ok(())
+}
+
+/// At the start of time there is no epoch before 0: the first epoch's
+/// table tests epochs 0 and 1 only, and still matches its neighbour.
+#[test]
+fn the_first_epoch_has_no_predecessor() -> TestResult {
+    let table = DiscoveryTable::build(time(0)?, [(device()?, &[0x44; 32], 1)].into_iter())?;
+    assert_eq!(table.epoch().get(), 0);
+    assert_eq!(
+        table.epoch().adjacent().map(Epoch::get).collect::<Vec<_>>(),
+        [0, 1]
+    );
+    assert!(matched(&[0x44; 32], 0, EPOCH_SECONDS)?);
+    assert!(matched(&[0x44; 32], EPOCH_SECONDS, 0)?);
     Ok(())
 }
