@@ -8,11 +8,13 @@ struct SettingsView: View {
     @Environment(AppModel.self) private var model
     @Environment(CoreService.self) private var core
     @Binding var pairingCode: Bool
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Who can see this device") {
+                Section {
+                    Text("Who can see this device").font(.headline)
                     Picker("Visibility", selection: visibility) {
                         Text("Contacts").tag(Visibility.contacts)
                         Text("Hidden").tag(Visibility.hidden)
@@ -24,22 +26,24 @@ struct SettingsView: View {
                         .accessibilityIdentifier("everyone")
                 }
                 Section {
+                    Text("Received files").font(.headline)
                     Text("In the Files app: On My iPhone › todoke › Received.")
                     if let files = URL(string: "shareddocuments://" + Paths.received.path) {
-                        Link("Open in Files", destination: files)
+                        RowButton(title: "Open in Files", systemImage: "folder") { openURL(files) }
+                            .accessibilityIdentifier("open-files")
                     }
-                } header: {
-                    Text("Received files")
                 }
-                Section("Security") {
+                Section {
+                    Text("Security").font(.headline)
                     Text(protection)
                     Text(core.gated ? "Face ID or the passcode opens todoke." : "This device has no passcode: todoke opens without unlocking.")
-                        .foregroundStyle(.secondary)
                 }
-                Section("About") {
-                    LabeledContent("Version", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                Section {
+                    Text("About").font(.headline)
+                    Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")")
                     if let device = model.status?.device {
-                        LabeledContent("This device", value: Format.fingerprint(device))
+                        Text("This device: \(Format.fingerprint(device))")
+                            .fixedSize(horizontal: false, vertical: true)
                             .accessibilityIdentifier("this-device")
                     }
                 }
@@ -65,5 +69,25 @@ struct SettingsView: View {
         case nil: "—"
         default: String(localized: "Storage key in a file")
         }
+    }
+}
+
+/// A whole-row action in a list: an icon and the title in the text colour,
+/// the row tappable everywhere (the form the audit reads fully).
+struct RowButton: View {
+    let title: LocalizedStringKey
+    let systemImage: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                Image(systemName: systemImage).foregroundStyle(.tint).accessibilityHidden(true)
+                Text(title).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
     }
 }

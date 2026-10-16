@@ -4,6 +4,16 @@
 
 import SwiftUI
 
+extension Color {
+    /// A red that reads on the app's surfaces in both appearances (the
+    /// system red is too light on white for normal text).
+    static let warning = Color(UIColor { traits in
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 1.0, green: 0.45, blue: 0.42, alpha: 1)
+            : UIColor(red: 0.74, green: 0.10, blue: 0.10, alpha: 1)
+    })
+}
+
 extension View {
     /// A glass card (rounded), or a thin material before iOS 26.
     @ViewBuilder

@@ -107,13 +107,21 @@ final class CoreService {
     /// keep running while iOS allows (a background task; on iOS 26 a
     /// continued-processing task the system shows) and stop when done.
     func enteredBackground(moving: Bool) {
+        BackgroundWork.scheduleResume()
         guard moving else {
             stop()
             return
         }
+        // iOS 26: the system keeps the transfer going and shows it.
+        if BackgroundWork.continueTransfers() { return }
         background = UIApplication.shared.beginBackgroundTask(withName: "todoke transfer") { [weak self] in
             Task { @MainActor in self?.stop() }
         }
+    }
+
+    /// Stops the core unless the app is on screen (background work ended).
+    func stopUnlessForeground() {
+        if UIApplication.shared.applicationState != .active { stop() }
     }
 
     /// Nothing moves any more while in the background.

@@ -33,15 +33,13 @@ struct PairView: View {
                 case .code: Codes { dismiss() }
                 }
                 Spacer(minLength: 0)
+                Button { dismiss() } label: { Text("Done").frame(maxWidth: .infinity) }
+                    .secondaryAction()
+                    .accessibilityIdentifier("pair-done")
             }
             .padding()
             .navigationTitle("Pair a device")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }.accessibilityIdentifier("pair-done")
-                }
-            }
         }
         .secret()
         .onDisappear { Task { try? await model.backend.stopPairing() } }
@@ -56,6 +54,7 @@ private struct ShowQr: View {
     var body: some View {
         VStack(spacing: 12) {
             Text("Scan this code with the other device. It works once and expires in 5 minutes.")
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let qr {
                 QrView(qr: qr)
@@ -103,6 +102,7 @@ private struct ScanQr: View {
     var body: some View {
         VStack(spacing: 12) {
             Text("Point the camera at the QR code on the other device.")
+                .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
             if let failed { Text(failed).foregroundStyle(.red) }
             if DataScannerViewController.isSupported && DataScannerViewController.isAvailable {
@@ -178,6 +178,7 @@ private struct Codes: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("One device shows a code; the other picks it nearby and enters the code.")
+                .fixedSize(horizontal: false, vertical: true)
             Button("Show a code") {
                 Task {
                     do { code = try await model.backend.showCode() } catch { failed = String(describing: error) }

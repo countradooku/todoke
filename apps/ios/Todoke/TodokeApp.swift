@@ -7,8 +7,14 @@ import SwiftUI
 
 @main
 struct TodokeApp: App {
-    @State private var core = CoreService()
+    @State private var core: CoreService
     @Environment(\.scenePhase) private var phase
+
+    init() {
+        let core = CoreService()
+        _core = State(initialValue: core)
+        BackgroundWork.register(core: core)
+    }
 
     var body: some Scene {
         WindowGroup {

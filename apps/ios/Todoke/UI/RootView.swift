@@ -109,6 +109,9 @@ private struct Tabs: View {
             model.onIdle = { [core] in core.transfersIdle() }
             model.run()
         }
+        #if DEBUG
+        .overlay(alignment: .top) { FakeRequestLabel() }
+        #endif
         .onChange(of: phase) { _, phase in
             if phase == .active {
                 model.run()
@@ -127,3 +130,21 @@ private struct Tabs: View {
         model.offers.first { !hiddenOffers.contains($0.transfer) }.map(Shown.init)
     }
 }
+
+#if DEBUG
+/// The scripted core's requests, in order and separated by "|", for the UI
+/// tests to read (debug builds running a test scenario only).
+private struct FakeRequestLabel: View {
+    @State private var requests = ""
+
+    var body: some View {
+        Text(requests)
+            .font(.caption2)
+            .accessibilityIdentifier("fake-request")
+            .onReceive(NotificationCenter.default.publisher(for: .fakeRequest).receive(on: RunLoop.main)) { note in
+                if let request = note.object as? String { requests += "|" + request }
+            }
+            .allowsHitTesting(false)
+    }
+}
+#endif

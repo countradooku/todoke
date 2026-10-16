@@ -56,30 +56,39 @@ struct HomeView: View {
 private struct ContactCard: View {
     let contact: Contact
     let send: () -> Void
+    @Environment(\.dynamicTypeSize) private var size
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        // Side by side, or stacked at accessibility text sizes.
+        let layout = size.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 12))
+        layout {
             VStack(alignment: .leading, spacing: 4) {
                 Text(contact.name)
                     .font(.headline)
                 Text(Format.fingerprint(contact.device))
                     .font(.caption.monospaced())
-                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                     .accessibilityLabel("Fingerprint \(Format.fingerprint(contact.device))")
                 Label(proximity, systemImage: contact.nearby ? "wifi" : (contact.available ? "globe" : "moon"))
                     .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Spacer(minLength: 8)
-            Button("Send", action: send)
-                .primaryAction()
-                .disabled(!contact.available)
-                .accessibilityIdentifier("send-\(contact.name)")
-                .accessibilityHint("Choose files to send to \(contact.name)")
+            if !size.isAccessibilitySize { Spacer(minLength: 8) }
+            // Only a reachable device gets a button (a disabled one would
+            // be text too faint to read).
+            if contact.available {
+                Button("Send", action: send)
+                    .primaryAction()
+                    .accessibilityIdentifier("send-\(contact.name)")
+                    .accessibilityHint("Choose files to send to \(contact.name)")
+            }
         }
         .padding()
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassCard()
+        // Content on a solid surface: Liquid Glass is for the controls
+        // above it, and text on glass loses contrast.
+        .background(.background.secondary, in: .rect(cornerRadius: 20))
         .accessibilityElement(children: .contain)
     }
 

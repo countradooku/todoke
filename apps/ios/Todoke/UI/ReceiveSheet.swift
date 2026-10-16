@@ -35,17 +35,20 @@ struct ReceiveSheet: View {
                         .foregroundStyle(.tint)
                     Text(summary)
                     if programs {
-                        Label("Some of these are programs or scripts. Open them only if you expected them.",
-                              systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                            .accessibilityIdentifier("programs-warning")
+                        HStack(alignment: .firstTextBaseline, spacing: 8) {
+                            Image(systemName: "exclamationmark.triangle.fill").accessibilityHidden(true)
+                            Text("Some of these are programs or scripts. Open them only if you expected them.")
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("programs-warning")
                     }
                     if resumed {
                         Text("This transfer was interrupted: accepting it again receives what is left of your earlier choice.")
-                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                Section("Files") {
+                Section {
                     ForEach(files, id: \.id) { entry in
                         EntryRow(entry: entry, choosing: choosing, picked: chosen.contains(entry.id)) { picked in
                             if picked { chosen.insert(entry.id) } else { chosen.remove(entry.id) }
@@ -112,14 +115,28 @@ private struct EntryRow: View {
         let (stem, ext) = Format.nameParts(entry.name)
         let label = HStack(spacing: 0) {
             Text(stem).lineLimit(1).truncationMode(.middle)
-            Text(ext).foregroundStyle(Format.isProgram(entry) ? .red : .primary)
+            // Red and semibold for a program: bold text reads at a lower
+            // contrast than regular, which this red needs.
+            Text(ext)
+                .foregroundStyle(Format.isProgram(entry) ? Color.warning : .primary)
+                .fontWeight(Format.isProgram(entry) ? .semibold : .regular)
             Spacer(minLength: 8)
-            Text(Format.bytes(entry.size)).font(.caption).foregroundStyle(.secondary)
+            Text(Format.bytes(entry.size)).font(.caption)
         }
         if choosing {
-            Toggle(isOn: Binding(get: { picked }, set: pick)) { label }
-                .toggleStyle(.switch)
-                .accessibilityIdentifier("file-\(entry.name)")
+            // The whole row picks the file (a checkmark, as Mail and Files do).
+            Button { pick(!picked) } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: picked ? "checkmark.circle.fill" : "circle")
+                        .foregroundStyle(.tint)
+                        .accessibilityHidden(true)
+                    label
+                }
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .accessibilityAddTraits(picked ? .isSelected : [])
+            .accessibilityIdentifier("file-\(entry.name)")
         } else {
             label.accessibilityElement(children: .combine)
         }

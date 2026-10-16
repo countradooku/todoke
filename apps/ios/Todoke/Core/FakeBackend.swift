@@ -56,7 +56,7 @@ final class FakeBackend: Backend, @unchecked Sendable {
         case "transfers":
             fake._transfers = [
                 Self.transfer("f1", .transferring, 412_000_000, 1_048_000_000),
-                Self.transfer("f2", .delivered, 3_200_000, 3_200_000),
+                Self.transfer("f2", .delivered, 3_200_000, 3_200_000, way: .outgoing, peer: "b2"),
             ]
         case "history":
             fake._history = [
@@ -91,8 +91,9 @@ final class FakeBackend: Backend, @unchecked Sendable {
               fromName: "Pixel 9", entries: entries, totalBytes: entries.reduce(0) { $0 + $1.size }, resume: resume)
     }
 
-    static func transfer(_ id: String, _ state: TransferState, _ done: UInt64, _ total: UInt64) -> Transfer {
-        Transfer(id: String(repeating: id, count: 16), peer: String(repeating: "a1", count: 32), way: .incoming,
+    static func transfer(_ id: String, _ state: TransferState, _ done: UInt64, _ total: UInt64,
+                         way: Way = .incoming, peer: String = "a1") -> Transfer {
+        Transfer(id: String(repeating: id, count: 16), peer: String(repeating: peer, count: 32), way: way,
                  state: state, detail: "", bytesDone: done, bytesTotal: total)
     }
 
