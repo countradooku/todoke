@@ -12,6 +12,9 @@ struct PairView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.dismiss) private var dismiss
     @State var tab: Tab = .show
+    /// Opened by a shortcut, not a tap here: the QR (which starts stranger
+    /// advertising, §9) waits for the user to ask.
+    var waitForTap = false
 
     enum Tab: Hashable {
         case show, scan, code
@@ -28,7 +31,7 @@ struct PairView: View {
                 .pickerStyle(.segmented)
                 .accessibilityIdentifier("pair-method")
                 switch tab {
-                case .show: ShowQr()
+                case .show: ShowQr(waitForTap: waitForTap)
                 case .scan: ScanQr { dismiss() }
                 case .code: Codes { dismiss() }
                 }
@@ -48,6 +51,8 @@ struct PairView: View {
 
 private struct ShowQr: View {
     @Environment(AppModel.self) private var model
+    let waitForTap: Bool
+    @State private var asked = false
     @State private var qr: QrCode?
     @State private var failed: String?
 
@@ -59,12 +64,17 @@ private struct ShowQr: View {
             if let qr {
                 QrView(qr: qr)
             } else if let failed {
-                Text(failed).foregroundStyle(.red)
+                Text(failed).foregroundStyle(Color.warning)
+            } else if waitForTap && !asked {
+                Button("Show a QR code") { asked = true }
+                    .primaryAction()
+                    .accessibilityIdentifier("show-qr")
             } else {
                 ProgressView()
             }
         }
-        .task {
+        .task(id: asked) {
+            guard !waitForTap || asked, qr == nil else { return }
             do { qr = try await model.backend.showQr() } catch { failed = String(describing: error) }
         }
     }

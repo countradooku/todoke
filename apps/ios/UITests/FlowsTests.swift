@@ -10,9 +10,10 @@ final class FlowsTests: XCTestCase {
         continueAfterFailure = false
     }
 
-    private func launch(_ scenario: String, size: String? = nil, dark: Bool = false) -> XCUIApplication {
+    private func launch(_ scenario: String, size: String? = nil, dark: Bool = false,
+                        arguments: [String] = []) -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchArguments = ["-ui-test-scenario", scenario]
+        app.launchArguments = ["-ui-test-scenario", scenario] + arguments
         if let size {
             app.launchArguments += ["-UIPreferredContentSizeCategoryName", size]
         }
@@ -156,6 +157,20 @@ final class FlowsTests: XCTestCase {
         try audit(app)
         app.buttons["pair-done"].tap()
         expect(app, request: "stop-pairing")
+    }
+
+    /// Pairing opened by a shortcut (or an automation) shows no QR, and so
+    /// starts no stranger advertising, until the user taps for one.
+    func testAShortcutOpensPairingWithoutAQr() throws {
+        let app = launch("default", arguments: ["-open-pairing", "YES"])
+        let show = app.buttons["show-qr"]
+        XCTAssertTrue(show.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.descendants(matching: .any)["pair-qr"].exists)
+        XCTAssertFalse(lastRequest(app).label.components(separatedBy: "|").contains("show-qr"),
+                       "requests: \(lastRequest(app).label)")
+        try audit(app)
+        show.tap()
+        expect(app, request: "show-qr")
     }
 
     func testPairingWithACode() throws {

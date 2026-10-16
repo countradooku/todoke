@@ -64,6 +64,8 @@ private struct Tabs: View {
     @State private var model: AppModel
     @State private var pairing = false
     @State private var pairingTab: PairView.Tab = .show
+    /// Pairing opened by a shortcut: the QR waits for a tap.
+    @State private var pairingFromShortcut = false
     @State private var hiddenOffers: Set<String> = []
     @Environment(\.scenePhase) private var phase
     @Environment(CoreService.self) private var core
@@ -87,8 +89,11 @@ private struct Tabs: View {
             .tabItem { Label("Settings", systemImage: "gear") }
         }
         .environment(model)
-        .sheet(isPresented: $pairing, onDismiss: { pairingTab = .show }) {
-            PairView(tab: pairingTab).environment(model)
+        .sheet(isPresented: $pairing, onDismiss: {
+            pairingTab = .show
+            pairingFromShortcut = false
+        }) {
+            PairView(tab: pairingTab, waitForTap: pairingFromShortcut).environment(model)
         }
         .sheet(item: Binding(get: { shown }, set: { value in
             // Swiped away: hidden until it changes; the offer stays (§13).
@@ -106,7 +111,6 @@ private struct Tabs: View {
             Text(model.notice ?? "")
         }
         .onAppear {
-            model.onIdle = { [core] in core.transfersIdle() }
             model.run()
         }
         #if DEBUG
@@ -118,6 +122,7 @@ private struct Tabs: View {
                 // Shortcuts' "Pair a device" opens pairing.
                 if UserDefaults.standard.bool(forKey: "open-pairing") {
                     UserDefaults.standard.removeObject(forKey: "open-pairing")
+                    pairingFromShortcut = true
                     pairing = true
                 }
             } else if phase == .background {

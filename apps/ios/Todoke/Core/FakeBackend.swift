@@ -143,6 +143,10 @@ final class FakeBackend: Backend, @unchecked Sendable {
         locked { _hidden = hidden }
     }
 
+    func setBackground(_ background: Bool) async throws {
+        record("background \(background)")
+    }
+
     func send(to contact: String, documents: [Picked]) async throws -> String {
         record("send \(documents.count)")
         return String(repeating: "f9", count: 16)

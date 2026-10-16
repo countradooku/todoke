@@ -30,26 +30,33 @@ final class ShareViewController: UIViewController {
         host.didMove(toParent: self)
     }
 
-    /// Copies each attachment's file into the queue, then finishes.
+    /// Moves each attachment's file into the queue, then finishes. All or
+    /// nothing: if one cannot be read, nothing is queued (never fewer files
+    /// than the user picked) and the share fails.
     private func queue(_ providers: [NSItemProvider], for contact: AppGroup.SharedContact) {
         Task {
             var urls: [URL] = []
-            var temporary: [URL] = []
-            for provider in providers {
-                guard let type = provider.registeredTypeIdentifiers.first else { continue }
-                if let url = try? await loadFile(provider, type: type) {
-                    urls.append(url)
-                    temporary.append(url)
-                }
-            }
             do {
+                for provider in providers {
+                    guard let type = provider.registeredTypeIdentifiers.first else {
+                        throw CocoaError(.fileReadUnknown)
+                    }
+                    urls.append(try await loadFile(provider, type: type))
+                }
                 try ShareQueue.enqueue(contact: contact.id, urls: urls)
-                temporary.forEach { try? FileManager.default.removeItem(at: $0) }
+                removeFolders(of: urls)
                 extensionContext?.completeRequest(returningItems: nil)
             } catch {
-                temporary.forEach { try? FileManager.default.removeItem(at: $0) }
+                removeFolders(of: urls)
                 extensionContext?.cancelRequest(withError: error)
             }
+        }
+    }
+
+    /// Removes the temporary folders `loadFile` made.
+    private func removeFolders(of urls: [URL]) {
+        for url in urls {
+            try? FileManager.default.removeItem(at: url.deletingLastPathComponent())
         }
     }
 

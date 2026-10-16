@@ -1,97 +1,80 @@
-// Background work, within what iOS allows (PROTOCOL §10.3):
+// Background work, within what PROTOCOL §10.3 and iOS allow: a transfer
+// runs in the foreground, or in a continued-processing task the user
+// started (iOS 26 and later). The task is asked for when the user sends or
+// accepts, in the foreground, as iOS requires; the system shows its
+// progress and the user can stop it. While the app is in the background
+// the core keeps no listener, advertises nothing, and has no relay
+// presence (`setBackground`): only the transfers already going move.
 //
-// - a transfer the user started keeps going after they leave the app: a
-//   continued-processing task on iOS 26 and later (the system shows its
-//   progress and the user can stop it), a short background task before;
-// - a refresh task lets interrupted transfers resume, for a profile whose
-//   key needs no Face ID (a gated key cannot open without the user, and
-//   iOS shows no prompt in the background); it runs when iOS chooses.
-//
-// Nothing is received in the background: the core is not listening then.
+// Nothing else runs in the background: no refresh task resumes transfers
+// on its own (it would have to start the core, which listens), and before
+// iOS 26 the core stops when the app leaves the screen; interrupted
+// transfers resume when the user opens the app again (§7.5).
 
 import BackgroundTasks
 import Foundation
 import Todoke
+import UIKit
 
+@MainActor
 enum BackgroundWork {
-    static let resume = "org.todoke.ios.resume"
     static let transfer = "org.todoke.ios.transfer"
 
-    /// Registers the handlers; called once, before the app finishes
+    /// Whether a continued-processing task runs now.
+    private(set) static var running = false
+
+    /// Registers the handler; called once, before the app finishes
     /// launching.
-    @MainActor
     static func register(core: CoreService) {
-        BGTaskScheduler.shared.register(forTaskWithIdentifier: resume, using: nil) { task in
-            Task { @MainActor in await runResume(task, core: core) }
-        }
-        if #available(iOS 26.0, *) {
-            BGTaskScheduler.shared.register(forTaskWithIdentifier: transfer, using: nil) { task in
-                guard let task = task as? BGContinuedProcessingTask else {
-                    task.setTaskCompleted(success: false)
-                    return
-                }
-                Task { @MainActor in await runTransfer(task, core: core) }
+        guard #available(iOS 26.0, *) else { return }
+        BGTaskScheduler.shared.register(forTaskWithIdentifier: transfer, using: nil) { task in
+            guard let task = task as? BGContinuedProcessingTask else {
+                task.setTaskCompleted(success: false)
+                return
             }
+            Task { @MainActor in await run(task, core: core) }
         }
     }
 
-    /// Asks for the next refresh (iOS decides when, at least 15 minutes
-    /// from now).
-    static func scheduleResume() {
-        let request = BGAppRefreshTaskRequest(identifier: resume)
-        request.earliestBeginDate = Date().addingTimeInterval(15 * 60)
-        try? BGTaskScheduler.shared.submit(request)
-    }
-
-    /// The user left the app while files move: keep them going.
-    @MainActor
-    static func continueTransfers() -> Bool {
-        guard #available(iOS 26.0, *) else { return false }
+    /// The user started a transfer (in the foreground): ask iOS to let it
+    /// finish if they leave the app. Once at a time.
+    static func userStartedTransfer() {
+        guard #available(iOS 26.0, *), !running else { return }
+        #if DEBUG
+        // The scripted core of the UI tests has nothing to finish.
+        if UserDefaults.standard.string(forKey: "ui-test-scenario") != nil { return }
+        #endif
         let request = BGContinuedProcessingTaskRequest(
             identifier: transfer, title: String(localized: "Sending and receiving files"),
             subtitle: String(localized: "todoke finishes the transfers in progress."))
+        // Starts now or not at all: never later, when the user is gone.
         request.strategy = .fail
-        return (try? BGTaskScheduler.shared.submit(request)) != nil
-    }
-
-    @MainActor
-    private static func runResume(_ task: BGTask, core: CoreService) async {
-        scheduleResume()
-        guard !core.gated else {
-            task.setTaskCompleted(success: true)
-            return
-        }
-        var expired = false
-        task.expirationHandler = { expired = true }
-        await core.start()
-        // Gives interrupted transfers time to reconnect and resume.
-        for _ in 0..<25 where !expired {
-            try? await Task.sleep(for: .seconds(1))
-            if let transfers = try? await core.backend?.transfers(),
-               !transfers.contains(where: { [.transferring, .accepted, .interrupted].contains($0.state) }) {
-                break
-            }
-        }
-        core.stopUnlessForeground()
-        task.setTaskCompleted(success: true)
+        running = (try? BGTaskScheduler.shared.submit(request)) != nil
     }
 
     @available(iOS 26.0, *)
-    @MainActor
-    private static func runTransfer(_ task: BGContinuedProcessingTask, core: CoreService) async {
+    private static func run(_ task: BGContinuedProcessingTask, core: CoreService) async {
+        running = true
         var expired = false
         task.expirationHandler = { expired = true }
-        while !expired {
+        // The transfer may take a moment to show as moving.
+        var idle = 0
+        while !expired, idle < 5 {
             guard let transfers = try? await core.backend?.transfers() else { break }
             let moving = transfers.filter { [.accepted, .transferring].contains($0.state) }
-            if moving.isEmpty { break }
-            let done = moving.reduce(0) { $0 + $1.bytesDone }
-            let total = moving.reduce(0) { $0 + $1.bytesTotal }
-            task.progress.totalUnitCount = Int64(clamping: total)
-            task.progress.completedUnitCount = Int64(clamping: done)
+            if moving.isEmpty {
+                idle += 1
+            } else {
+                idle = 0
+                let done = moving.reduce(0) { $0 + $1.bytesDone }
+                let total = moving.reduce(0) { $0 + $1.bytesTotal }
+                task.progress.totalUnitCount = Int64(clamping: total)
+                task.progress.completedUnitCount = Int64(clamping: done)
+            }
             try? await Task.sleep(for: .seconds(1))
         }
-        core.stopUnlessForeground()
+        running = false
+        core.backgroundWorkEnded()
         task.setTaskCompleted(success: !expired)
     }
 }

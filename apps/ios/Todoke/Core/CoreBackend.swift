@@ -59,6 +59,10 @@ final class CoreBackend: Backend, @unchecked Sendable {
     func stopPairing() async throws { try await call { try $0.stopPairing() } }
     func setHidden(_ hidden: Bool) async throws { try await call { try $0.setHidden(hidden: hidden) } }
 
+    func setBackground(_ background: Bool) async throws {
+        try await call { try $0.setBackground(background: background) }
+    }
+
     func send(to contact: String, documents: [Picked]) async throws -> String {
         var fds: [Int32] = []
         // Whatever was opened and not yet handed over is closed again.

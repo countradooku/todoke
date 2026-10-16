@@ -41,6 +41,9 @@ protocol Backend: AnyObject, Sendable {
     func enterCode(_ code: String, stranger: String) async throws -> String
     func stopPairing() async throws
     func setHidden(_ hidden: Bool) async throws
+    /// The app entered the background or left it (PROTOCOL §10.3: no
+    /// listener, no advertising, no relay presence there).
+    func setBackground(_ background: Bool) async throws
     /// Sends `documents` to `contact`; returns the transfer's ID.
     func send(to contact: String, documents: [Picked]) async throws -> String
     /// Sends files by path (the share queue, inside the App Group).

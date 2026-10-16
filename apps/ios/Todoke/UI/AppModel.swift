@@ -20,9 +20,10 @@ final class AppModel {
     @ObservationIgnored private let activities = TransferActivities()
     @ObservationIgnored private let outbox = Outbox()
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
-    /// Called when nothing moves any more (the core may stop in the
-    /// background).
-    @ObservationIgnored var onIdle: (() -> Void)?
+    /// A refresh runs (it suspends at each call); another asked meanwhile
+    /// runs once it ends, never alongside it.
+    @ObservationIgnored private var refreshing = false
+    @ObservationIgnored private var again = false
 
     init(backend: Backend) {
         self.backend = backend
@@ -55,6 +56,19 @@ final class AppModel {
     }
 
     func refresh() async {
+        guard !refreshing else {
+            again = true
+            return
+        }
+        refreshing = true
+        defer { refreshing = false }
+        repeat {
+            again = false
+            await refreshOnce()
+        } while again
+    }
+
+    private func refreshOnce() async {
         guard let status = try? await backend.status() else { return }
         self.status = status
         contacts = (try? await backend.contacts()) ?? contacts
@@ -65,8 +79,6 @@ final class AppModel {
             AppGroup.SharedContact(id: AppGroup.shortcutID(for: $0.device), name: $0.name, available: $0.available)
         }
         activities.update(transfers: transfers, contacts: contacts)
-        Moving.now = moving
-        if !moving { onIdle?() }
         if status.hidden != AppGroup.hidden {
             try? await backend.setHidden(AppGroup.hidden)
         }
@@ -74,7 +86,10 @@ final class AppModel {
             try? await backend.cancel(transfer)
         }
         let active = Set(transfers.filter { ![.received, .delivered, .unconfirmed, .rejected, .cancelled, .failed].contains($0.state) }.map(\.id))
-        await outbox.process(backend: backend, contacts: contacts, active: active)
+        let dropped = await outbox.process(backend: backend, contacts: contacts, active: active)
+        if !dropped.isEmpty {
+            notice = String(localized: "Files shared for \(dropped.joined(separator: ", ")) could not be sent and were removed.")
+        }
     }
 
     // MARK: Actions
@@ -91,12 +106,16 @@ final class AppModel {
     func send(to contact: Contact, documents: [Picked]) async {
         await perform {
             _ = try await backend.send(to: contact.device, documents: documents)
+            BackgroundWork.userStartedTransfer()
             Donations.donate(contact: contact)
         }
     }
 
     func accept(_ offer: Offer, files: [UInt32]) async {
-        await perform { try await backend.accept(offer.transfer, files: files) }
+        await perform {
+            try await backend.accept(offer.transfer, files: files)
+            BackgroundWork.userStartedTransfer()
+        }
     }
 
     func decline(_ offer: Offer) async {

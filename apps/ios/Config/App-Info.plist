@@ -7,15 +7,13 @@
 	<array>
 		<string>_todoke._tcp</string>
 	</array>
-	<!-- Finishing a transfer the user started; resuming interrupted ones. -->
+	<!-- Finishing a transfer the user started (a continued-processing task). -->
 	<key>UIBackgroundModes</key>
 	<array>
-		<string>fetch</string>
 		<string>processing</string>
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>org.todoke.ios.resume</string>
 		<string>org.todoke.ios.transfer</string>
 	</array>
 	<!-- Share-sheet suggestions: donated INSendMessageIntents. -->

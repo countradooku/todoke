@@ -36,7 +36,7 @@ struct SettingsView: View {
                 Section {
                     Text("Security").font(.headline)
                     Text(protection)
-                    Text(core.gated ? "Face ID or the passcode opens todoke." : "This device has no passcode: todoke opens without unlocking.")
+                    Text(core.gated ? "Face ID or the passcode opens todoke." : "todoke opens without Face ID: the device had no passcode when todoke was set up.")
                 }
                 Section {
                     Text("About").font(.headline)

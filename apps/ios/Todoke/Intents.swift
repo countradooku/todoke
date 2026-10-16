@@ -1,7 +1,9 @@
 // Shortcuts and the Action button: change visibility (the shared intent),
-// open pairing, and send files to a contact. Sending queues the files like
+// open pairing, and send files to a contact. Sending asks the user to
+// confirm (an automation cannot send unseen), then queues the files like
 // the share extension does and opens the app, which sends them (the core
-// runs only in the app, after it unlocks).
+// runs only in the app, after it unlocks). Pairing opens the pairing
+// screen; nothing is shown or advertised until the user asks there.
 
 import AppIntents
 import Foundation
@@ -39,6 +41,12 @@ struct SendFilesIntent: AppIntent {
     var contact: ContactEntity
 
     func perform() async throws -> some IntentResult {
+        let question = IntentDialog("Send \(files.count) files to \(contact.name)?")
+        if #available(iOS 18.0, *) {
+            try await requestConfirmation(actionName: .send, dialog: question)
+        } else {
+            try await requestConfirmation(result: .result(dialog: question), confirmationActionName: .send)
+        }
         try ShareQueue.enqueue(contact: contact.id, files: files.map { ($0.filename, $0.data) })
         return .result()
     }

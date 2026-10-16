@@ -113,9 +113,12 @@ enum Donations {
 
 // MARK: The share queue
 
-/// Sends what the share extension queued, once the core runs: each request
-/// is sent once (marked with its transfer), and its files are removed once
-/// that transfer ends.
+/// Sends what the share extension (or a shortcut) queued, once the core
+/// runs: each request is sent once (marked with its transfer), and its files
+/// are removed once that transfer ends. One pass at a time. A request that
+/// fails is tried again later, backing off, and dropped (and the user told)
+/// after a few tries; a folder the extension never finished goes after a
+/// day.
 @MainActor
 final class Outbox {
     private struct Sent: Codable {
@@ -123,12 +126,26 @@ final class Outbox {
     }
 
     private static let sentFile = "sent.json"
+    private static let tries = 5
+    private static let unfinishedFor: TimeInterval = 24 * 60 * 60
 
-    func process(backend: Backend, contacts: [Contact], active: Set<String>) async {
+    private var processing = false
+    /// Failed tries per request folder: how many, and not before when.
+    private var failures: [String: (count: Int, next: Date)] = [:]
+
+    /// Sends what waits; returns the names of the contacts whose files
+    /// were dropped after failing.
+    func process(backend: Backend, contacts: [Contact], active: Set<String>) async -> [String] {
+        guard !processing else { return [] }
+        processing = true
+        defer { processing = false }
         let files = FileManager.default
-        guard let folders = try? files.contentsOfDirectory(at: AppGroup.outbox, includingPropertiesForKeys: nil) else {
-            return
+        guard let folders = try? files.contentsOfDirectory(
+            at: AppGroup.outbox, includingPropertiesForKeys: [.creationDateKey])
+        else {
+            return []
         }
+        var dropped: [String] = []
         for folder in folders {
             let sent = folder.appendingPathComponent(Self.sentFile)
             if let data = try? Data(contentsOf: sent), let record = try? JSONDecoder().decode(Sent.self, from: data) {
@@ -140,18 +157,40 @@ final class Outbox {
             }
             guard let data = try? Data(contentsOf: folder.appendingPathComponent(AppGroup.requestFile)),
                   let request = try? JSONDecoder().decode(AppGroup.QueuedShare.self, from: data)
-            else { continue }
+            else {
+                // The extension stopped before writing the request.
+                let created = (try? folder.resourceValues(forKeys: [.creationDateKey]))?.creationDate
+                if let created, Date().timeIntervalSince(created) > Self.unfinishedFor {
+                    try? files.removeItem(at: folder)
+                }
+                continue
+            }
             guard let contact = contacts.first(where: { AppGroup.shortcutID(for: $0.device) == request.contact }) else {
                 // The contact is gone: nothing will send these.
                 try? files.removeItem(at: folder)
                 continue
             }
+            let key = folder.lastPathComponent
+            if let failed = failures[key], failed.next > Date() { continue }
             let paths = request.names.map { folder.appendingPathComponent($0).path }
-            guard let transfer = try? await backend.send(to: contact.device, paths: paths) else { continue }
-            if let record = try? JSONEncoder().encode(Sent(transfer: transfer)) {
-                try? record.write(to: sent, options: .atomic)
+            do {
+                let transfer = try await backend.send(to: contact.device, paths: paths)
+                failures[key] = nil
+                if let record = try? JSONEncoder().encode(Sent(transfer: transfer)) {
+                    try? record.write(to: sent, options: [.atomic, .completeFileProtectionUnlessOpen])
+                }
+                Donations.donate(contact: contact)
+            } catch {
+                let count = (failures[key]?.count ?? 0) + 1
+                if count >= Self.tries {
+                    failures[key] = nil
+                    try? files.removeItem(at: folder)
+                    dropped.append(contact.name)
+                } else {
+                    failures[key] = (count, Date().addingTimeInterval(pow(2, Double(count)) * 5))
+                }
             }
-            Donations.donate(contact: contact)
         }
+        return dropped
     }
 }

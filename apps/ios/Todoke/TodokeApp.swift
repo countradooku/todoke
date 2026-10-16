@@ -25,18 +25,12 @@ struct TodokeApp: App {
         .onChange(of: phase) { _, phase in
             switch phase {
             case .active:
-                Task { await core.start() }
+                Task { await core.enteredForeground() }
             case .background:
-                core.enteredBackground(moving: Moving.now)
+                core.enteredBackground()
             default:
                 break
             }
         }
     }
-}
-
-/// Whether something moves now, as the screens last read it.
-@MainActor
-enum Moving {
-    static var now = false
 }

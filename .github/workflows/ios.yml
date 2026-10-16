@@ -6,8 +6,13 @@ name: iOS app
 # audit at the default and the largest text size) on a simulator, with the
 # development package; and a release build against the shipped package,
 # checked to carry no test hook. Nothing is signed or published.
+#
+# macOS runners cost several times Linux ones: pull requests and main
+# only (a branch push without a pull request does not run it), and a
+# newer push cancels an older run except on main.
 on:
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -16,7 +21,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 env:
   CARGO_TERM_COLOR: always

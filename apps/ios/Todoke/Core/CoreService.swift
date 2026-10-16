@@ -1,11 +1,12 @@
 // The core's lifecycle. It starts once (a start in progress is shared),
 // off the main thread: it blocks while the profile opens, and with a gated
-// key the system asks for Face ID, Touch ID, or the passcode then. It
-// stops when the app leaves the foreground with nothing moving (an iOS app
-// closes its listeners in the background, PROTOCOL §10.3), and otherwise
-// once what moves is done, within the time iOS gives.
+// key the system asks for Face ID, Touch ID, or the passcode then. When the
+// app leaves the foreground it stops, unless a continued-processing task
+// the user started runs (iOS 26): then it stays in its background mode, no
+// listener, no advertising, no relay presence (PROTOCOL §10.3), until that
+// task ends. A stop while a start is under way wins: the core that start
+// opens is released at once.
 
-import BackgroundTasks
 import Foundation
 import LocalAuthentication
 import Observation
@@ -28,16 +29,23 @@ final class CoreService {
     private(set) var state: CoreState
     private(set) var backend: Backend?
     private var starting: Task<Void, Never>?
-    private var background: UIBackgroundTaskIdentifier = .invalid
+    /// Bumped by each stop: a start that a stop overtook drops its core.
+    private var generation = 0
+    /// The core runs in its background mode.
+    private var inBackground = false
     private let notifier = Notifications()
 
-    /// The key needs the user (decided once, at the first launch: when the
-    /// device has a passcode). Kept in the app's own defaults.
+    /// The key needs the user: decided when the profile is created (when
+    /// the device has a passcode then), and fixed with it (the key's access
+    /// control is set when it is stored). Decided again whenever there is
+    /// no profile, as after a restore from a backup (the state is never in
+    /// one, while the app's defaults are).
     let gated: Bool
 
     init() {
         let defaults = UserDefaults.standard
-        if defaults.object(forKey: "gate") == nil {
+        let profile = FileManager.default.fileExists(atPath: Paths.home.appendingPathComponent("state").path)
+        if defaults.object(forKey: "gate") == nil || !profile {
             defaults.set(LAContext().canEvaluatePolicy(.deviceOwnerAuthentication, error: nil), forKey: "gate")
         }
         gated = defaults.bool(forKey: "gate")
@@ -65,6 +73,7 @@ final class CoreService {
     }
 
     private func open() async {
+        let generation = generation
         state = .starting
         let settings = Settings(
             home: Paths.home.path, downloads: Paths.received.path, lan: true, allowLoopback: false,
@@ -79,6 +88,12 @@ final class CoreService {
                 return core
             }
         }.value
+        // Stopped meanwhile (the app left the screen): the core goes now,
+        // closing its listener.
+        guard generation == self.generation else {
+            state = .locked(gated: gated)
+            return
+        }
         switch result {
         case .success(let core):
             backend = CoreBackend(core: core)
@@ -93,47 +108,58 @@ final class CoreService {
         }
     }
 
-    /// Releases the core: it stops, closing its listeners.
+    /// Releases the core: it stops, closing its listeners. A start under
+    /// way drops the core it opens.
     func stop() {
         #if DEBUG
         if UserDefaults.standard.string(forKey: "ui-test-scenario") != nil { return }
         #endif
+        generation += 1
         backend = nil
-        if case .ready = state { state = .locked(gated: gated) }
-        endBackgroundTask()
+        inBackground = false
+        switch state {
+        case .ready, .starting: state = .locked(gated: gated)
+        default: break
+        }
     }
 
-    /// The app left the foreground: stop now if nothing moves, otherwise
-    /// keep running while iOS allows (a background task; on iOS 26 a
-    /// continued-processing task the system shows) and stop when done.
-    func enteredBackground(moving: Bool) {
-        BackgroundWork.scheduleResume()
-        guard moving else {
+    /// The app left the foreground: the core stops, unless a
+    /// continued-processing task the user started runs; then it goes on in
+    /// its background mode until the task ends.
+    func enteredBackground() {
+        guard BackgroundWork.running, let backend else {
             stop()
             return
         }
-        // iOS 26: the system keeps the transfer going and shows it.
-        if BackgroundWork.continueTransfers() { return }
-        background = UIApplication.shared.beginBackgroundTask(withName: "todoke transfer") { [weak self] in
-            Task { @MainActor in self?.stop() }
+        inBackground = true
+        Task {
+            do {
+                try await backend.setBackground(true)
+            } catch {
+                stop()
+            }
         }
     }
 
-    /// Stops the core unless the app is on screen (background work ended).
-    func stopUnlessForeground() {
+    /// The app is on screen: the core starts, or leaves its background
+    /// mode (the listener reopens).
+    func enteredForeground() async {
+        if inBackground, let backend {
+            inBackground = false
+            do {
+                try await backend.setBackground(false)
+                return
+            } catch {
+                stop()
+            }
+        }
+        await start()
+    }
+
+    /// The continued-processing task ended: the core stops unless the app
+    /// is on screen.
+    func backgroundWorkEnded() {
         if UIApplication.shared.applicationState != .active { stop() }
-    }
-
-    /// Nothing moves any more while in the background.
-    func transfersIdle() {
-        if background != .invalid { stop() }
-    }
-
-    private func endBackgroundTask() {
-        if background != .invalid {
-            UIApplication.shared.endBackgroundTask(background)
-            background = .invalid
-        }
     }
 }
 
