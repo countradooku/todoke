@@ -137,7 +137,8 @@ fuzz_target!(|data: &[u8]| {
             3 => drop(core.offers()),
             4 => drop(core.history()),
             5 => drop(core.strangers()),
-            6 => drop(core.set_hidden(op & 0x80 == 0)),
+            6 if op & 0x40 == 0 => drop(core.set_hidden(op & 0x80 == 0)),
+            6 => drop(core.set_background(op & 0x80 == 0)),
             7 => {
                 if let Ok(offer) = core.pair_show_qr() {
                     assert_eq!(

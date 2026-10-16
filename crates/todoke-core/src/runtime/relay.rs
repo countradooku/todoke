@@ -86,6 +86,8 @@ pub(super) struct Relays {
     qr_generation: Cell<u64>,
     /// Wakes a QR wait when its offer stops.
     qr_cancel: tokio::sync::Notify,
+    /// Ends the presence waits (hidden, or in the background).
+    presence_cancel: tokio::sync::Notify,
     /// A scanner is waiting for a room.
     scanning: Cell<bool>,
     /// How often an idle pair meets, in seconds.
@@ -135,6 +137,7 @@ impl Relays {
             presence: RefCell::new(BTreeMap::new()),
             qr_generation: Cell::new(0),
             qr_cancel: tokio::sync::Notify::new(),
+            presence_cancel: tokio::sync::Notify::new(),
             scanning: Cell::new(false),
             period: u64::from(period).max(MIN_PRESENCE),
         }))
@@ -266,6 +269,7 @@ impl State {
                 if waiting && directory.contact(peer, mono).is_none() {
                     urgent.push((*peer, token, WAIT, None));
                 } else if !self.hidden.get()
+                    && !self.background.get()
                     && let Some((window, left)) = presence_window(&token, now, relays.period)
                     && presence.get(peer) != Some(&window)
                 {
@@ -284,8 +288,9 @@ impl State {
                 relays.presence.borrow_mut().insert(peer, window);
             }
             let state = Rc::clone(self);
+            let presence = window.is_some();
             tokio::task::spawn_local(async move {
-                state.meet_contact(claim, peer, token, wait).await;
+                state.meet_contact(claim, peer, token, wait, presence).await;
             });
         }
     }
@@ -298,11 +303,19 @@ impl State {
         peer: Ed25519PublicKey,
         token: RendezvousToken,
         wait: Duration,
+        presence: bool,
     ) {
         let Some(relays) = &self.relay else {
             return;
         };
-        let met = relays.meet(token, wait).await;
+        let met = if presence {
+            tokio::select! {
+                met = relays.meet(token, wait) => met,
+                () = relays.presence_cancel.notified() => return,
+            }
+        } else {
+            relays.meet(token, wait).await
+        };
         drop(claim);
         match met {
             Ok(link) => {
@@ -391,6 +404,14 @@ impl State {
                 }
             }
         });
+    }
+
+    /// No more presence (hidden, or in the background): the presence waits
+    /// at the relay end now; waits for contacts with sends waiting go on.
+    pub(super) fn stop_presence(&self) {
+        if let Some(relays) = &self.relay {
+            relays.presence_cancel.notify_waiters();
+        }
     }
 
     /// The QR offer is no longer shown: its relay wait ends now.

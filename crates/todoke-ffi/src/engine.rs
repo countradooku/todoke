@@ -27,7 +27,9 @@ use crate::events::{Events, Subscribers};
 use crate::handles::{ContactHandle, TransferHandle, valid_id};
 use crate::hooks::{KeyStore, Notifier, RadioLink};
 use crate::qr::QrOffer;
-use crate::types::{Contact, HistoryItem, Offer, Settings, Status, Stranger, Transfer};
+use crate::types::{
+    Contact, HistoryItem, KeyStoragePolicy, Offer, Settings, Status, Stranger, Transfer,
+};
 
 /// The app's notifier, shared with the event thread.
 pub(crate) type NotifierSlot = Arc<Mutex<Option<Arc<dyn Notifier>>>>;
@@ -184,9 +186,17 @@ impl Core {
     /// # Errors
     ///
     /// As [`Core::new`]; [`TodokeError::Locked`] when the user did not
-    /// unlock (ask again); [`TodokeError::Unsupported`] off Apple
+    /// unlock (ask again); [`TodokeError::Invalid`] for a key storage policy
+    /// other than `Platform`; [`TodokeError::Unsupported`] off Apple
     /// platforms.
     pub fn with_presence(settings: Settings) -> Result<Self, TodokeError> {
+        // Any other policy could fall back to a file, which needs no one.
+        if settings.key_storage != KeyStoragePolicy::Platform {
+            return Err(TodokeError::Invalid {
+                message: "a key needing the user's presence: use KeyStoragePolicy::Platform"
+                    .to_owned(),
+            });
+        }
         if cfg!(any(target_os = "macos", target_os = "ios")) {
             Self::start(&settings, None, true)
         } else {
@@ -422,6 +432,18 @@ impl Core {
     /// The core stopped.
     pub fn set_hidden(&self, hidden: bool) -> Result<(), TodokeError> {
         self.shared.done(Request::SetHidden { hidden })
+    }
+
+    /// The app entered the background, or left it (PROTOCOL §10.3, for
+    /// iOS): there the core closes its listener, advertises nothing, keeps
+    /// no relay presence, and ends pairing, while open sessions and sends
+    /// waiting for a contact go on. Leaving reopens the listener.
+    ///
+    /// # Errors
+    ///
+    /// The core stopped, or the listener could not reopen.
+    pub fn set_background(&self, background: bool) -> Result<(), TodokeError> {
+        self.shared.done(Request::SetBackground { background })
     }
 
     /// A subscription to the core's events from now on.

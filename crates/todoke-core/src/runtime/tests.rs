@@ -280,7 +280,10 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     );
     history_matches(&alice, &bob, &transfer).await?;
     hiding_withdraws_the_advertisement(&bob, &discovery).await?;
+    // In the background (§10.3) Bob still sends in the open session.
+    let port = background(&bob, &discovery, true, None).await?;
     send_again_in_the_session(&scratch.0, &source, &alice, &bob, &alice_hex).await?;
+    background(&bob, &discovery, false, port).await?;
     // A second request for the same transfer is refused: it is finished.
     assert!(matches!(
         alice
@@ -495,6 +498,66 @@ async fn hiding_withdraws_the_advertisement(bob: &Core, discovery: &Path) -> Any
     settle().await;
     assert_eq!(records()?, 2);
     Ok(())
+}
+
+/// Puts `bob` in the background (§10.3) or back: in it, its listener is
+/// closed (nothing connects), it advertises nothing, and pairing is
+/// refused; back, the listener reopens on `port` and it advertises again.
+/// Returns the listener's port before going to the background.
+async fn background(
+    bob: &Core,
+    discovery: &Path,
+    background: bool,
+    port: Option<u16>,
+) -> AnyResult<Option<u16>> {
+    let records = || -> AnyResult<usize> {
+        Ok(std::fs::read_dir(discovery)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rec"))
+            .count())
+    };
+    let status = || async {
+        match bob.request(Request::Status).await {
+            Response::Status(status) => Ok(status),
+            _ => Err("status"),
+        }
+    };
+    let before = status().await?.port;
+    assert_eq!(
+        bob.request(Request::SetBackground { background }).await,
+        Response::Done
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let reachable = |port: u16| {
+        std::net::TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+    };
+    if background {
+        let port = before.ok_or("no listener")?;
+        assert_eq!(status().await?.port, None);
+        assert!(!reachable(port), "the listener is still open");
+        assert_eq!(records()?, 1);
+        assert!(matches!(
+            bob.request(Request::PairShowQr).await,
+            Response::Error {
+                code: ErrorCode::Pairing,
+                ..
+            }
+        ));
+    } else {
+        assert_eq!(status().await?.port, port);
+        assert!(reachable(port.ok_or("no port")?));
+        assert_eq!(records()?, 2);
+        assert!(matches!(
+            bob.request(Request::PairShowQr).await,
+            Response::Qr { .. }
+        ));
+        assert_eq!(bob.request(Request::StopPairing).await, Response::Done);
+    }
+    Ok(before)
 }
 
 /// Past `MAX_FINISHED` idle transfers the oldest are forgotten; one that
