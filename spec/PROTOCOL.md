@@ -173,6 +173,23 @@ On a local network the scanner finds the displayer by the stranger token derived
 from the QR (§9) and sends the QR's `ClientHello` to no other device, so pairings
 shown side by side do not reach each other's displayers.
 
+#### 3.1.1 NFC carrier
+
+The QR text MAY also travel by NFC, for a scanner held against the displayer. The
+displayer emulates an NFC Forum Type 4 Tag (ISO-DEP, NDEF application
+`D2760000850101`, read-only) whose NDEF message is exactly one short-or-long record
+with TNF media type, type `application/vnd.todoke.pair`, no ID, and a payload that
+is exactly the QR text (1975 ASCII bytes). It emulates the tag only while it shows
+that QR offer, in the foreground, and stops when the offer ends. The reader accepts
+only that exact message (one record, that type, that length) and then validates the
+payload exactly as QR text (§3.1); nothing else in the tag is read or kept.
+
+NFC adds no secret and no authority: the payload is the QR, under the QR's
+single-use, expiry, and burn rules, and whoever is in NFC range while the offer is
+shown (centimetres; about a metre with an antenna built for it) learns what someone
+who sees the screen learns. The text crosses the platform boundary as QR text does
+when scanned (§16 O5).
+
 ### 3.2 Human code pairing
 
 The displayer/responder creates a uniformly random 10-digit ASCII decimal code
@@ -655,6 +672,8 @@ the session; its cipher state MUST NOT be reused on another pipe.
 | 0x001b / 0x001c | Complete / DeliveryReceipt, §7.7 |
 | 0x0020 | LinkAbilities, §10.2 |
 | 0x0021 / 0x0022 | LinkOffer / LinkAnswer, §10.2 |
+| 0x0023 | RangingReady, §10.4 |
+| 0x0024 / 0x0025 | RangingStart / RangingStop, §10.4 |
 | 0x0040 | Revoke, §2 |
 | 0x0100..0x01ff | Reserved Tor |
 | 0x0200..0x02ff | Reserved PQ variants |
@@ -1521,9 +1540,12 @@ keeps no copy of the secret. Joins use the platform's app-scoped, temporary
 mechanisms (Android `WifiNetworkSpecifier` or the Wi-Fi Aware network request,
 `NEHotspotConfiguration` with `joinOnce`, a NetworkManager in-memory connection, a
 Windows temporary profile), and the joiner sends only todoke traffic over the link
-where the platform lets it bind sockets to the link. A host that controls its access
-point offers no default route and no DNS, and forwards nothing between the link and
-other networks. A malformed record is MALFORMED; a duplicate, unexpected, or
+where the platform lets it bind sockets to the link. A host forwards nothing between
+the link and other networks. Where it controls what its network offers, it offers no
+default route and no DNS server; where the platform offers them regardless (Android's
+Wi-Fi Direct groups and Windows' Wi-Fi Direct access point name the host as router
+and DNS server), the host forwards and answers nothing for them, and the joiner takes
+neither where its platform lets it. A malformed record is MALFORMED; a duplicate, unexpected, or
 out-of-order one is STATE.
 
 ### 10.3 Platform requirements
@@ -1543,6 +1565,50 @@ out-of-order one is STATE.
   a device are never used, and no operating-system pairing is taken as todoke
   authentication. Apple Wi-Fi Aware's system pairing is a precondition the platform
   imposes, not authentication: the todoke handshake still runs on every connection.
+
+### 10.4 Pointing (UWB)
+
+Two contacts in an authenticated session MAY range with ultra-wideband so that a
+user can pick a nearby contact by pointing at its device. Ranging is a hint for the
+interface and nothing else: it never authenticates a device, selects a link,
+reaches a device that is not already a contact in this session, or stands in for
+any consent. The user still chooses and confirms what to send to whom.
+
+The device that points is the controller; the other is the controlee
+(FiRa unicast double-sided two-way ranging with a provisioned STS).
+
+`RangingReady` (0x0023): sent at most once per session, after Capabilities, by an
+endpoint that can range as a controlee now (its UWB hardware is on and its app is in
+the foreground).
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| address | 2 | The controlee's UWB short address for this session, not 0x0000 or 0xffff |
+| configs | 1 | Bitmask of supported configurations; bit 0: provisioned-STS unicast DS-TWR. Other bits reserved zero; 0 is MALFORMED |
+
+`RangingStart` (0x0024): from the controller, only after the peer's `RangingReady`,
+at most 8 per session, and never while one is running.
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| session_id | 4 | Random, not zero |
+| controller | 2 | The controller's UWB short address, not 0x0000 or 0xffff |
+| channel | 1 | 5 or 9 |
+| preamble | 1 | 9..12 or 25..32 |
+| config | 1 | One configuration bit the peer announced |
+| sts_key | 16 | Random from a CSPRNG for this start; the provisioned STS key |
+
+`RangingStop` (0x0025): from either endpoint, `session_id` (4 bytes) of the running
+ranging.
+
+A controlee that is no longer in the foreground or whose UWB is off ignores a
+`RangingStart` (it does not range) and sends `RangingStop`. Ranging ends with
+`RangingStop`, when the session ends, when either app leaves the foreground, and in
+any case 120 seconds after its start. Neither endpoint keeps the key or the
+measurements once ranging ends, and neither logs them. A record before its
+precondition, a second `RangingReady`, a `RangingStart` beyond the limit or while one
+runs, or a `RangingStop` for another session ID is STATE; a field outside its limits
+is MALFORMED.
 
 ## 11. Transfer and session state requirements
 
@@ -1632,6 +1698,8 @@ that every device has capacity for the maximum transfer.
 | Idle/dead connection | Ping after 30 seconds without ordinary traffic; Pong within 10 seconds; no authenticated traffic for 135 seconds closes |
 | Incomplete manifest | One incoming/endpoint, <=4 MiB each, 30-second assembly deadline |
 | Consent prompt | 300 seconds from complete manifest, then Reject/expire |
+| Direct link setup | One offer per session; a link offer expires in 10..120 seconds; a device hosts one offered link at a time, §10.2 |
+| Ranging | <=8 starts per session, one at a time; each ends within 120 seconds, §10.4 |
 | Active transfers / files | <=2 incoming transfers and <=2 active incoming files/endpoint, <=4 of each/session |
 | Entries / regular files | <=10000 total, therefore <=10000 files |
 | Name / path / depth | <=255 UTF-8 bytes/component; <=4096 bytes/path; <=64 levels |
@@ -1797,7 +1865,7 @@ limits, and policies above are v1 design decisions; open gates do not weaken the
 | O2 | Does the pinned CPace draft/profile and the specified embedding have a reviewed production Rust implementation with matching context/ISK/confirmation vectors? If not, should a reviewed SPAKE2 profile replace it through a spec revision? | Code pairing disabled. No homemade PAKE or code-hash PSK. |
 | O3 | Can seamless ratchet recovery be proven without rollback, double use, trial-decryption oracles, or permanent desynchronization? Which mobile/desktop storage APIs enforce atomic journal replacement and prevent restored backups from reusing a generation? | Current conservative pending-journal policy requires re-pairing. Production persistence needs crash/rollback testing before sessions ship. |
 | O4 | How are person roots provisioned, protected, backed up/recovered, and migrated; how is revocation freshness obtained without telemetry or an online dependency? How are new devices enrolled without transferring device secrets? | Root signatures/bindings/revocations are specified; remote enrollment, global freshness, and root recovery are not enabled. |
-| O5 | How does the Rust/platform boundary render/scan secret QR material and handle secret code entry without sending raw secrets across BoltFFI? What verified BoltFFI mobile/web APIs preserve this constraint? | No production pairing UI/binding implementation until resolved. |
+| O5 | How does the Rust/platform boundary render/scan secret QR material (by camera or NFC, §3.1.1) and handle secret code entry, and hand a direct link's credentials to the platform's Wi-Fi APIs (§10.2), without sending raw secrets across BoltFFI? What verified BoltFFI mobile/web APIs preserve this constraint? | No production pairing UI/binding implementation until resolved. |
 | O6 | Which libcrux/reference crate versions provide the required primitive coverage, strict verification, secret-state zeroization, constant-time behavior, target support, and accepted supply-chain audit evidence? | Reference fixtures are not production library approval. Scratch-state/secret-lifecycle coverage is a production gate. |
 | O7 (resolved) | BLE allocation, mobile permission and background behavior, AWDL / Wi-Fi P2P / USB packaging, and the direct-path and hole-punch profile. Resolved by §10.1 (no Bluetooth or USB transport in v1; direct links are TCP with the unchanged prelude and records; no direct QUIC), §10.2 (Wi-Fi link setup with per-offer random credentials inside a session), §10.3 (permissions, background, no operating-system trust), and §10 (relay-only non-local paths in v1). See [ADR 0014](../docs/adr/0014-local-links.md). | Each Wi-Fi adapter needs device-lab evidence (T01) before it is enabled by default. Hole punching stays disabled until a later revision. |
 | O8 | How is a high-entropy rendezvous capability conveyed for remote human-code-only pairing without an offline dictionary oracle or trusted matching service? | Local code discovery and QR capability derivation are specified; remote code-only rendezvous disabled. |
