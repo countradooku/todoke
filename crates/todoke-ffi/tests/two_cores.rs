@@ -575,9 +575,9 @@ impl KeyStore for Canned {
     }
 }
 
-/// A key store that fails, refuses, or hands back something that is not a
-/// key stops the start with a key store error; nothing falls back to a
-/// file.
+/// A key store that fails or hands back something that is not a key stops
+/// the start with a key store error, and one that refuses (the user
+/// cancelled the unlock) with `Locked`; nothing falls back to a file.
 #[test]
 fn failing_key_stores_stop_the_start() -> TestResult {
     let _serial = serial();
@@ -588,26 +588,53 @@ fn failing_key_stores_stop_the_start() -> TestResult {
         message: "locked".into(),
     };
     let cases = [
-        (Ok(None), Err(refused.clone())),
-        (Ok(None), Err(locked.clone())),
-        (Err(refused), Ok(())),
-        (Err(locked), Ok(())),
-        (Ok(Some(Vec::new())), Ok(())),
-        (Ok(Some(vec![7; 31])), Ok(())),
-        (Ok(Some(vec![7; 33])), Ok(())),
+        (Ok(None), Err(refused.clone()), true),
+        (Ok(None), Err(locked.clone()), false),
+        (Err(refused), Ok(()), true),
+        (Err(locked), Ok(()), false),
+        (Ok(Some(Vec::new())), Ok(()), false),
+        (Ok(Some(vec![7; 31])), Ok(()), false),
+        (Ok(Some(vec![7; 33])), Ok(()), false),
     ];
-    for (load, store) in cases {
+    for (load, store, refusal) in cases {
         let home = Scratch::new("failing")?;
         let mut asked = settings(&home.0);
         asked.key_storage = KeyStoragePolicy::Platform;
         let case = format!("{load:?} {store:?}");
         let started = Core::with_key_store(asked, Arc::new(Canned { load, store }));
-        assert!(
-            matches!(started, Err(TodokeError::KeyStore { .. })),
-            "{case}: {started:?}"
-        );
+        if refusal {
+            assert!(
+                matches!(started, Err(TodokeError::Locked { .. })),
+                "{case}: {started:?}"
+            );
+        } else {
+            assert!(
+                matches!(started, Err(TodokeError::KeyStore { .. })),
+                "{case}: {started:?}"
+            );
+        }
         assert!(!home.0.join("state").join("storage.key").exists(), "{case}");
     }
+    Ok(())
+}
+
+/// A key needing the user's presence is only ever the platform's: any
+/// other policy could fall back to a file, which needs no one. Refused
+/// before anything is opened.
+#[test]
+fn presence_needs_the_platform_policy() -> TestResult {
+    let _serial = serial();
+    let home = Scratch::new("presence")?;
+    for policy in [KeyStoragePolicy::Auto, KeyStoragePolicy::File] {
+        let mut asked = settings(&home.0);
+        asked.key_storage = policy;
+        let started = Core::with_presence(asked);
+        assert!(
+            matches!(started, Err(TodokeError::Invalid { .. })),
+            "{policy:?}: {started:?}"
+        );
+    }
+    assert!(!home.0.join("state").exists());
     Ok(())
 }
 

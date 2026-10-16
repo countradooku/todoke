@@ -48,10 +48,11 @@ jobs:
           gradle-version: "9.8.1"
           cache-disabled: true
       # The shipped libraries: release builds keep sessions disabled
-      # (PROTOCOL §16).
+      # (PROTOCOL §16). Verbose: without it a failed build shows no
+      # compiler output at all.
       - name: Pack the libraries
         working-directory: crates/todoke-ffi
-        run: boltffi pack android --release
+        run: boltffi pack android --release --verbose
       - name: Build both flavors for release
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64"
@@ -119,7 +120,7 @@ jobs:
       # starts two cores (boltffi.test.toml).
       - name: Pack the development libraries
         working-directory: crates/todoke-ffi
-        run: boltffi --overlay boltffi.test.toml pack android
+        run: boltffi --overlay boltffi.test.toml pack android --verbose
       - name: Build the app and its tests
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64"
@@ -138,7 +139,8 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: JAVA_HOME="$JAVA_HOME_21_X64" gradle --no-daemon -p apps/android :app:connectedPlayDebugAndroidTest -Ptodoke.android="$PWD/crates/todoke-ffi/target-tests/android"
+          # Bounded per test and per run, logcat kept (the script says why).
+          script: JAVA_HOME="$JAVA_HOME_21_X64" bash scripts/ci/android-instrumented.sh
       - name: Keep the results and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -147,5 +149,6 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/
             apps/android/app/build/outputs/connected_android_test_additional_output/
+            apps/android/app/build/outputs/ci-logs/
           if-no-files-found: warn
           retention-days: 14

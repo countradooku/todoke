@@ -134,6 +134,9 @@ class TodokeApplication : Application() {
             CoreState.Ready(backend)
         } catch (error: TodokeError.Disabled) {
             CoreState.Disabled(error.message.orEmpty())
+        } catch (error: TodokeError.Locked) {
+            // The Keystore wants the user: ask again.
+            CoreState.Locked(prefs.gate)
         } catch (error: TodokeError.KeyStore) {
             keyProblem(keys, error.message)
         } catch (error: KeyStoreError) {

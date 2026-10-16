@@ -1,0 +1,13 @@
+# Overlay for the iOS app during development and its tests: the device
+# and Apple-silicon simulator slices (no macOS), development sessions (the
+# core starts) and loopback (two cores in one test process find each
+# other). The shipped app packs boltffi.toml as is (release, sessions
+# disabled).
+[cargo]
+global_args = ["--locked", "--features", "unaudited-dev,test-support"]
+
+[targets.apple]
+ios_architectures = ["arm64"]
+simulator_architectures = ["arm64"]
+include_macos = false
+output = "target-tests/ios"

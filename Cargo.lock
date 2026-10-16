@@ -8102,11 +8102,13 @@ name = "todoke-discovery"
 version = "0.1.0"
 dependencies = [
  "getrandom 0.4.3",
+ "if-addrs",
  "libcrux-ml-kem",
  "mdns-sd",
  "proptest",
  "todoke-crypto",
  "todoke-proto",
+ "todoke-sys-macos",
  "todoke-transport",
  "tokio",
  "zeroize",
@@ -8264,6 +8266,7 @@ dependencies = [
  "todoke-crypto",
  "todoke-proto",
  "todoke-relay",
+ "todoke-sys-windows",
  "todoke-transfer",
  "tokio",
  "zeroize",

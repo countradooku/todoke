@@ -53,6 +53,11 @@ libcrux-sha2 = { workspace = true, optional = true }
 blake3 = { workspace = true, optional = true }
 getrandom = { workspace = true, optional = true }
 
+# A listener's port is its own (SO_EXCLUSIVEADDRUSE), which socket2 does
+# not expose: the reviewed call is in the sys crate.
+[target.'cfg(windows)'.dependencies]
+todoke-sys-windows.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 

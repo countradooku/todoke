@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- §9 through mDNSResponder: only this service type (no multicast entitlement). -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_todoke._tcp</string>
+	</array>
+	<!-- Finishing a transfer the user started (a continued-processing task). -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>processing</string>
+	</array>
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>org.todoke.ios.transfer</string>
+	</array>
+	<!-- Share-sheet suggestions: donated INSendMessageIntents. -->
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>INSendMessageIntent</string>
+	</array>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<true/>
+</dict>
+</plist>

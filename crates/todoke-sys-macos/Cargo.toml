@@ -1,6 +1,6 @@
 [package]
 name = "todoke-sys-macos"
-description = "macOS platform integration behind safe Rust interfaces."
+description = "Apple platform integration (macOS, and the Keychain on iOS) behind safe Rust interfaces."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -34,7 +34,7 @@ undocumented_unsafe_blocks = "deny"
 [lints.rustdoc]
 broken_intra_doc_links = "deny"
 
-[target.'cfg(target_os = "macos")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 zeroize.workspace = true
 # The Keychain and the Secure Enclave through safe bindings (already in the
 # graph for the relay's platform certificate checks). OSX_10_15: the
@@ -50,5 +50,5 @@ objc2-foundation = { version = "=0.3.2", optional = true, default-features = fal
 objc2-app-kit = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "NSApplication", "NSPasteboard", "NSPasteboardItem", "NSResponder"] }
 objc2-service-management = { version = "=0.3.2", optional = true, default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
 
-[target.'cfg(target_os = "macos")'.dev-dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dev-dependencies]
 getrandom.workspace = true

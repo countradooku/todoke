@@ -59,6 +59,10 @@ pub enum ProfileError {
     Io(std::io::ErrorKind),
     /// The storage key could not be obtained.
     StorageKey,
+    /// The platform key store wants the user (Face ID, Touch ID, the
+    /// passcode, a device unlock) and did not get them: asking again may
+    /// work, unlike [`Self::StorageKey`].
+    StorageKeyRefused,
     /// A stored file failed authentication or did not decode: wrong storage
     /// key, damage, or tampering. Nothing is overwritten.
     Corrupt(&'static str),
@@ -68,11 +72,24 @@ pub enum ProfileError {
     Random,
 }
 
+impl ProfileError {
+    /// A storage key failure: refused when the store waits for the user.
+    #[must_use]
+    pub fn storage_key(error: &std::io::Error) -> Self {
+        if error.kind() == std::io::ErrorKind::PermissionDenied {
+            Self::StorageKeyRefused
+        } else {
+            Self::StorageKey
+        }
+    }
+}
+
 impl fmt::Display for ProfileError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(kind) => write!(f, "state directory: {kind}"),
             Self::StorageKey => f.write_str("the storage key is unavailable"),
+            Self::StorageKeyRefused => f.write_str("the storage key needs the user to unlock"),
             Self::Corrupt(what) => write!(f, "{what} is damaged or was sealed with another key"),
             Self::Crypto(what) => write!(f, "{what}"),
             Self::Random => f.write_str("OS randomness is unavailable"),
@@ -170,7 +187,9 @@ impl Profile {
         now: UnixTime,
     ) -> Result<Self, ProfileError> {
         private_dir(dir)?;
-        let key_bytes = source.storage_key().map_err(|_| ProfileError::StorageKey)?;
+        let key_bytes = source
+            .storage_key()
+            .map_err(|error| ProfileError::storage_key(&error))?;
         let sealer = || SoftwareSealer::new(StorageKey::from_bytes(Zeroizing::new(*key_bytes)));
         let mut keys = SoftwareKeyStore::open(sealer(), FileStorage::new(dir.join("keys.bin")))
             .map_err(|_| ProfileError::Corrupt("keys.bin"))?;

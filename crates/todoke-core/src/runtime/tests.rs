@@ -280,7 +280,10 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     );
     history_matches(&alice, &bob, &transfer).await?;
     hiding_withdraws_the_advertisement(&bob, &discovery).await?;
+    // In the background (§10.3) Bob still sends in the open session.
+    let port = background(&bob, &discovery, true, None).await?;
     send_again_in_the_session(&scratch.0, &source, &alice, &bob, &alice_hex).await?;
+    background(&bob, &discovery, false, port).await?;
     // A second request for the same transfer is refused: it is finished.
     assert!(matches!(
         alice
@@ -291,6 +294,76 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
         Response::Error { .. }
     ));
     let _ = ErrorCode::State;
+    Ok(())
+}
+
+/// Back from the background with its old port taken meanwhile by another
+/// listener (with the same options, so the clash is real everywhere), the
+/// listener reopens on a fresh port, which discovery then advertises.
+#[tokio::test]
+async fn the_listener_reopens_elsewhere_if_its_port_was_taken() -> AnyResult<()> {
+    let scratch = Scratch::new("reopen")?;
+    let discovery = scratch.0.join("discovery");
+    let core = device(&scratch.0, "solo", &discovery)?;
+    let port = || async {
+        match core.request(Request::Status).await {
+            Response::Status(status) => Ok(status.port),
+            _ => Err("status"),
+        }
+    };
+    let before = port().await?.ok_or("no listener")?;
+    let background = |background| core.request(Request::SetBackground { background });
+    assert_eq!(background(true).await, Response::Done);
+    // The core loop lets go of the listener on its next turn. The port is
+    // taken with the listener's own socket options (dual stack, address
+    // reuse), so the clash is the same on every platform.
+    let squatter = {
+        let mut taken = None;
+        for _ in 0..50 {
+            taken = todoke_transport::LanListener::bind(
+                before,
+                todoke_transport::LanPolicy::new().with_loopback(),
+            )
+            .ok();
+            if taken.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        taken.ok_or("the old port never closed")?
+    };
+    assert_eq!(background(false).await, Response::Done);
+    let after = port().await?.ok_or("no listener after the background")?;
+    assert_ne!(after, before);
+    assert!(
+        std::net::TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, after).into(),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+    );
+    // A code offer's stranger record names the new port.
+    assert!(matches!(
+        core.request(Request::PairShowCode).await,
+        Response::Code { .. }
+    ));
+    let advertised = || -> AnyResult<bool> {
+        Ok(std::fs::read_dir(&discovery)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rec"))
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .any(|record| record.starts_with(&format!("{after} "))))
+    };
+    let mut found = false;
+    for _ in 0..30 {
+        if advertised()? {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(found, "the new port is not advertised");
+    drop(squatter);
     Ok(())
 }
 
@@ -495,6 +568,69 @@ async fn hiding_withdraws_the_advertisement(bob: &Core, discovery: &Path) -> Any
     settle().await;
     assert_eq!(records()?, 2);
     Ok(())
+}
+
+/// Puts `bob` in the background (§10.3) or back: in it, its listener is
+/// closed (nothing connects), it advertises nothing, and pairing is
+/// refused; back, the listener reopens (on a port other than `port`) and it
+/// advertises again.
+/// Returns the listener's port before going to the background.
+async fn background(
+    bob: &Core,
+    discovery: &Path,
+    background: bool,
+    port: Option<u16>,
+) -> AnyResult<Option<u16>> {
+    let records = || -> AnyResult<usize> {
+        Ok(std::fs::read_dir(discovery)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rec"))
+            .count())
+    };
+    let status = || async {
+        match bob.request(Request::Status).await {
+            Response::Status(status) => Ok(status),
+            _ => Err("status"),
+        }
+    };
+    let before = status().await?.port;
+    assert_eq!(
+        bob.request(Request::SetBackground { background }).await,
+        Response::Done
+    );
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let reachable = |port: u16| {
+        std::net::TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, port).into(),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+    };
+    if background {
+        let port = before.ok_or("no listener")?;
+        assert_eq!(status().await?.port, None);
+        assert!(!reachable(port), "the listener is still open");
+        assert_eq!(records()?, 1);
+        assert!(matches!(
+            bob.request(Request::PairShowQr).await,
+            Response::Error {
+                code: ErrorCode::Pairing,
+                ..
+            }
+        ));
+    } else {
+        // A fresh port, as at start.
+        let now = status().await?.port.ok_or("no listener")?;
+        assert_ne!(Some(now), port);
+        assert!(reachable(now));
+        assert_eq!(records()?, 2);
+        assert!(matches!(
+            bob.request(Request::PairShowQr).await,
+            Response::Qr { .. }
+        ));
+        assert_eq!(bob.request(Request::StopPairing).await, Response::Done);
+    }
+    Ok(before)
 }
 
 /// Past `MAX_FINISHED` idle transfers the oldest are forgotten; one that

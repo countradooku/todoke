@@ -15,8 +15,9 @@ use crate::types::{KeyStoragePolicy, Settings};
 /// [`TodokeError::Invalid`] for a relative directory, a history longer
 /// than the core keeps, loopback outside a test build, or a key storage
 /// policy that could leave the key in a file unasked: with the app's key
-/// store the key lives there only (`Platform`); on Android and iOS without
-/// one, only an explicit `File` is accepted.
+/// store the key lives there only (`Platform`); on Android without one,
+/// only an explicit `File` is accepted; on iOS (the Keychain, natively)
+/// `Platform` or an explicit `File`, never `Auto`.
 pub(crate) fn core_config(
     settings: &Settings,
     with_key_store: bool,
@@ -33,13 +34,18 @@ pub(crate) fn core_config(
                 .to_owned(),
         });
     }
-    if !with_key_store
-        && cfg!(any(target_os = "android", target_os = "ios"))
-        && policy != KeyStoragePolicy::File
-    {
+    // Android has no key store Rust reaches: the app gives one. (iOS and
+    // macOS use the Keychain natively.)
+    if !with_key_store && cfg!(target_os = "android") && policy != KeyStoragePolicy::File {
         return Err(TodokeError::Invalid {
             message: "give a key store (Core::with_key_store), or ask for a file key explicitly"
                 .to_owned(),
+        });
+    }
+    // A refused or unavailable Keychain must not quietly become a file.
+    if cfg!(target_os = "ios") && policy == KeyStoragePolicy::Auto {
+        return Err(TodokeError::Invalid {
+            message: "use KeyStoragePolicy::Platform (or ask for a file key explicitly)".to_owned(),
         });
     }
     let home = absolute(&settings.home, "the app's directory")?;
@@ -87,6 +93,9 @@ pub(crate) fn start_error(error: todoke_core::runtime::StartError) -> TodokeErro
         // The key store refused or failed: the app's own concern.
         StartError::Profile(todoke_core::profile::ProfileError::StorageKey) => {
             TodokeError::KeyStore { message }
+        }
+        StartError::Profile(todoke_core::profile::ProfileError::StorageKeyRefused) => {
+            TodokeError::Locked { message }
         }
         StartError::Profile(_) | StartError::Quarantine(_) => TodokeError::Profile { message },
         StartError::Io(_) | StartError::Thread => TodokeError::Internal { message },
@@ -199,6 +208,10 @@ mod tests {
         let cases = [
             (StartError::Disabled, "Disabled"),
             (StartError::Profile(ProfileError::StorageKey), "KeyStore"),
+            (
+                StartError::Profile(ProfileError::StorageKeyRefused),
+                "Locked",
+            ),
             (StartError::Profile(ProfileError::Random), "Profile"),
             (
                 StartError::Profile(ProfileError::Corrupt("the identity")),
@@ -218,6 +231,7 @@ mod tests {
             let named = match &mapped {
                 TodokeError::Disabled { .. } => "Disabled",
                 TodokeError::KeyStore { .. } => "KeyStore",
+                TodokeError::Locked { .. } => "Locked",
                 TodokeError::Profile { .. } => "Profile",
                 TodokeError::Internal { .. } => "Internal",
                 _ => "other",

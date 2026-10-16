@@ -70,6 +70,11 @@ todoke-fs.workspace = true
 # the boundary.
 todoke-sys-macos.workspace = true
 
+[target.'cfg(target_os = "ios")'.dependencies]
+# The same on iOS: the Keychain and the Secure Enclave, optionally needing
+# Face ID, Touch ID, or the passcode.
+todoke-sys-macos.workspace = true
+
 [dev-dependencies]
 # Sessions in the tests: a development dependency may enable them, as the
 # desktop app's and the CLI's tests do.

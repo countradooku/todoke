@@ -10,7 +10,9 @@ use todoke_crypto::discovery::DiscoveryTable;
 use todoke_crypto::identity::{Ed25519PublicKey, SoftwareSealer, StorageKey};
 use todoke_crypto::pairing::{HumanCode, PairingOffers, QrPayload, UnauditedCodePairing};
 use todoke_crypto::session::{Session, SessionMode, Timer as _, UnauditedSuite0001};
-use todoke_discovery::{Advertiser, Directory, Mdns, OsRandom};
+use todoke_discovery::{Advertiser, Directory, OsRandom};
+
+use crate::discovery::Mdns;
 use todoke_fs::dest::DirDestination;
 use todoke_fs::{FsSink, FsSource, Preparer, SharedSink, SinkConfig};
 use todoke_proto::discovery::DISCOVERY_TOKEN_LEN;
@@ -21,7 +23,7 @@ use todoke_transport::{
     Candidate, ConnectError, Connected, Incoming, LanListener, LanPolicy, Link, LinkKind,
     TcpConnector, TokioTimer, TransportManager,
 };
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot};
 use zeroize::Zeroizing;
 
 use super::relay::Role;
@@ -233,7 +235,16 @@ pub(super) struct State {
     pub(super) offers: PairingOffers,
     pub(super) manager: TransportManager,
     connector: TcpConnector,
-    listener: Option<LanListener>,
+    /// The LAN listener, closed while the app is in the background
+    /// (§10.3). Dropping the last reference closes the socket.
+    listener: RefCell<Option<Rc<LanListener>>>,
+    /// Who may connect over the LAN, for reopening the listener.
+    policy: LanPolicy,
+    /// Wakes the core loop when the listener opens or closes, so it drops
+    /// its wait on the old one.
+    listening: Notify,
+    /// The listener's last port (0 if none).
+    lan_port: Cell<u16>,
     pub(super) sink: Sink,
     /// Meeting contacts and QR scanners through relays (§10), if any are
     /// configured.
@@ -261,6 +272,9 @@ pub(super) struct State {
     strangers_until: Cell<Duration>,
     /// Hidden from contacts: no paired advertisement, no relay presence.
     pub(super) hidden: Cell<bool>,
+    /// In the background (§10.3): no listener, no advertisement, no relay
+    /// presence; open sessions go on.
+    pub(super) background: Cell<bool>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
     /// What protects the storage key.
@@ -278,9 +292,9 @@ impl State {
         // The private state directory first: a key file goes in it.
         crate::profile::private_dir(&config.state_dir).map_err(StartError::Profile)?;
         // Asked once: a platform store may cost a round trip (or a prompt).
-        let key = key_source
-            .storage_key()
-            .map_err(|_| StartError::Profile(crate::profile::ProfileError::StorageKey))?;
+        let key = key_source.storage_key().map_err(|error| {
+            StartError::Profile(crate::profile::ProfileError::storage_key(&error))
+        })?;
         let key_protection = key_source.protection();
         let fetched = crate::storage_key::Fetched(Zeroizing::new(*key));
         let profile =
@@ -327,14 +341,8 @@ impl State {
             None
         };
         let port = listener.as_ref().and_then(|listener| listener.port().ok());
-        let backend = match (port, &config.discovery_folder) {
-            (Some(port), Some(folder)) => Backend::Folder(
-                crate::discovery::Folder::new(folder.clone(), port, policy)
-                    .map_err(|error| StartError::Io(error.kind()))?,
-            ),
-            (Some(port), None) => Mdns::start(port, policy).map_or(Backend::Off, Backend::Mdns),
-            (None, _) => Backend::Off,
-        };
+        let backend =
+            discovery(port, &config, policy).map_err(|error| StartError::Io(error.kind()))?;
         let table = contacts
             .discovery_table(now)
             .map_err(|_| StartError::Io(std::io::ErrorKind::Other))?;
@@ -346,7 +354,10 @@ impl State {
             offers,
             manager,
             connector: TcpConnector::new(policy),
-            listener,
+            listener: RefCell::new(listener.map(Rc::new)),
+            policy,
+            listening: Notify::new(),
+            lan_port: Cell::new(port.unwrap_or(0)),
             sink: SharedSink::new(sink),
             relay,
             preparer,
@@ -366,6 +377,7 @@ impl State {
             pairing: Cell::new(None),
             strangers_until: Cell::new(Duration::ZERO),
             hidden: Cell::new(hidden),
+            background: Cell::new(false),
             history: RefCell::new(history),
             key_protection,
         }))
@@ -409,8 +421,11 @@ impl State {
                 .advertiser
                 .borrow_mut()
                 .plan(&table, now, mono, &mut OsRandom);
-            if self.hidden.get() {
+            if self.hidden.get() || self.background.get() {
                 plan.paired = None;
+            }
+            if self.background.get() {
+                plan.stranger = None;
             }
             if self.pairing.get().is_some() && plan.stranger.is_none() {
                 // The stranger advertisement expired with the offer.
@@ -669,8 +684,55 @@ impl State {
         self.advertiser.borrow_mut().disable_stranger();
     }
 
+    /// Enters or leaves the background (§10.3: an iOS app closes its TCP
+    /// listeners there). In the background the listener is closed, nothing
+    /// is advertised, relay presence stops, and pairing ends; open sessions
+    /// and the reconnections that sends waiting for a contact need go on.
+    /// Back in the foreground the listener reopens as at start (by default
+    /// on a fresh port), and discovery restarts with its port.
+    fn set_background(self: &Rc<Self>, background: bool) -> Response {
+        if background {
+            self.background.set(true);
+            self.stop_pairing();
+            self.stop_presence();
+            drop(self.listener.borrow_mut().take());
+        } else {
+            if self.config.lan.enabled && self.listener.borrow().is_none() {
+                // As at start: the configured port (by default a fresh
+                // one), never the old one again by default, which another
+                // program may have taken meanwhile.
+                let was = self.lan_port.get();
+                let Ok(listener) = LanListener::bind(self.config.lan.port, self.policy) else {
+                    return Response::error(ErrorCode::Internal, "the listener could not reopen");
+                };
+                let port = listener.port().ok();
+                if port != Some(was) {
+                    let backend = discovery(port, &self.config, self.policy);
+                    *self.backend.borrow_mut() = backend.unwrap_or(Backend::Off);
+                    self.lan_port.set(port.unwrap_or(0));
+                }
+                *self.listener.borrow_mut() = Some(Rc::new(listener));
+            }
+            self.background.set(false);
+        }
+        self.listening.notify_one();
+        self.tick();
+        Response::Done
+    }
+
     /// Handles a request.
     pub(super) async fn handle(self: &Rc<Self>, request: Request) -> Response {
+        let pairing = matches!(
+            request,
+            Request::PairShowQr
+                | Request::PairShowCode
+                | Request::PairScanQr { .. }
+                | Request::PairEnterCode { .. }
+                | Request::Strangers
+        );
+        if pairing && self.background.get() {
+            return Response::error(ErrorCode::Pairing, "pairing needs the app on screen");
+        }
         match request {
             Request::Status => Response::Status(self.status()),
             Request::Contacts => Response::Contacts(self.contact_list().await),
@@ -711,8 +773,12 @@ impl State {
             Request::Cancel { transfer } => self.cancel(&transfer).await,
             Request::SetHidden { hidden } => {
                 self.hidden.set(hidden);
+                if hidden {
+                    self.stop_presence();
+                }
                 Response::Done
             }
+            Request::SetBackground { background } => self.set_background(background),
             Request::History => Response::History(self.history.borrow().list(wall())),
             Request::ClearHistory => {
                 if self.history.borrow_mut().clear() {
@@ -730,6 +796,7 @@ impl State {
             sessions_enabled: true,
             port: self
                 .listener
+                .borrow()
                 .as_ref()
                 .and_then(|listener| listener.port().ok()),
             contacts: self.table.borrow().len(),
@@ -911,7 +978,7 @@ impl State {
         };
         self.strangers_until.set(self.mono() + STRANGER_BROWSING);
         // Without the LAN there is nobody nearby to look for.
-        if self.listener.is_some() {
+        if self.config.lan.enabled && !self.background.get() {
             match self.scan_nearby(&payload).await {
                 Ok(peer) => return self.paired_with(peer).await,
                 Err(Some(response)) => return response,
@@ -1378,6 +1445,22 @@ fn parse_token(text: &str) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
     Some(out)
 }
 
+/// The discovery backend for a listener on `port`: a shared folder (tests)
+/// or mDNS, none without a listener.
+fn discovery(
+    port: Option<u16>,
+    config: &CoreConfig,
+    policy: LanPolicy,
+) -> std::io::Result<Backend> {
+    Ok(match (port, &config.discovery_folder) {
+        (Some(port), Some(folder)) => {
+            Backend::Folder(crate::discovery::Folder::new(folder.clone(), port, policy)?)
+        }
+        (Some(port), None) => Mdns::start(port, policy).map_or(Backend::Off, Backend::Mdns),
+        (None, _) => Backend::Off,
+    })
+}
+
 /// The core loop: requests, incoming links, and the tick.
 pub(super) async fn run(
     state: Rc<State>,
@@ -1399,8 +1482,11 @@ pub(super) async fn run(
                 }
             }
         };
+        // A clone: the listener may close while this waits (the loop then
+        // wakes through `listening` and drops it).
+        let listener = state.listener.borrow().clone();
         let accept = async {
-            match &state.listener {
+            match &listener {
                 Some(listener) => listener.accept().await,
                 None => core::future::pending().await,
             }
@@ -1435,6 +1521,7 @@ pub(super) async fn run(
             }
             _ = tick.tick() => state.tick(),
             () = rotation => state.tick(),
+            () = state.listening.notified() => {}
         }
     }
 }

@@ -92,6 +92,14 @@ pub enum Request {
         /// Whether to hide.
         hidden: bool,
     },
+    /// Enter or leave the background (PROTOCOL §10.3, for iOS): there the
+    /// LAN listener is closed, nothing is advertised, there is no relay
+    /// presence, and pairing ends; open sessions and sends waiting for a
+    /// contact go on. Leaving reopens the listener.
+    SetBackground {
+        /// Whether the app is in the background.
+        background: bool,
+    },
     /// Finished transfers kept under the history policy
     /// (`history_days`), newest first.
     History,
@@ -592,6 +600,7 @@ mod tests {
                 files: Some(vec![2, 3]),
             },
             Request::SetHidden { hidden: true },
+            Request::SetBackground { background: true },
             Request::History,
             Request::ClearHistory,
         ] {

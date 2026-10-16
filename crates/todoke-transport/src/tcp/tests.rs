@@ -222,3 +222,42 @@ async fn vectored_writes_carry_every_slice() -> TestResult {
     assert_eq!(out, expected);
     Ok(())
 }
+
+/// A port another listener holds is refused, never shared: when another
+/// socket holds its IPv6 side only, binding it does not fall back to the
+/// free IPv4 side (where connections would reach us or it by address
+/// family). On Windows the exclusive claim refuses it.
+#[tokio::test]
+async fn a_taken_port_is_refused_not_shared() -> TestResult {
+    let other = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    other.set_only_v6(true)?;
+    other.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())?;
+    other.listen(1)?;
+    let port = other
+        .local_addr()?
+        .as_socket()
+        .ok_or("no socket address")?
+        .port();
+    let ours = LanListener::bind(port, LanPolicy::new().with_loopback());
+    // Windows may report the exclusive claim's refusal as access denied.
+    assert!(
+        matches!(
+            ours.as_ref().map_err(io::Error::kind),
+            Err(io::ErrorKind::AddrInUse | io::ErrorKind::PermissionDenied)
+        ),
+        "{:?}",
+        ours.map(|listener| listener.port().ok())
+    );
+    Ok(())
+}
+
+/// Nobody binds the port's IPv4 side beside a listener (on Windows, the
+/// exclusive claim refuses it; elsewhere the dual-stack socket holds it).
+#[tokio::test]
+async fn nobody_binds_beside_a_listener() -> TestResult {
+    let ours = LanListener::bind(0, LanPolicy::new().with_loopback())?;
+    let port = ours.port()?;
+    let other = std::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port));
+    assert!(other.is_err(), "{other:?}");
+    Ok(())
+}

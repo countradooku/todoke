@@ -86,6 +86,8 @@ pub(super) struct Relays {
     qr_generation: Cell<u64>,
     /// Wakes a QR wait when its offer stops.
     qr_cancel: tokio::sync::Notify,
+    /// Ends the presence waits (hidden, or in the background).
+    presence_cancel: tokio::sync::Notify,
     /// A scanner is waiting for a room.
     scanning: Cell<bool>,
     /// How often an idle pair meets, in seconds.
@@ -135,6 +137,7 @@ impl Relays {
             presence: RefCell::new(BTreeMap::new()),
             qr_generation: Cell::new(0),
             qr_cancel: tokio::sync::Notify::new(),
+            presence_cancel: tokio::sync::Notify::new(),
             scanning: Cell::new(false),
             period: u64::from(period).max(MIN_PRESENCE),
         }))
@@ -266,6 +269,7 @@ impl State {
                 if waiting && directory.contact(peer, mono).is_none() {
                     urgent.push((*peer, token, WAIT, None));
                 } else if !self.hidden.get()
+                    && !self.background.get()
                     && let Some((window, left)) = presence_window(&token, now, relays.period)
                     && presence.get(peer) != Some(&window)
                 {
@@ -284,8 +288,9 @@ impl State {
                 relays.presence.borrow_mut().insert(peer, window);
             }
             let state = Rc::clone(self);
+            let presence = window.is_some();
             tokio::task::spawn_local(async move {
-                state.meet_contact(claim, peer, token, wait).await;
+                state.meet_contact(claim, peer, token, wait, presence).await;
             });
         }
     }
@@ -298,11 +303,19 @@ impl State {
         peer: Ed25519PublicKey,
         token: RendezvousToken,
         wait: Duration,
+        presence: bool,
     ) {
         let Some(relays) = &self.relay else {
             return;
         };
-        let met = relays.meet(token, wait).await;
+        let met = if presence {
+            tokio::select! {
+                met = relays.meet(token, wait) => met,
+                () = relays.presence_cancel.notified() => return,
+            }
+        } else {
+            relays.meet(token, wait).await
+        };
         drop(claim);
         match met {
             Ok(link) => {
@@ -391,6 +404,14 @@ impl State {
                 }
             }
         });
+    }
+
+    /// No more presence (hidden, or in the background): the presence waits
+    /// at the relay end now; waits for contacts with sends waiting go on.
+    pub(super) fn stop_presence(&self) {
+        if let Some(relays) = &self.relay {
+            relays.presence_cancel.notify_waiters();
+        }
     }
 
     /// The QR offer is no longer shown: its relay wait ends now.
@@ -631,6 +652,140 @@ mod tests {
                     }
                 };
                 tokio::time::timeout(Duration::from_secs(1), freed).await?;
+                Ok(())
+            })
+            .await
+    }
+
+    type Counters = std::sync::Arc<todoke_relay::Metrics>;
+
+    /// A relay node on loopback and a LAN-less core using it.
+    fn with_relay(
+        scratch: &std::path::Path,
+    ) -> Result<(Rc<State>, Counters), Box<dyn std::error::Error>> {
+        let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+        let node = todoke_relay::Relay::bind(
+            todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+            &identity,
+        )?;
+        let (counters, address) = (node.metrics(), node.local_addr()?);
+        tokio::spawn(node.run(std::sync::Arc::new(tokio::sync::Notify::new())));
+        let mut config =
+            crate::config::CoreConfig::new(scratch.join("state"), scratch.join("downloads"));
+        config.lan.enabled = false;
+        config.relays = vec![RelayConfig {
+            name: "node".into(),
+            address: address.to_string(),
+            server_name: "relay.test".into(),
+            pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+        }];
+        let key = crate::storage_key::KeyFile::new(scratch.join("storage.key"));
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        Ok((State::open(config, &key, events)?, counters))
+    }
+
+    /// Waits up to `limit` for `done`.
+    async fn until(limit: Duration, done: impl Fn() -> bool) -> bool {
+        tokio::time::timeout(limit, async {
+            while !done() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .is_ok()
+    }
+
+    /// In the background (§10.3) a shown QR offer's wait at the relay ends
+    /// at once, and pairing is refused until the app is back.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_background_ends_the_qr_wait_at_the_relay() -> Result<(), Box<dyn std::error::Error>>
+    {
+        use crate::api::{ErrorCode, Request, Response};
+        let scratch = crate::profile::tests::Scratch::new("qr-background")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let (state, counters) = with_relay(&scratch.0)?;
+                let rooms = || state.relay.as_ref().map_or(99, |relays| relays.rooms.get());
+                assert!(matches!(
+                    state.handle(Request::PairShowQr).await,
+                    Response::Qr { .. }
+                ));
+                let registered = || {
+                    counters
+                        .registers
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                        > 0
+                };
+                assert!(until(Duration::from_secs(5), registered).await);
+                assert_eq!(rooms(), 1);
+                assert_eq!(
+                    state
+                        .handle(Request::SetBackground { background: true })
+                        .await,
+                    Response::Done
+                );
+                assert!(until(Duration::from_secs(1), || rooms() == 0).await);
+                assert!(matches!(
+                    state.handle(Request::PairShowQr).await,
+                    Response::Error {
+                        code: ErrorCode::Pairing,
+                        ..
+                    }
+                ));
+                assert_eq!(
+                    state
+                        .handle(Request::SetBackground { background: false })
+                        .await,
+                    Response::Done
+                );
+                assert!(matches!(
+                    state.handle(Request::PairShowQr).await,
+                    Response::Qr { .. }
+                ));
+                Ok(())
+            })
+            .await
+    }
+
+    /// Ending presence (hidden, or the background) ends a presence wait at
+    /// the relay at once, giving its room back; a wait for a contact with
+    /// sends waiting goes on.
+    #[tokio::test(flavor = "current_thread")]
+    async fn ending_presence_ends_only_presence_waits() -> Result<(), Box<dyn std::error::Error>> {
+        let scratch = crate::profile::tests::Scratch::new("presence-stop")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let (state, counters) = with_relay(&scratch.0)?;
+                let rooms = || state.relay.as_ref().map_or(99, |relays| relays.rooms.get());
+                let registers = || {
+                    counters
+                        .registers
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                };
+                let peer = *state.identity.binding().device_public();
+                for (presence, first) in [(true, 1), (false, 2)] {
+                    let before = registers();
+                    let claim = state.claim_room(Some(peer), 2).ok_or("no room")?;
+                    tokio::task::spawn_local(Rc::clone(&state).meet_contact(
+                        claim,
+                        peer,
+                        token(first),
+                        WAIT,
+                        presence,
+                    ));
+                    assert!(until(Duration::from_secs(5), || registers() > before).await);
+                    assert_eq!(rooms(), 1);
+                    state.stop_presence();
+                    let freed = until(Duration::from_secs(1), || rooms() == 0).await;
+                    assert_eq!(freed, presence, "presence {presence}");
+                    if !presence {
+                        // The urgent wait is left to run out (30 s): the
+                        // test ends here, dropping it.
+                        break;
+                    }
+                }
                 Ok(())
             })
             .await
