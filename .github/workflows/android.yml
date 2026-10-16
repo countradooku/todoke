@@ -138,7 +138,8 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
-          script: JAVA_HOME="$JAVA_HOME_21_X64" gradle --no-daemon -p apps/android :app:connectedPlayDebugAndroidTest -Ptodoke.android="$PWD/crates/todoke-ffi/target-tests/android"
+          # Bounded per test and per run, logcat kept (the script says why).
+          script: JAVA_HOME="$JAVA_HOME_21_X64" bash scripts/ci/android-instrumented.sh
       - name: Keep the results and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -147,5 +148,6 @@ jobs:
           path: |
             apps/android/app/build/outputs/androidTest-results/
             apps/android/app/build/outputs/connected_android_test_additional_output/
+            apps/android/app/build/outputs/ci-logs/
           if-no-files-found: warn
           retention-days: 14
