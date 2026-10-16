@@ -48,6 +48,16 @@ final class FlowsTests: XCTestCase {
         // faint. Everything else counts.
         let bars = (app.tabBars.allElementsBoundByIndex + app.navigationBars.allElementsBoundByIndex)
             .filter(\.exists).map(\.frame)
+        // A busy CI simulator can time the audit out before it reports
+        // anything (code -56): that is no finding, so it runs again, once.
+        do {
+            try auditOnce(app, bars: bars)
+        } catch let error as NSError where error.domain == "com.apple.xcode.xctest.accessibilityAudit" && error.code == -56 {
+            try auditOnce(app, bars: bars)
+        }
+    }
+
+    private func auditOnce(_ app: XCUIApplication, bars: [CGRect]) throws {
         try app.performAccessibilityAudit { issue in
             if issue.element?.identifier == "fake-request" { return true }
             if let frame = issue.element?.frame,
