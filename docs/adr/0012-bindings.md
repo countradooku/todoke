@@ -160,11 +160,10 @@ threads.
   notifications from `Core::offers`), called from the event thread; an
   offer is decided only in the app. Replacing or clearing it releases the
   old one outside the lock, since releasing calls into the app.
-- **`RadioLink`** (radio links as byte pipes): the shape is
-  fixed (since ADR 0014, Wi-Fi peer-to-peer or AWDL only: no Bluetooth or
-  USB), and `Core::attach_link` refuses every link until the Wi-Fi adapters
-  are built (P18 to P20; PROTOCOL §10.1 to §10.3,
-  [ADR 0014](0014-local-links.md)).
+- **`WifiLinks`** (since [ADR 0019](0019-android-radios.md), replacing
+  the reserved `RadioLink`): the app hosts and joins direct Wi-Fi links the
+  core asks for and binds sockets to them (`Core::set_links`; PROTOCOL
+  §10.2).
 - **Loopback discovery** (`Settings::allow_loopback`, so two cores on one
   machine find each other) is refused unless the crate is built with its
   `test-support` feature, which only the binding tests enable;
@@ -195,7 +194,7 @@ threads.
 
 - **Swift:** `boltffi pack apple` (iOS device, simulator, macOS; deployment
   target iOS 16) → an XCFramework and `Package.swift`.
-- **Android:** `boltffi pack android` (four ABIs, minSdk 24) gives Kotlin
+- **Android:** `boltffi pack android` (four ABIs, minSdk 33 since ADR 0019) gives Kotlin
   and `jniLibs`, linked with `-z max-page-size=16384` (16 KB pages; CI
   checks every LOAD segment's alignment). `crates/todoke-ffi/android` (AGP
   9.4.1) packs them with `Guarded.kt` and `Subscriptions.kt` into the AAR,

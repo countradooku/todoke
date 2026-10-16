@@ -15,6 +15,10 @@
   - `todoke-sys-linux::wifi`, `todoke-sys-windows::wifi`, and the daemon's
     `links`
   - Supersedes ADR 0014's plan for PCs to host (below).
+- **Amended 2026-10-16** by [ADR 0019](0019-android-radios.md): hosts
+  forward nothing, and an unavoidable router or DNS offer is allowed, so
+  Windows hosts Wi-Fi Direct groups through the legacy access point;
+  Wi-Fi Direct groups are WPA2 only.
 
 ## Context
 
@@ -137,12 +141,11 @@ The core decides the rest:
   the interface's current connection is this temporary profile with this
   SSID, or, where Windows will not say (no location consent), its address
   and gateway are no longer those of the network it was on.
-- **No desktop hosts.** Linux's access point with DHCP only exists with
-  NAT, forwarding, and DNS; Windows' Mobile Hotspot is Internet Connection
-  Sharing; the Wi-Fi Direct legacy access point (no forwarding) stays off
-  until the device lab shows what its DHCP offers. This supersedes ADR
-  0014's rows where a PC hosts for an iPhone or another PC: those pairs use
-  the LAN or a relay.
+- **No desktop hosted at first.** Linux's access point with DHCP only
+  exists with NAT, forwarding, and DNS; Windows' Mobile Hotspot is Internet
+  Connection Sharing. *Since ADR 0019*, Windows hosts Wi-Fi Direct groups
+  through the legacy access point (it forwards nothing; what its DHCP
+  offers is allowed); Linux still hosts nothing.
 - **macOS takes no part in §10.2** until a join that saves nothing is
   available: CoreWLAN's join keeps the network and password, which §10.2
   forbids, and removing them needs an administrator. macOS cannot host.
@@ -208,9 +211,8 @@ The core decides the rest:
 - **Windows may need location consent** for Wi-Fi APIs (24H2); the
   `WlanQueryInterface` state checks may then fail and the join time out.
   Fix: check `wiFiControl` access first and say why in the UI.
-- **No PC hosts:** PC to iPhone and PC to PC have no direct link. Fix:
-  host with the Wi-Fi Direct legacy access point on Windows once the lab
-  shows its DHCP offers no router or DNS; on Linux, an access point with
+- **Linux hosts nothing** (Windows does since ADR 0019): Linux to Linux
+  and Linux to iPhone have no direct link. Fix: an access point with
   link-local addressing and no DHCP, if joiners can use it.
 - **macOS joins nothing.** Fix: a join that saves no network (verify
   CoreWLAN's behaviour in the lab; or Network.framework when Apple adds

@@ -5,7 +5,10 @@
   and approved installing the Android SDK (accepting Google's licence); the
   rest of the design was delegated with the standing priority of maximum
   security first, then performance. Where the P16 build prompt and
-  PROTOCOL differ, PROTOCOL wins (below).
+  PROTOCOL differ, PROTOCOL wins (below). **Amended 2026-10-16** by
+  [ADR 0019](0019-android-radios.md): the minimum is Android 13 (API 33),
+  the maintainer having allowed raising it for full functionality; the
+  Android 7 to 12 notes below are history.
 - **Date:** 2026-10-15
 - **Scope:**
   - `apps/android` (the app, its tests, and the `baselineprofile` module)
