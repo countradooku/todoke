@@ -21,7 +21,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -29,7 +28,6 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.abs
 import kotlin.math.roundToInt
-import kotlinx.coroutines.launch
 import org.todoke.android.R
 import org.todoke.android.radio.Bearing
 import org.todoke.android.radio.Pointing
@@ -41,11 +39,10 @@ private const val AHEAD_DEGREES = 20f
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PointSheet(pointing: Pointing, contacts: List<Contact>, onChoose: (String) -> Unit, onDismiss: () -> Unit) {
-    val scope = rememberCoroutineScope()
     val bearings by pointing.bearings.collectAsStateWithLifecycle()
     val nearby = contacts.count { it.nearby || it.connected }
     LaunchedEffect(Unit) { runCatching { pointing.start(nearby) } }
-    DisposableEffect(Unit) { onDispose { scope.launch { pointing.stop() } } }
+    DisposableEffect(Unit) { onDispose { pointing.close() } }
     val ranked = bearings.values.sortedBy { abs(it.azimuth ?: 180f) }
     ModalBottomSheet(onDismissRequest = onDismiss) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

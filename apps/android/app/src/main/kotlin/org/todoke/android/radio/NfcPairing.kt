@@ -40,15 +40,15 @@ object NfcPairing {
         }
     }
 
-    /** The offer is gone: the tag answers nothing from now on. */
-    fun stop(tag: NfcTag) {
+    /** The offer is off screen or gone: the tag answers nothing from now
+     * on (its owner closes it). */
+    fun withdraw(tag: NfcTag) {
         if (this.tag === tag) this.tag = null
-        tag.close()
     }
 
-    /** The offer is off screen: the tag answers nothing from now on. */
-    fun stop(activity: Activity, tag: NfcTag) {
-        stop(tag)
+    /** As [withdraw], and `activity` is no longer the preferred service. */
+    fun withdraw(activity: Activity, tag: NfcTag) {
+        withdraw(tag)
         runCatching {
             val adapter = NfcAdapter.getDefaultAdapter(activity) ?: return
             CardEmulation.getInstance(adapter).unsetPreferredService(activity)

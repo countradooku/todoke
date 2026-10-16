@@ -113,37 +113,13 @@ class RadiosTest {
                 val tag = qr.nfc ?: error("no NFC tag for the offer")
                 NfcPairing.serve(tag)
                 val message = read(service)
-                NfcPairing.stop(tag)
+                NfcPairing.withdraw(tag)
+                tag.close()
                 assertArrayEquals(byteArrayOf(0x6A, 0x82.toByte()), service.processCommandApdu(byteArrayOf(0, 0xa4.toByte(), 4, 0), null))
                 val device = scanner.scanNfc(message)
                 assertEquals(shower.status().device, device)
             }
         }
-    }
-
-    /** A scripted UWB: fixed addresses, one bearing per ranging. */
-    private class FakeUwb : Uwb {
-        @Volatile var on = true
-        val ranged = java.util.Collections.synchronizedList(mutableListOf<String>())
-
-        override suspend fun available() = on
-
-        override suspend fun controllers(count: Int) = (1..count).map { UwbController((0x1110 + it).toUShort(), 9u, 10u) }
-
-        override fun controller(target: RangingInfo): Flow<Bearing> = flow {
-            ranged += "controller ${target.controller} ${target.controlee}"
-            emit(Bearing(target.contact, 1.5f, 3f))
-            delay(Long.MAX_VALUE)
-        }
-
-        override suspend fun controlee(): UShort = 0x2222u
-
-        override fun controlee(ranging: RangingInfo, address: UShort): Flow<Bearing> = flow {
-            ranged += "controlee ${ranging.controller} $address"
-            delay(Long.MAX_VALUE)
-        }
-
-        override fun forget() {}
     }
 
     private fun ranging(session: UInt, controller: UShort, controlee: UShort?) = RangingInfo(
@@ -217,4 +193,31 @@ class RadiosTest {
             assertTrue(active.abilities().host.isEmpty() && active.abilities().join.isEmpty())
         }
     }
+}
+
+/** A scripted UWB: fixed addresses, one bearing per ranging. */
+internal class FakeUwb : Uwb {
+    @Volatile var on = true
+    val ranged = java.util.Collections.synchronizedList(mutableListOf<String>())
+
+    override suspend fun available() = on
+
+    override suspend fun controllers(count: Int) = (1..count).map { UwbController((0x1110 + it).toUShort(), 9u, 10u) }
+
+    override fun controller(target: RangingInfo): Flow<Bearing> = flow {
+        ranged += "controller ${target.controller} ${target.controlee}"
+        emit(Bearing(target.contact, 1.5f, 3f))
+        delay(Long.MAX_VALUE)
+    }
+
+    override suspend fun controlee(): UShort = 0x2222u
+
+    override fun controlee(ranging: RangingInfo, address: UShort): Flow<Bearing> = flow {
+        ranged += "controlee ${ranging.controller} $address"
+        delay(Long.MAX_VALUE)
+    }
+
+    override fun discard(address: UShort) {}
+
+    override fun forget() {}
 }

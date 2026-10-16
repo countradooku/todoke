@@ -63,6 +63,10 @@ private class PlayUwb(context: Context) : Uwb {
         return range(scope, ranging, ranging.controller)
     }
 
+    override fun discard(address: UShort) {
+        controlees.remove(address)
+    }
+
     override fun forget() {
         controllers.clear()
         controlees.clear()

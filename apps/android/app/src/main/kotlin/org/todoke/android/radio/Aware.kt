@@ -140,8 +140,12 @@ internal class Aware(private val context: Context, private val handler: Handler)
     fun join(request: LinkRequest): Held {
         val connectivity = connectivity ?: throw failed("no connectivity service")
         val within = request.withinMs.toLong().takeIf { it > 0 } ?: STEP_MS
+        val deadline = System.currentTimeMillis() + within
         val session = attach()
         val up = Waiter<Pair<Network, String>>()
+        // Data paths that could not come up; when every publisher tried has
+        // failed, the join fails at once rather than at the deadline.
+        val unavailable = java.util.concurrent.atomic.AtomicInteger()
         val callbacks = Collections.synchronizedList(mutableListOf<ConnectivityManager.NetworkCallback>())
         val tried = Collections.synchronizedSet(mutableSetOf<PeerHandle>())
         var subscribe: SubscribeDiscoverySession? = null
@@ -173,13 +177,18 @@ internal class Aware(private val context: Context, private val handler: Handler)
                         ready(network)
                     }
 
+                    override fun onUnavailable() {
+                        if (unavailable.incrementAndGet() >= tried.size) up.fail("no Wi-Fi Aware data path came up")
+                    }
+
                     private fun ready(network: Network) {
                         val host = peerAddress ?: return
                         if (properties?.linkAddresses?.any { it.address.linkLocalV6() } == true) up.done(network to host)
                     }
                 }
                 callbacks += callback
-                connectivity.requestNetwork(aware(specifier), callback, handler)
+                val left = (deadline - System.currentTimeMillis()).coerceIn(1, Int.MAX_VALUE.toLong()).toInt()
+                connectivity.requestNetwork(aware(specifier), callback, handler, left)
             }
         }
         val teardown = {

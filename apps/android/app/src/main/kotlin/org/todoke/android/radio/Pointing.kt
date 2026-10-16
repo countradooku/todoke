@@ -42,6 +42,9 @@ interface Uwb {
     /** Ranges as the controlee at `address`, until cancelled. */
     fun controlee(ranging: RangingInfo, address: UShort): Flow<Bearing>
 
+    /** Drops the controlee session prepared at `address`, unused. */
+    fun discard(address: UShort)
+
     /** Drops the sessions prepared and not used. */
     fun forget()
 }
@@ -101,9 +104,20 @@ class Pointing(
         val uwb = uwb ?: return
         if (!_ready.value) return
         stop()
-        val controllers = uwb.controllers(nearby.coerceIn(1, MAX_TARGETS))
-        backend.pointStart(controllers)
+        try {
+            backend.pointStart(uwb.controllers(nearby.coerceIn(1, MAX_TARGETS)))
+        } catch (error: Exception) {
+            // The sessions prepared go unused.
+            uwb.forget()
+            throw error
+        }
         _pointing.value = true
+    }
+
+    /** Stops pointing from a caller that is going away (a closed sheet):
+     * on this object's own scope, so leaving cannot cancel it. */
+    fun close() {
+        scope.launch { stop() }
     }
 
     suspend fun stop() {
@@ -123,7 +137,10 @@ class Pointing(
             return
         }
         val accepted = runCatching { backend.acceptRanging(ranging.contact, ranging.sessionId, address) }
-        if (accepted.isFailure) return
+        if (accepted.isFailure) {
+            uwb.discard(address)
+            return
+        }
         running[ranging.sessionId] = scope.launch {
             runCatching { uwb.controlee(ranging, address).collect {} }
         }

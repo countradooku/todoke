@@ -50,6 +50,10 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.todoke.android.R
@@ -65,7 +69,8 @@ fun PairScreen(backend: Backend, onDone: () -> Unit, startTab: Int = 0) {
     val scope = rememberCoroutineScope()
     SecureWindow()
     DisposableEffect(Unit) {
-        onDispose { scope.launch { runCatching { backend.stopPairing() } } }
+        // Leaving cancels this scope: the stop must run anyway.
+        onDispose { scope.launch(NonCancellable) { runCatching { backend.stopPairing() } } }
     }
     BackHandler(onBack = onDone)
     Column(Modifier.fillMaxSize().safeDrawingPadding().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -102,13 +107,34 @@ private fun ShowQr(backend: Backend) {
     LaunchedEffect(Unit) {
         runCatching { backend.showQr() }.onSuccess { qr = it }.onFailure { error = it.message }
     }
-    // The same offer by NFC, only while it is on screen.
+    // The same offer by NFC, only while it is on screen: from resume to
+    // pause, and never once it expires; the tag is closed with the screen.
     val tag = qr?.nfc
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    var expired by remember(qr) { mutableStateOf(false) }
+    LaunchedEffect(qr) {
+        val code = qr ?: return@LaunchedEffect
+        delay((code.expiresAt * 1_000 - System.currentTimeMillis()).coerceAtLeast(0))
+        expired = true
+    }
     if (activity != null && tag != null) {
-        DisposableEffect(tag) {
-            NfcPairing.serve(activity, tag)
-            onDispose { NfcPairing.stop(activity, tag) }
+        DisposableEffect(tag, expired) {
+            val observer = LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> if (!expired) NfcPairing.serve(activity, tag)
+                    Lifecycle.Event.ON_PAUSE -> NfcPairing.withdraw(activity, tag)
+                    else -> {}
+                }
+            }
+            // Adding it replays the events up to the current state.
+            lifecycle.addObserver(observer)
+            if (expired) NfcPairing.withdraw(activity, tag)
+            onDispose {
+                lifecycle.removeObserver(observer)
+                NfcPairing.withdraw(activity, tag)
+            }
         }
+        DisposableEffect(tag) { onDispose { tag.close() } }
     }
     Text(stringResource(R.string.pair_show_qr_hint))
     if (tag != null && activity != null && NfcPairing.enabled(activity)) {
