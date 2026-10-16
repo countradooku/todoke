@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 
 use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings};
 use todoke_ffi::{
-    ContactHandle, Core, Events, KeyStore, KeyStoreError, LinkError, LinkKind, Notifier,
-    OfferNotice, RadioLink, TodokeError,
+    ContactHandle, Core, Events, KeyStore, KeyStoreError, LinkAbilities, LinkError, LinkLease,
+    LinkRequest, NfcTag, Notifier, OfferNotice, TodokeError, WifiLinks,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -659,34 +659,124 @@ fn an_unnamed_profile_does_not_start() -> TestResult {
     Ok(())
 }
 
-/// A radio link that records being closed.
+/// An app that can set up no direct link, counting its releases.
 #[derive(Default)]
-struct Link(std::sync::atomic::AtomicBool);
+struct NoLinks;
 
-impl RadioLink for Link {
-    fn kind(&self) -> LinkKind {
-        LinkKind::WifiP2p
+impl WifiLinks for NoLinks {
+    fn abilities(&self) -> LinkAbilities {
+        LinkAbilities::default()
     }
-    fn send(&self, _: Vec<u8>) -> Result<(), LinkError> {
+    fn host(&self, _: LinkRequest) -> Result<LinkLease, LinkError> {
         Err(LinkError::Closed)
     }
-    fn close(&self) {
-        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    fn join(&self, _: LinkRequest) -> Result<LinkLease, LinkError> {
+        Err(LinkError::Closed)
     }
+    fn bind_socket(&self, _: u64, _: i64) -> Result<(), LinkError> {
+        Err(LinkError::Closed)
+    }
+    fn release(&self, _: u64) {}
 }
 
-/// Wi-Fi links are refused until their adapters are built, and the link
-/// offered is closed rather than left open in the app.
+/// The app gives the core its links once; a second time is refused.
 #[test]
-fn radio_links_are_refused_and_closed() -> TestResult {
+fn links_are_given_once() -> TestResult {
     let _serial = serial();
     let home = Scratch::new("link")?;
     let core = Core::new(settings(&home.0))?;
-    let link = Arc::new(Link::default());
+    core.set_links(Arc::new(NoLinks))?;
     assert!(matches!(
-        core.attach_link(Arc::clone(&link) as Arc<dyn RadioLink>),
-        Err(TodokeError::Disabled { .. })
+        core.set_links(Arc::new(NoLinks)),
+        Err(TodokeError::State { .. })
     ));
-    assert!(link.0.load(std::sync::atomic::Ordering::SeqCst));
+    Ok(())
+}
+
+/// Pointing checks its parameters as the records will (PROTOCOL §10.4).
+#[test]
+fn pointing_parameters_are_checked() -> TestResult {
+    let _serial = serial();
+    let home = Scratch::new("point")?;
+    let core = Core::new(settings(&home.0))?;
+    core.set_ranging_ready(0x1234, 1)?;
+    for (address, configs) in [(0, 1), (0xffff, 1), (0x1234, 0), (0x1234, 2)] {
+        assert!(matches!(
+            core.set_ranging_ready(address, configs),
+            Err(TodokeError::Invalid { .. })
+        ));
+    }
+    core.clear_ranging_ready()?;
+    for (controller, channel, preamble) in [(0, 9, 10), (7, 6, 10), (7, 9, 13), (0xffff, 5, 25)] {
+        assert!(matches!(
+            core.point_start(controller, channel, preamble),
+            Err(TodokeError::Invalid { .. })
+        ));
+    }
+    core.point_start(7, 9, 10)?;
+    core.point_stop()?;
+    Ok(())
+}
+
+/// What a phone's NFC reader does with a Type 4 tag: select the NDEF
+/// application and file, read the length, then the message.
+fn read_tag(tag: &NfcTag) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    const OK: [u8; 2] = [0x90, 0];
+    let answer = |apdu: Vec<u8>| -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let mut out = tag.respond(apdu);
+        let status = out.split_off(out.len().checked_sub(2).ok_or("no status")?);
+        if status == OK {
+            Ok(out)
+        } else {
+            Err(format!("status {status:02x?}").into())
+        }
+    };
+    answer(vec![0, 0xa4, 4, 0, 7, 0xd2, 0x76, 0, 0, 0x85, 1, 1])?;
+    answer(vec![0, 0xa4, 0, 0x0c, 2, 0xe1, 0x04])?;
+    let length = answer(vec![0, 0xb0, 0, 0, 2])?;
+    let length = usize::from(u16::from_be_bytes([length[0], length[1]]));
+    let mut message = Vec::with_capacity(length);
+    while message.len() < length {
+        let [high, low] = u16::try_from(message.len() + 2)?.to_be_bytes();
+        let wanted = u8::try_from((length - message.len()).min(255))?;
+        message.extend(answer(vec![0, 0xb0, high, low, wanted])?);
+    }
+    Ok(message)
+}
+
+/// B pairs with A by tapping: A's tag serves its QR offer.
+#[test]
+fn pairing_by_nfc() -> TestResult {
+    let _serial = serial();
+    let (a_home, b_home) = (Scratch::new("nfc-a")?, Scratch::new("nfc-b")?);
+    let a = Core::new(settings(&a_home.0))?;
+    let b = Core::new(settings(&b_home.0))?;
+    let mut attempts = 0;
+    let contact = loop {
+        attempts += 1;
+        let message = read_tag(&a.pair_show_qr()?.nfc_tag()?)?;
+        match b.pair_scan_nfc(message) {
+            Err(TodokeError::Pairing { .. }) if attempts < 3 => {
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            result => break result?,
+        }
+    };
+    assert_eq!(contact.device(), a.status()?.device);
+    Ok(())
+}
+
+/// A tag read that is no pairing offer is refused before anything else.
+#[test]
+fn nfc_messages_that_are_no_offer_are_refused() -> TestResult {
+    let _serial = serial();
+    let home = Scratch::new("nfc")?;
+    let core = Core::new(settings(&home.0))?;
+    for message in [Vec::new(), vec![0xd2, 0, 0], vec![0; 2048]] {
+        assert!(matches!(
+            core.pair_scan_nfc(message),
+            Err(TodokeError::Pairing { .. })
+        ));
+    }
     Ok(())
 }

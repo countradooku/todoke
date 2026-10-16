@@ -2,10 +2,10 @@
 //! hostile app could drive it: malformed IDs, QR text, codes, and paths,
 //! handles used after their transfer is gone, pairing started and stopped,
 //! subscriptions opened, read, and closed, the notifier set and cleared,
-//! and key stores that fail or hand back bad keys. Every outcome must be an
-//! answer or a typed error: no panic, no hang. One core runs for the whole
-//! process, in a scratch profile with no contacts (nothing can be sent
-//! anywhere).
+//! pointing with any parameters, NFC tags read and served, and key stores
+//! that fail or hand back bad keys. Every outcome must be an answer or a
+//! typed error: no panic, no hang. One core runs for the whole process, in
+//! a scratch profile with no contacts (nothing can be sent anywhere).
 #![no_main]
 
 use std::sync::{Arc, OnceLock};
@@ -130,7 +130,7 @@ fuzz_target!(|data: &[u8]| {
         if steps > 32 {
             break;
         }
-        match op % 22 {
+        match op % 25 {
             0 => drop(core.status()),
             1 => drop(core.contacts()),
             2 => drop(core.transfers()),
@@ -208,6 +208,40 @@ fuzz_target!(|data: &[u8]| {
                     events.stop();
                     assert!(matches!(events.next(1, 0), Err(TodokeError::State { .. })));
                 }
+            }
+            21 => {
+                // Pointing with any parameters: done, or invalid.
+                let [a, b, c] = [0; 3].map(|_| input.byte().unwrap_or(0));
+                let address = u16::from_be_bytes([a, b]);
+                let outcome = match op & 0xc0 {
+                    0x00 => core.set_ranging_ready(address, c),
+                    0x40 => core.clear_ranging_ready(),
+                    0x80 => core.point_start(address, c, input.byte().unwrap_or(0)),
+                    _ => core.point_stop(),
+                };
+                if let Err(error) = outcome {
+                    assert!(matches!(error, TodokeError::Invalid { .. }));
+                }
+            }
+            22 => {
+                // A tag read of anything: refused (no offer shows anywhere).
+                let length = usize::from(input.byte().unwrap_or(0)) * 16;
+                let take = length.min(input.0.len());
+                let (message, rest) = input.0.split_at(take);
+                input.0 = rest;
+                assert!(core.pair_scan_nfc(message.to_vec()).is_err());
+            }
+            23 => {
+                // The shown offer's tag under any commands: a status word
+                // last, reads bounded by the 255-byte limit.
+                if let Ok(tag) = core.pair_show_qr().and_then(|offer| offer.nfc_tag()) {
+                    for _ in 0..input.byte().unwrap_or(0) % 8 {
+                        let apdu = input.bytes(24);
+                        let answer = tag.respond(apdu);
+                        assert!((2..=257).contains(&answer.len()));
+                    }
+                }
+                drop(core.stop_pairing());
             }
             _ => {
                 // A second profile with a key store that misbehaves: a

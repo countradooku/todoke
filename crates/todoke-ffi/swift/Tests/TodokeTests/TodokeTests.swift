@@ -103,12 +103,33 @@ final class RecordingNotifier: Notifier {
     func missed() { record("missed") }
 }
 
-/// A radio link that records being closed.
-final class RecordingLink: RadioLink {
-    private(set) var closed = false
-    func kind() -> LinkKind { .awdl }
-    func send(bytes: Data) throws { throw LinkError.closed }
-    func close() { closed = true }
+/// An app that can set up no direct link.
+final class NoLinks: WifiLinks {
+    func abilities() -> LinkAbilities { LinkAbilities(host: [], join: [], joinSecurity: []) }
+    func host(request: LinkRequest) throws -> LinkLease { throw LinkError.closed }
+    func join(request: LinkRequest) throws -> LinkLease { throw LinkError.closed }
+    func bindSocket(lease: UInt64, socket: Int64) throws { throw LinkError.closed }
+    func release(lease: UInt64) {}
+}
+
+/// What a reader does with a Type 4 tag: select, read the length, read.
+func readTag(_ tag: NfcTag) throws -> Data {
+    func answer(_ apdu: [UInt8]) throws -> Data {
+        let out = tag.respond(apdu: Data(apdu))
+        XCTAssertEqual(Array(out.suffix(2)), [0x90, 0])
+        return out.prefix(out.count - 2)
+    }
+    _ = try answer([0, 0xa4, 4, 0, 7, 0xd2, 0x76, 0, 0, 0x85, 1, 1])
+    _ = try answer([0, 0xa4, 0, 0x0c, 2, 0xe1, 0x04])
+    let head = Array(try answer([0, 0xb0, 0, 0, 2]))
+    let length = Int(head[0]) << 8 | Int(head[1])
+    var message = Data()
+    while message.count < length {
+        let at = message.count + 2
+        let wanted = min(length - message.count, 255)
+        message.append(try answer([0, 0xb0, UInt8(at >> 8), UInt8(at & 0xff), UInt8(wanted)]))
+    }
+    return message
 }
 
 /// The first event `pick` accepts, within a minute.
@@ -328,15 +349,40 @@ final class TodokeTests: XCTestCase {
         XCTAssertEqual(keys.profiles.count, 1)
     }
 
-    /// Radio links are refused for now, and the one offered is closed.
-    func testRadioLinksAreRefusedAndClosed() throws {
-        let home = try Scratch("link")
+    /// The app gives the core its links once; a second time is refused.
+    func testLinksAreGivenOnce() throws {
+        let home = try Scratch("links")
         let core = try Core(settings: home.settings())
-        let link = RecordingLink()
-        XCTAssertThrowsError(try core.attachLink(link: link)) { error in
-            guard case TodokeError.disabled = error else { return XCTFail("\(error)") }
+        try core.setLinks(links: NoLinks())
+        XCTAssertThrowsError(try core.setLinks(links: NoLinks())) { error in
+            guard case TodokeError.state = error else { return XCTFail("\(error)") }
         }
-        XCTAssertTrue(link.closed)
+    }
+
+    /// Pointing checks its parameters as the records will (PROTOCOL §10.4).
+    func testPointingParametersAreChecked() throws {
+        let home = try Scratch("point")
+        let core = try Core(settings: home.settings())
+        try core.setRangingReady(address: 0x1234, configs: 1)
+        XCTAssertThrowsError(try core.setRangingReady(address: 0, configs: 1))
+        XCTAssertThrowsError(try core.setRangingReady(address: 0x1234, configs: 2))
+        try core.clearRangingReady()
+        XCTAssertThrowsError(try core.pointStart(controller: 7, channel: 6, preamble: 10))
+        try core.pointStart(controller: 7, channel: 9, preamble: 10)
+        try core.pointStop()
+    }
+
+    /// B pairs with A by tapping: A's emulated tag serves its QR offer.
+    func testPairingByNfc() throws {
+        let (homeA, homeB) = (try Scratch("nfc-a"), try Scratch("nfc-b"))
+        let a = try Core(settings: homeA.settings())
+        let b = try Core(settings: homeB.settings())
+        XCTAssertThrowsError(try b.pairScanNfc(message: Data(count: 8))) { error in
+            guard case TodokeError.pairing = error else { return XCTFail("\(error)") }
+        }
+        let message = try readTag(try a.pairShowQr().nfcTag())
+        let contact = try b.pairScanNfc(message: message)
+        XCTAssertEqual(contact.device(), try a.status().device)
     }
 
     /// The release package (TODOKE_RELEASE=1) keeps sessions disabled

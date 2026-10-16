@@ -14,8 +14,13 @@
 //! - the storage key, between the core and the app's [`KeyStore`] (the
 //!   only way to keep it in Android's Keystore);
 //! - a pairing offer's text, only when the app calls [`QrOffer::text`],
-//!   and a pairing code, only through [`CodeOffer::code`] (the user must
-//!   see it).
+//!   or through the [`NfcTag`] it emulates while the offer shows (each
+//!   read carries part of it), and a pairing code, only through
+//!   [`CodeOffer::code`] (the user must see it);
+//! - a direct link's credentials, to the app's [`WifiLinks`] that hosts or
+//!   joins it (the operating system needs them);
+//! - a ranging's STS key, in the pointing events, for the platform's
+//!   ultra-wideband stack.
 //!
 //! Peer-chosen names are escaped before they cross. The glue `BoltFFI`
 //! generates is the only unsafe code (docs/adr/0012-bindings.md).
@@ -27,11 +32,12 @@
 //! | [`engine`] | [`Core`]: starting, commands, subscriptions |
 //! | [`events`] | [`Events`]: a subscription's queue |
 //! | [`handles`] | [`ContactHandle`], [`TransferHandle`] |
-//! | [`hooks`] | What the app implements: [`KeyStore`], [`Notifier`], [`RadioLink`] |
+//! | [`hooks`] | What the app implements: [`KeyStore`], [`Notifier`], [`WifiLinks`] |
 //! | [`types`] | Plain values: statuses, contacts, transfers, offers, events |
 //! | [`error`] | [`TodokeError`] |
 //! | [`qr`] | [`QrOffer`], drawn as modules |
 //! | [`code`] | [`CodeOffer`] |
+//! | [`nfc`] | [`NfcTag`] |
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -51,6 +57,9 @@ mod forward;
 pub mod handles;
 pub mod hooks;
 mod keys;
+#[cfg(not(target_family = "wasm"))]
+mod links;
+pub mod nfc;
 pub mod qr;
 pub mod types;
 
@@ -59,5 +68,9 @@ pub use engine::Core;
 pub use error::TodokeError;
 pub use events::Events;
 pub use handles::{ContactHandle, TransferHandle};
-pub use hooks::{KeyStore, KeyStoreError, LinkError, LinkKind, Notifier, OfferNotice, RadioLink};
+pub use hooks::{
+    KeyStore, KeyStoreError, LinkAbilities, LinkError, LinkKind, LinkLease, LinkRequest,
+    LinkSecurity, Notifier, OfferNotice, WifiLinks,
+};
+pub use nfc::NfcTag;
 pub use qr::QrOffer;

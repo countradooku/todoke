@@ -255,6 +255,16 @@ pub fn event(event: &Event) -> String {
         Event::Missed { events } => {
             format!("{events} events were missed; offers and transfers are re-read")
         }
+        // Never the ranging key.
+        Event::PointTarget(ranging) => {
+            format!("pointing: ranging with {}", short(&ranging.contact))
+        }
+        Event::RangingRequested(ranging) => {
+            format!("{} points at this device", short(&ranging.contact))
+        }
+        Event::RangingStopped { contact, .. } => {
+            format!("ranging with {} stopped", short(contact))
+        }
         Event::Ended {
             transfer,
             reason,

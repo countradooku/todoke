@@ -1581,6 +1581,13 @@ pub(super) async fn run(
                                 .send_with(&contact, move || send::walk_open(files))
                                 .await
                         }
+                        Command::SetLinks(links) => {
+                            if state.links.set(links).is_ok() {
+                                Response::Done
+                            } else {
+                                Response::error(ErrorCode::State, "the link platform is set already")
+                            }
+                        }
                     };
                     let _ = reply.send(response);
                 });

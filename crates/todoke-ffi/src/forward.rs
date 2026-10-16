@@ -76,7 +76,10 @@ pub(crate) fn notify(notifier: &dyn Notifier, event: &CoreEvent, shown: &mut BTr
         CoreEvent::Ended {
             transfer, reason, ..
         } => (transfer, ending(*reason).to_owned()),
-        CoreEvent::Paired { .. } => return,
+        CoreEvent::Paired { .. }
+        | CoreEvent::PointTarget { .. }
+        | CoreEvent::RangingRequested { .. }
+        | CoreEvent::RangingStopped { .. } => return,
     };
     let (transfer, text) = ended;
     if shown.remove(transfer) {

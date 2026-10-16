@@ -25,7 +25,7 @@ use crate::code::CodeOffer;
 use crate::error::TodokeError;
 use crate::events::{Events, Subscribers};
 use crate::handles::{ContactHandle, TransferHandle, valid_id};
-use crate::hooks::{KeyStore, Notifier, RadioLink};
+use crate::hooks::{KeyStore, Notifier, WifiLinks};
 use crate::qr::QrOffer;
 use crate::types::{
     Contact, HistoryItem, KeyStoragePolicy, Offer, Settings, Status, Stranger, Transfer,
@@ -480,16 +480,102 @@ impl Core {
         drop(previous);
     }
 
-    /// Offers a Wi-Fi link for sessions (PROTOCOL §10.1 to §10.3).
+    /// Pairs with the device whose NFC tag was read (PROTOCOL §3.1.1):
+    /// `message` is the NDEF message read, which carries the QR offer.
     ///
     /// # Errors
     ///
-    /// Always [`TodokeError::Disabled`] for now: the Wi-Fi link adapters
-    /// are not built yet.
-    pub fn attach_link(&self, link: Arc<dyn RadioLink>) -> Result<(), TodokeError> {
-        link.close();
-        Err(TodokeError::Disabled {
-            message: "Wi-Fi links are not available yet".to_owned(),
+    /// [`TodokeError::Pairing`] when the message is not a pairing offer,
+    /// or the offer is wrong, used, or expired.
+    pub fn pair_scan_nfc(&self, message: Vec<u8>) -> Result<ContactHandle, TodokeError> {
+        let message = zeroize::Zeroizing::new(message);
+        let text = todoke_proto::nfc::pairing_text(&message).map_err(|_| TodokeError::Pairing {
+            message: "not a todoke pairing tag".to_owned(),
+        })?;
+        match self.shared.request(Request::PairScanQr {
+            text: text.as_str().to_owned(),
+        })? {
+            Response::Paired { contact } => Ok(self.handle_for(contact)),
+            _ => Err(TodokeError::unexpected()),
+        }
+    }
+
+    /// Gives the core what sets up direct Wi-Fi links (PROTOCOL §10.2), once:
+    /// sessions with contacts then move onto a link where it helps (as the
+    /// settings' direct links allow).
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::State`] if links were given already.
+    pub fn set_links(&self, links: Arc<dyn WifiLinks>) -> Result<(), TodokeError> {
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let links = Arc::new(crate::links::AppLinks::new(links));
+            match crate::block::block_on(self.shared.core.set_links(links)) {
+                Response::Done => Ok(()),
+                Response::Error { code, message } => Err(TodokeError::from_core(code, &message)),
+                _ => Err(TodokeError::unexpected()),
+            }
+        }
+        #[cfg(target_family = "wasm")]
+        {
+            let _ = links;
+            Err(unsupported())
+        }
+    }
+
+    /// This device can be pointed at (PROTOCOL §10.4): its ultra-wideband
+    /// controlee `address` and the `configs` it supports (bit 0:
+    /// provisioned-STS unicast DS-TWR). Sessions tell contacts from now on.
+    /// Clear it when ultra-wideband goes off or the app leaves the
+    /// foreground.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for a reserved address or configuration.
+    pub fn set_ranging_ready(&self, address: u16, configs: u8) -> Result<(), TodokeError> {
+        self.shared.done(Request::SetRangingReady {
+            ready: Some(todoke_core::api::RangingAbility { address, configs }),
         })
+    }
+
+    /// This device can no longer be pointed at: starts are refused.
+    ///
+    /// # Errors
+    ///
+    /// The core stopped.
+    pub fn clear_ranging_ready(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::SetRangingReady { ready: None })
+    }
+
+    /// Points at nearby contacts for 120 seconds (PROTOCOL §10.4): this
+    /// device is the controller at `controller` on `channel` (5 or 9) with
+    /// `preamble` (9 to 12 or 25 to 32). Each contact on the local network
+    /// that can be pointed at comes as a `CoreEvent::PointTarget`.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for an address, channel, or preamble out of
+    /// range.
+    pub fn point_start(
+        &self,
+        controller: u16,
+        channel: u8,
+        preamble: u8,
+    ) -> Result<(), TodokeError> {
+        self.shared.done(Request::PointStart {
+            controller,
+            channel,
+            preamble,
+        })
+    }
+
+    /// Stops pointing: every ranging this device started stops.
+    ///
+    /// # Errors
+    ///
+    /// The core stopped.
+    pub fn point_stop(&self) -> Result<(), TodokeError> {
+        self.shared.done(Request::PointStop)
     }
 }

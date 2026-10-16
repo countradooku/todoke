@@ -1,5 +1,5 @@
 //! What the core calls back into the app for: keeping the storage key,
-//! posting notifications, and (reserved) radio links.
+//! posting notifications, and setting up direct Wi-Fi links.
 
 use boltffi::{data, error, export};
 
@@ -123,15 +123,92 @@ pub trait Notifier: Send + Sync {
     fn missed(&self);
 }
 
-/// What kind of radio a link uses. todoke uses no Bluetooth and no USB
-/// (PROTOCOL §10.1).
+/// A direct Wi-Fi link's kind (PROTOCOL §10.2). todoke uses no Bluetooth
+/// and no USB (§10.1).
 #[data]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkKind {
-    /// A Wi-Fi Aware data path, a Wi-Fi Direct group, or a hotspot (§10.2).
-    WifiP2p,
-    /// Apple peer-to-peer Wi-Fi (AWDL) or Apple Wi-Fi Aware.
-    Awdl,
+    /// A Wi-Fi Aware data path.
+    WifiAware,
+    /// A Wi-Fi Direct group.
+    WifiDirect,
+    /// A hotspot.
+    Hotspot,
+}
+
+/// A direct link's link-layer security (§10.2).
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LinkSecurity {
+    /// WPA3-Personal, SAE only.
+    Wpa3,
+    /// WPA3-Personal transition mode.
+    Wpa3Transition,
+    /// WPA2-PSK.
+    Wpa2,
+    /// Wi-Fi Aware NCS-SK-256.
+    AwareSk256,
+    /// Wi-Fi Aware NCS-SK-128.
+    AwareSk128,
+}
+
+/// What this device can host and join now (§10.2), as lists.
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct LinkAbilities {
+    /// The kinds it can host.
+    pub host: Vec<LinkKind>,
+    /// The kinds it can join.
+    pub join: Vec<LinkKind>,
+    /// The securities it can join with.
+    pub join_security: Vec<LinkSecurity>,
+}
+
+/// A link to host or join, with the credentials of the offer (§10.2). The
+/// secret is the passphrase (or, for Wi-Fi Aware, the PMK): give it to the
+/// operating system and keep no copy.
+#[data]
+#[derive(Clone, PartialEq, Eq)]
+pub struct LinkRequest {
+    /// The kind.
+    pub kind: LinkKind,
+    /// The security.
+    pub security: LinkSecurity,
+    /// The network name (empty for Wi-Fi Aware).
+    pub ssid: String,
+    /// The passphrase (ASCII) or PMK.
+    pub secret: Vec<u8>,
+    /// For Wi-Fi Aware: the service-specific information to publish or
+    /// match (8 bytes).
+    pub service_info: Vec<u8>,
+    /// How long the offer stands, in milliseconds: give up after it.
+    pub within_ms: u64,
+}
+
+impl core::fmt::Debug for LinkRequest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("LinkRequest")
+            .field("kind", &self.kind)
+            .field("security", &self.security)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A link that is up: the app keeps it until [`WifiLinks::release`].
+#[data]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LinkLease {
+    /// The app's handle for the link, for `bind_socket` and `release`.
+    pub id: u64,
+    /// This device's address on the link (IPv4 or IPv6 text).
+    pub local: String,
+    /// The host's address on the link, for a joiner; none for the host.
+    pub host: Option<String>,
+    /// The link's interface index (the scope of link-local IPv6), or 0.
+    pub interface: u32,
+    /// Sockets must be bound to the link before use (`bind_socket`): the
+    /// link is a network of its own (Android).
+    pub bind_sockets: bool,
 }
 
 /// Why a link failed.
@@ -165,22 +242,44 @@ impl From<boltffi::UnexpectedFfiCallbackError> for LinkError {
     }
 }
 
-/// A byte pipe over a platform Wi-Fi link, for the core to run a session on
-/// (PROTOCOL §10.1 to §10.3).
-///
-/// Reserved: the adapters are not built yet, so `Core::attach_link`
-/// refuses every link for now. The shape is fixed here so the apps can be
-/// written against it.
+/// What sets up direct Wi-Fi links on this device (PROTOCOL §10.2): the
+/// app's platform code. The core decides when (only for a transfer the user
+/// started or accepted), makes the credentials, and runs the session over
+/// the link; the app only brings links up and down with the platform's
+/// app-scoped, temporary mechanisms (never a saved or suggested network,
+/// WPS, or an open network). Every call may block; the core calls them off
+/// its thread.
 #[export]
-pub trait RadioLink: Send + Sync {
-    /// The radio.
-    fn kind(&self) -> LinkKind;
-    /// Sends bytes, in order.
+pub trait WifiLinks: Send + Sync {
+    /// What this device can host and join now (hardware, permissions, the
+    /// platform). Empty lists take no part. Cheap.
+    fn abilities(&self) -> LinkAbilities;
+
+    /// Hosts the link `request` describes, with exactly its credentials,
+    /// forwarding nothing between the link and other networks.
     ///
     /// # Errors
     ///
-    /// The link is closed or failed.
-    fn send(&self, bytes: Vec<u8>) -> Result<(), LinkError>;
-    /// Closes the link.
-    fn close(&self);
+    /// The link could not be brought up.
+    fn host(&self, request: LinkRequest) -> Result<LinkLease, LinkError>;
+
+    /// Joins the link `request` describes, within its deadline.
+    ///
+    /// # Errors
+    ///
+    /// The link could not be joined.
+    fn join(&self, request: LinkRequest) -> Result<LinkLease, LinkError>;
+
+    /// Binds `socket` (a file descriptor the core keeps) to the link
+    /// `lease`, before the core listens or connects on it.
+    ///
+    /// # Errors
+    ///
+    /// The socket could not be bound.
+    // Not `handle`: BoltFFI's JNI glue names the callback object that.
+    fn bind_socket(&self, lease: u64, socket: i64) -> Result<(), LinkError>;
+
+    /// Tears the link `lease` down: leaves or removes the group, hotspot,
+    /// or data path and any configuration created for it.
+    fn release(&self, lease: u64);
 }

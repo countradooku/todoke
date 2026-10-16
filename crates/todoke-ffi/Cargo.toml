@@ -50,6 +50,8 @@ boltffi.workspace = true
 # The pairing QR code, drawn as modules here: the offer's text crosses only
 # when an app asks for it explicitly.
 qrcode.workspace = true
+# The NFC pairing tag (PROTOCOL §3.1.1), served from the shown QR offer.
+todoke-proto.workspace = true
 zeroize.workspace = true
 
 [target.'cfg(not(target_family = "wasm"))'.dependencies]

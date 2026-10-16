@@ -10,6 +10,9 @@
 use boltffi::export;
 use zeroize::Zeroizing;
 
+use crate::error::TodokeError;
+use crate::nfc::NfcTag;
+
 /// A shown QR pairing offer. It works once and expires; stop it with
 /// `Core::stop_pairing`.
 pub struct QrOffer {
@@ -72,6 +75,21 @@ impl QrOffer {
     /// camera. It is a pairing secret until it expires: never log it.
     pub fn text(&self) -> String {
         self.text.as_str().to_owned()
+    }
+
+    /// The NFC tag serving this offer (PROTOCOL §3.1.1), for tap-to-pair:
+    /// it hands the offer's text to any reader in range, so emulate it only
+    /// while the offer shows on screen.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Internal`] if the offer is not one NFC carries.
+    pub fn nfc_tag(&self) -> Result<NfcTag, TodokeError> {
+        todoke_proto::nfc::Type4Tag::new(self.text.as_str())
+            .map(NfcTag::new)
+            .map_err(|_| TodokeError::Internal {
+                message: "the offer does not fit an NFC tag".to_owned(),
+            })
     }
 }
 
