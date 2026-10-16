@@ -95,6 +95,9 @@ pub struct LinkLease {
     /// The link's interface index (the scope of link-local IPv6
     /// addresses); 0 if unknown.
     pub interface: u32,
+    /// Binds a socket to the link before it listens or connects, where the
+    /// link is a network of its own (Android).
+    pub bind: Option<Arc<todoke_transport::BindSocket>>,
     _teardown: Box<dyn Send>,
 }
 
@@ -111,8 +114,16 @@ impl LinkLease {
             local,
             host,
             interface,
+            bind: None,
             _teardown: Box::new(teardown),
         }
+    }
+
+    /// With sockets bound to the link by `bind`.
+    #[must_use]
+    pub fn with_bind(mut self, bind: Arc<todoke_transport::BindSocket>) -> Self {
+        self.bind = Some(bind);
+        self
     }
 }
 

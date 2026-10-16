@@ -269,13 +269,24 @@ async fn nobody_binds_beside_a_listener() -> TestResult {
 #[tokio::test]
 async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
     let policy = LanPolicy::new().with_loopback();
-    let host = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy)?;
+    let bound = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let bound = std::sync::Arc::clone(&bound);
+        move |handle: i64| {
+            if let Ok(mut bound) = bound.lock() {
+                bound.push(handle);
+            }
+            Ok(())
+        }
+    };
+    let host = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy, Some(&record))?;
     let port = host.port()?;
     let accepting = tokio::spawn(async move { host.accept().await });
     let joiner = TcpConnector::new(policy)
         .connect_direct(
             Ipv4Addr::LOCALHOST.into(),
             (Ipv4Addr::LOCALHOST, port).into(),
+            Some(&record),
         )
         .await?;
     let accepted = accepting.await??;
@@ -292,11 +303,17 @@ async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
         .connect_direct(
             Ipv4Addr::LOCALHOST.into(),
             (Ipv4Addr::LOCALHOST, port).into(),
+            Some(&record),
         )
         .await;
     assert_eq!(
         refused.map(|_| ()).map_err(|error| error.kind()),
         Err(io::ErrorKind::PermissionDenied)
     );
+    // The listener's and the joiner's sockets were bound to the link, each
+    // once and before use; the refused one never reached it.
+    let bound = bound.lock().map(|bound| bound.clone()).unwrap_or_default();
+    assert_eq!(bound.len(), 2, "{bound:?}");
+    assert!(bound.iter().all(|handle| *handle >= 0));
     Ok(())
 }

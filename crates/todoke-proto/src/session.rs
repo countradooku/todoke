@@ -633,7 +633,7 @@ impl FrameType {
     pub const fn class(self) -> FrameClass {
         match self.0 {
             0x0001..=0x0004 | 0x0006..=0x0009 => FrameClass::Session,
-            0x0005 | 0x0010..=0x001c | 0x0020..=0x0022 | 0x0040 => FrameClass::Application,
+            0x0005 | 0x0010..=0x001c | 0x0020..=0x0025 | 0x0040 => FrameClass::Application,
             0x8000..=0xbfff => FrameClass::Noncritical,
             0xc000..=0xffff => FrameClass::Experimental,
             _ => FrameClass::UnsupportedCritical,

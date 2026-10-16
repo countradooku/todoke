@@ -66,6 +66,6 @@ pub use policy::{LanPolicy, Refusal};
 #[cfg(not(target_family = "wasm"))]
 pub use race::{Candidate, Connector, RaceConfig, RaceError};
 #[cfg(not(target_family = "wasm"))]
-pub use tcp::{LanListener, TcpConnector, TcpLink};
+pub use tcp::{BindSocket, LanListener, TcpConnector, TcpLink};
 #[cfg(not(target_family = "wasm"))]
 pub use timer::TokioTimer;

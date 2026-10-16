@@ -354,15 +354,17 @@ impl SessionLink {
         };
         let lease = Held(Some(lease));
         drop(cancel);
-        let Some(local) = lease
+        let Some((local, bind)) = lease
             .0
             .as_ref()
-            .map(|lease| scoped(lease.local, 0, lease.interface))
-            .filter(|local| usable(&self.state, local.ip()))
+            .map(|lease| (scoped(lease.local, 0, lease.interface), lease.bind.clone()))
+            .filter(|(local, _)| usable(&self.state, local.ip()))
         else {
             return;
         };
-        let Ok(listener) = LanListener::bind_direct(local, self.state.lan_policy()) else {
+        let Ok(listener) =
+            LanListener::bind_direct(local, self.state.lan_policy(), bind.as_deref())
+        else {
             return;
         };
         let Ok(port) = listener.port() else {
@@ -585,14 +587,24 @@ impl State {
             return false;
         };
         let lease = Held(Some(lease));
-        let Some((local, host)) = lease.0.as_ref().and_then(|lease| {
+        let Some((local, host, bind)) = lease.0.as_ref().and_then(|lease| {
             let host = lease.host?;
-            usable(self, lease.local).then(|| (lease.local, scoped(host, port, lease.interface)))
+            usable(self, lease.local).then(|| {
+                (
+                    lease.local,
+                    scoped(host, port, lease.interface),
+                    lease.bind.clone(),
+                )
+            })
         }) else {
             return false;
         };
         let moved = loop {
-            match self.connector().connect_direct(local, host).await {
+            match self
+                .connector()
+                .connect_direct(local, host, bind.as_deref())
+                .await
+            {
                 Ok(link) => {
                     let Ok(claim) = self.manager.claim_outgoing(peer) else {
                         break false;
@@ -765,6 +777,7 @@ mod tests {
                 let listener = LanListener::bind_direct(
                     SocketAddr::from(([127, 0, 0, 1], 0)),
                     state.lan_policy(),
+                    None,
                 )?;
                 let port = listener.port()?;
                 let slot = HostSlot::take(&state).ok_or("no slot")?;

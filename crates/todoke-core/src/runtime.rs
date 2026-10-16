@@ -214,6 +214,8 @@ impl Core {
 #[cfg(feature = "unaudited-dev")]
 mod link;
 #[cfg(feature = "unaudited-dev")]
+mod pointing;
+#[cfg(feature = "unaudited-dev")]
 mod relay;
 #[cfg(feature = "unaudited-dev")]
 mod running;
