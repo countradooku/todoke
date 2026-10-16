@@ -64,9 +64,18 @@ fn device_tweaked(
 /// Waits for an event matching `pick`.
 async fn wait_for<T>(
     events: &mut broadcast::Receiver<Event>,
+    pick: impl FnMut(&Event) -> Option<T>,
+) -> AnyResult<T> {
+    wait_for_within(events, Duration::from_secs(60), pick).await
+}
+
+/// Waits up to `limit` for an event matching `pick`.
+async fn wait_for_within<T>(
+    events: &mut broadcast::Receiver<Event>,
+    limit: Duration,
     mut pick: impl FnMut(&Event) -> Option<T>,
 ) -> AnyResult<T> {
-    let found = tokio::time::timeout(Duration::from_secs(60), async {
+    let found = tokio::time::timeout(limit, async {
         loop {
             match events.recv().await {
                 Ok(event) => {
@@ -1318,11 +1327,18 @@ mod direct_link {
                 .await,
             Response::Done
         );
-        wait_for(&mut sender_events, |event| match event {
+        // A 48 MiB debug-build transfer plus a move: slow CI runners
+        // (Windows) need more than a minute.
+        let delivered = wait_for_within(&mut sender_events, MOVE_LIMIT, |event| match event {
             Event::Delivered { transfer: done } if *done == transfer => Some(()),
             _ => None,
         })
-        .await?;
+        .await;
+        if delivered.is_err() {
+            return Err(diagnose(&alice, &bob, &alice_links, &bob_links)
+                .await
+                .into());
+        }
         // No second prompt on the receiver's side after the move.
         let mut prompts = 0;
         while let Ok(event) = receiver_events.try_recv() {
@@ -1406,6 +1422,34 @@ mod direct_link {
             tweak,
         )?;
         Ok((alice, bob))
+    }
+
+    /// How long a moving transfer may take before the test fails.
+    const MOVE_LIMIT: Duration = Duration::from_secs(180);
+
+    /// What each side saw, for a test that timed out.
+    async fn diagnose(
+        alice: &Core,
+        bob: &Core,
+        alice_links: &Loopback,
+        bob_links: &Loopback,
+    ) -> String {
+        let side = |core: &Core| {
+            let core = core.clone();
+            async move {
+                let contacts = core.request(Request::Contacts).await;
+                let transfers = core.request(Request::Transfers).await;
+                format!("contacts {contacts:?}; transfers {transfers:?}")
+            }
+        };
+        format!(
+            "not delivered in time: hosted {}, joined {}, torn {}; alice: {}; bob: {}",
+            alice_links.hosted.load(Ordering::SeqCst),
+            bob_links.joined.load(Ordering::SeqCst),
+            alice_links.torn.load(Ordering::SeqCst),
+            side(alice).await,
+            side(bob).await,
+        )
     }
 
     /// A relay node on loopback, as configuration.
@@ -1503,11 +1547,16 @@ mod direct_link {
                 .await,
             Response::Done
         );
-        wait_for(&mut bob_events, |event| match event {
+        let delivered = wait_for_within(&mut bob_events, MOVE_LIMIT, |event| match event {
             Event::Delivered { transfer: done } if *done == transfer => Some(()),
             _ => None,
         })
-        .await?;
+        .await;
+        if delivered.is_err() {
+            return Err(diagnose(&alice, &bob, &alice_links, &bob_links)
+                .await
+                .into());
+        }
         assert_eq!(bob_links.joined.load(Ordering::SeqCst), 1);
         // The host's link went once the offer expired unused (its teardown
         // runs off the core thread), and with link setup paused for this
