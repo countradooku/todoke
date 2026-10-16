@@ -454,11 +454,14 @@ fn adapter(guid: &GUID) -> Option<(Ipv4Addr, Ipv4Addr, u32)> {
     None
 }
 
+#[cfg(feature = "host")]
 /// `IF_TYPE_IEEE80211`.
 const IEEE80211: u32 = 71;
+#[cfg(feature = "host")]
 /// `IfOperStatusUp`.
 const UP: i32 = 1;
 
+#[cfg(feature = "host")]
 /// The Wi-Fi Direct virtual adapters that are up with an IPv4 address
 /// (not link-local): each address and the adapter's index.
 pub(crate) fn direct_adapters() -> Vec<(Ipv4Addr, u32)> {
@@ -513,6 +516,7 @@ pub(crate) fn direct_adapters() -> Vec<(Ipv4Addr, u32)> {
     found
 }
 
+#[cfg(feature = "host")]
 /// Whether the NUL-terminated wide string `text` (at most 256 units read)
 /// contains `needle`.
 fn wide_contains(text: *const u16, needle: &str) -> bool {

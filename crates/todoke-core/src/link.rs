@@ -83,6 +83,11 @@ impl fmt::Debug for JoinRequest {
     }
 }
 
+/// Binds a socket to a link before it listens or connects, given its raw
+/// handle: the same type as the transport's (every target has it here, the
+/// browser too, where no transport exists).
+pub type BindSocket = dyn Fn(i64) -> io::Result<()> + Send + Sync;
+
 /// A link that is up, until dropped: dropping it tears the link down.
 pub struct LinkLease {
     /// This device's address on the link: the host listens on it, the
@@ -100,7 +105,7 @@ pub struct LinkLease {
     pub interface: u32,
     /// Binds a socket to the link before it listens or connects, where the
     /// link is a network of its own (Android).
-    pub bind: Option<Arc<todoke_transport::BindSocket>>,
+    pub bind: Option<Arc<BindSocket>>,
     /// With an unspecified `local`: the interfaces the link may come up
     /// on; the host accepts only link-local peers arriving on them.
     pub scopes: Vec<u32>,
@@ -136,7 +141,7 @@ impl LinkLease {
 
     /// With sockets bound to the link by `bind`.
     #[must_use]
-    pub fn with_bind(mut self, bind: Arc<todoke_transport::BindSocket>) -> Self {
+    pub fn with_bind(mut self, bind: Arc<BindSocket>) -> Self {
         self.bind = Some(bind);
         self
     }
