@@ -8,7 +8,10 @@ import UniformTypeIdentifiers
 struct HomeView: View {
     @Environment(AppModel.self) private var model
     @Binding var pairing: Bool
+    /// The contact files are picked for. Kept until the picker hands them
+    /// over: it closes (and clears its binding) before its completion runs.
     @State private var sendingTo: Contact?
+    @State private var picking = false
     @State private var pointingShown = false
 
     var body: some View {
@@ -28,7 +31,7 @@ struct HomeView: View {
                     ScrollView {
                         LazyVStack(spacing: 12) {
                             ForEach(model.contacts, id: \.device) { contact in
-                                ContactCard(contact: contact) { sendingTo = contact }
+                                ContactCard(contact: contact) { pick(for: contact) }
                             }
                         }
                         .padding()
@@ -51,18 +54,25 @@ struct HomeView: View {
             .sheet(isPresented: $pointingShown) {
                 PointSheet { contact in
                     pointingShown = false
-                    sendingTo = contact
+                    pick(for: contact)
                 }
             }
             .fileImporter(
-                isPresented: Binding(get: { sendingTo != nil }, set: { if !$0 { sendingTo = nil } }),
+                isPresented: $picking,
                 allowedContentTypes: [.item], allowsMultipleSelection: true
             ) { result in
-                guard let contact = sendingTo, case .success(let urls) = result, !urls.isEmpty else { return }
+                let contact = sendingTo
+                sendingTo = nil
+                guard let contact, case .success(let urls) = result, !urls.isEmpty else { return }
                 let documents = urls.map { Picked(url: $0, name: $0.lastPathComponent) }
                 Task { await model.send(to: contact, documents: documents) }
             }
         }
+    }
+
+    private func pick(for contact: Contact) {
+        sendingTo = contact
+        picking = true
     }
 }
 
