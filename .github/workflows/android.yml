@@ -48,10 +48,11 @@ jobs:
           gradle-version: "9.8.1"
           cache-disabled: true
       # The shipped libraries: release builds keep sessions disabled
-      # (PROTOCOL §16).
+      # (PROTOCOL §16). Verbose: without it a failed build shows no
+      # compiler output at all.
       - name: Pack the libraries
         working-directory: crates/todoke-ffi
-        run: boltffi pack android --release
+        run: boltffi pack android --release --verbose
       - name: Build both flavors for release
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64"
@@ -119,7 +120,7 @@ jobs:
       # starts two cores (boltffi.test.toml).
       - name: Pack the development libraries
         working-directory: crates/todoke-ffi
-        run: boltffi --overlay boltffi.test.toml pack android
+        run: boltffi --overlay boltffi.test.toml pack android --verbose
       - name: Build the app and its tests
         run: |
           export JAVA_HOME="$JAVA_HOME_21_X64"
