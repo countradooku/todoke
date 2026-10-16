@@ -35,6 +35,13 @@ package (sessions disabled).
 apps/ios/scripts/bindings.sh dev
 ```
 
+To try the app on a device, pack the development package optimized (an
+unoptimized core encrypts and hashes several times slower):
+
+```bash
+apps/ios/scripts/bindings.sh dev --optimized
+```
+
 ```bash
 xcodebuild test -project apps/ios/Todoke.xcodeproj -scheme TodokeApp -destination 'platform=iOS Simulator,name=iPhone 17 Pro'
 ```
