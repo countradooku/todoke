@@ -132,10 +132,8 @@ impl LinkSecurity {
         matches!(
             (kind, self),
             (LinkKind::WifiAware, Self::AwareSk256 | Self::AwareSk128)
-                | (
-                    LinkKind::WifiDirect | LinkKind::Hotspot,
-                    Self::Wpa3 | Self::Wpa3Transition | Self::Wpa2
-                )
+                | (LinkKind::WifiDirect | LinkKind::Hotspot, Self::Wpa2)
+                | (LinkKind::Hotspot, Self::Wpa3 | Self::Wpa3Transition)
         )
     }
 

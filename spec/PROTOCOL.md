@@ -1484,12 +1484,16 @@ the host sends `LinkOffer`, once per session.
 
 | security | Meaning | Kinds |
 | --- | --- | --- |
-| 1 | WPA3-Personal (SAE only) | 2, 3 |
-| 2 | WPA3-Personal transition (SAE or WPA2-PSK) | 2, 3 |
+| 1 | WPA3-Personal (SAE only) | 3 |
+| 2 | WPA3-Personal transition (SAE or WPA2-PSK) | 3 |
 | 3 | WPA2-PSK | 2, 3 |
 | 4 | Wi-Fi Aware NCS-SK-256 | 1 |
 | 5 | Wi-Fi Aware NCS-SK-128 | 1 |
 | Others | Reserved; open, WEP, and WPS are never offered | |
+
+Wi-Fi Direct groups are WPA2-PSK only: that is what Android's groups and Windows'
+Wi-Fi Direct access point provide, and the session's own encryption, not the link
+layer, protects the data.
 
 Total: 55 bytes for kind 1, 116 for kind 2, 109 for kind 3. The host generates every
 random part from a CSPRNG for each offer:

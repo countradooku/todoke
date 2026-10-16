@@ -202,7 +202,7 @@ fn offers_and_answers_out_of_line_are_state() -> TestResult {
     let direct = LinkOffer::new(
         [3; 16],
         LinkKind::WifiDirect,
-        LinkSecurity::Wpa3,
+        LinkSecurity::Wpa2,
         60,
         40_000,
         b"DIRECT-ab-tdk-0123456789abcdef".to_vec(),
