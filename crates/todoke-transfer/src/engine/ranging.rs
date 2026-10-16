@@ -196,12 +196,16 @@ impl Pointing {
         self.take_own(start.session_id, start.config, Some(start.controller), now)
     }
 
-    /// This side starts Apple peer ranging as the controller.
+    /// This side starts Apple peer ranging as the controller; a token
+    /// outside its bounds is refused before anything changes.
     pub(crate) fn start_peer(
         &mut self,
         start: &PeerRanging,
         now: Duration,
     ) -> Result<(), RangingError> {
+        if PeerRanging::decode(&start.encode()).is_err() {
+            return Err(RangingError::Address);
+        }
         self.take_own(start.session_id, CONFIG_APPLE_PEER, None, now)
     }
 

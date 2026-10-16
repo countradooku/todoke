@@ -744,7 +744,8 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
     /// # Errors
     ///
     /// [`RangingError::NotReady`]; [`RangingError::PeerNotReady`];
-    /// [`RangingError::Busy`].
+    /// [`RangingError::Busy`]; [`RangingError::Address`] for a token
+    /// outside its bounds.
     pub fn start_peer_ranging(
         &mut self,
         start: &todoke_proto::ranging::PeerRanging,

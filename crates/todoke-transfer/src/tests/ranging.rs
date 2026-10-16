@@ -478,3 +478,44 @@ fn peer_ranging_runs_like_fira() -> TestResult {
     );
     Ok(())
 }
+
+/// A peer start whose token is outside its bounds is refused before it is
+/// sent or counts toward the eight; the largest token is fine.
+#[test]
+fn peer_tokens_out_of_bounds_are_never_sent() -> TestResult {
+    let fixture = fixture()?;
+    let mut link = link(&fixture)?;
+    link.b.send_ranging_ready(RangingReady {
+        configs: CONFIG_APPLE_PEER,
+    })?;
+    link.settle()?;
+    let max = todoke_proto::ranging::MAX_TOKEN_LEN;
+    for token in [Vec::new(), vec![1; max + 1]] {
+        assert_eq!(
+            link.a.start_peer_ranging(
+                &PeerRanging {
+                    session_id: 50,
+                    token
+                },
+                link.now
+            ),
+            Err(RangingError::Address)
+        );
+    }
+    link.settle()?;
+    assert!(
+        !link
+            .b_events
+            .iter()
+            .any(|event| matches!(event, TransferEvent::PeerRangingRequested(_)))
+    );
+    for id in 1..=u32::from(MAX_STARTS) {
+        let start = PeerRanging {
+            session_id: id,
+            token: vec![1; max],
+        };
+        link.a.start_peer_ranging(&start, link.now)?;
+        link.a.stop_ranging(id)?;
+    }
+    Ok(())
+}
