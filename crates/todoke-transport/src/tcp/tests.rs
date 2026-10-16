@@ -372,7 +372,8 @@ async fn scoped_direct_listeners_take_only_their_interfaces() -> TestResult {
 #[tokio::test(flavor = "multi_thread")]
 async fn peer_to_peer_links_are_lan_links() -> TestResult {
     let policy = LanPolicy::new().with_loopback();
-    let listener = LanListener::bind(0, policy)?.with_peer_to_peer()?;
+    let mut listener = LanListener::bind(0, policy)?;
+    listener.accept_peer_to_peer()?;
     let port = listener.peer_to_peer_port().ok_or("no peer-to-peer port")?;
     assert_ne!(port, listener.port()?);
     let accepting = tokio::spawn(async move {
@@ -384,7 +385,11 @@ async fn peer_to_peer_links_are_lan_links() -> TestResult {
     let mut server = server?;
     for link in [&client, &server] {
         assert_eq!(link.info().kind(), LinkKind::Lan);
-        assert!(link.info().remote().is_some_and(|remote| remote.ip().is_loopback()));
+        assert!(
+            link.info()
+                .remote()
+                .is_some_and(|remote| remote.ip().is_loopback())
+        );
     }
     write_all(&mut client, b"hello over p2p").await?;
     let mut got = [0_u8; 14];
@@ -396,7 +401,8 @@ async fn peer_to_peer_links_are_lan_links() -> TestResult {
     assert_eq!(&back, b"back");
     // Under the real policy, loopback may not connect: dropped unread.
     drop(listener);
-    let strict = LanListener::bind(0, LanPolicy::new())?.with_peer_to_peer()?;
+    let mut strict = LanListener::bind(0, LanPolicy::new())?;
+    strict.accept_peer_to_peer()?;
     let strict_port = strict.peer_to_peer_port().ok_or("no peer-to-peer port")?;
     let _refused = crate::peer_to_peer::connect((Ipv4Addr::LOCALHOST, strict_port).into()).await?;
     let accepted = tokio::time::timeout(Duration::from_millis(500), strict.accept()).await;
@@ -404,6 +410,8 @@ async fn peer_to_peer_links_are_lan_links() -> TestResult {
     // Plain listeners have no peer-to-peer side; addresses off the
     // peer-to-peer interfaces are not reached through it.
     assert_eq!(LanListener::bind(0, policy)?.peer_to_peer_port(), None);
-    assert!(!crate::peer_to_peer::reaches((Ipv6Addr::LOCALHOST, 1).into()));
+    assert!(!crate::peer_to_peer::reaches(
+        (Ipv6Addr::LOCALHOST, 1).into()
+    ));
     Ok(())
 }

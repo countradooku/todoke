@@ -1,7 +1,8 @@
 //! §9 discovery through the system's Bonjour (`dns_sd`, mDNSResponder) on
-//! Apple platforms, used on iOS, where an app may not send or receive raw
-//! multicast (and so cannot run `mdns-sd`) without Apple's restricted
-//! multicast entitlement.
+//! Apple platforms: on iOS an app may not send or receive raw multicast
+//! (and so cannot run `mdns-sd`) without Apple's restricted multicast
+//! entitlement, and only Bonjour reaches Apple peer-to-peer Wi-Fi (AWDL),
+//! where the instances go with the peer-to-peer listener's port (§10.1).
 //!
 //! The same records as [`crate::mdns`]: one instance per wanted
 //! advertisement, labelled with its rotating label, whose host name is the
@@ -34,6 +35,9 @@ const RESTART_EVERY: Duration = Duration::from_secs(5);
 pub struct Bonjour {
     sys: sys::Bonjour,
     port: u16,
+    /// The port peer-to-peer connections come to, if any: then browsing,
+    /// resolving, and advertising cover peer-to-peer Wi-Fi too.
+    peer_to_peer_port: Option<u16>,
     policy: LanPolicy,
     /// What was last published (the stranger with when it started).
     paired: Option<Advertisement>,
@@ -63,11 +67,17 @@ impl Bonjour {
     /// # Errors
     ///
     /// [`MdnsError`] if mDNSResponder cannot be reached.
-    pub fn start(port: u16, policy: LanPolicy) -> Result<Self, MdnsError> {
-        let sys = sys::Bonjour::start(allows_loopback(policy)).map_err(|_| MdnsError)?;
+    pub fn start(
+        port: u16,
+        peer_to_peer_port: Option<u16>,
+        policy: LanPolicy,
+    ) -> Result<Self, MdnsError> {
+        let sys = sys::Bonjour::start(allows_loopback(policy), peer_to_peer_port.is_some())
+            .map_err(|_| MdnsError)?;
         Ok(Self {
             sys,
             port,
+            peer_to_peer_port,
             policy,
             paired: None,
             stranger: None,
@@ -89,7 +99,10 @@ impl Bonjour {
         let now = Instant::now();
         if self.sys.stopped() && now.saturating_duration_since(self.started) >= RESTART_EVERY {
             self.started = now;
-            if let Ok(sys) = sys::Bonjour::start(allows_loopback(self.policy)) {
+            if let Ok(sys) = sys::Bonjour::start(
+                allows_loopback(self.policy),
+                self.peer_to_peer_port.is_some(),
+            ) {
                 self.sys = sys;
                 self.published = None;
             }
@@ -126,8 +139,12 @@ impl Bonjour {
             .collect();
         let wanted = (instances, self.addresses.clone());
         if self.published.as_ref() != Some(&wanted) {
-            self.sys
-                .publish(wanted.0.clone(), self.port, wanted.1.clone());
+            self.sys.publish(
+                wanted.0.clone(),
+                self.port,
+                self.peer_to_peer_port,
+                wanted.1.clone(),
+            );
             self.published = Some(wanted);
         }
         Ok(())
@@ -254,8 +271,8 @@ mod tests {
         let (alice, bob) = paired().await?;
         let policy = LanPolicy::new().with_loopback();
         let (alice_table, bob_table) = (alice.table(WALL)?, bob.table(WALL)?);
-        let mut alice_bonjour = Bonjour::start(47_011, policy)?;
-        let mut bob_bonjour = Bonjour::start(47_012, policy)?;
+        let mut alice_bonjour = Bonjour::start(47_011, None, policy)?;
+        let mut bob_bonjour = Bonjour::start(47_012, None, policy)?;
         let plan = Advertiser::new().plan(&alice_table, time(WALL)?, Duration::ZERO, &mut OsRandom);
         assert!(plan.paired.is_some());
         alice_bonjour.apply(&plan)?;

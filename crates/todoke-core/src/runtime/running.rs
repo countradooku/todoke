@@ -359,16 +359,13 @@ impl State {
         let manager =
             TransportManager::new(GATE, *identity.binding().device_public(), offers.clone());
         let listener = if config.lan.enabled {
-            Some(
-                LanListener::bind(config.lan.port, policy)
-                    .map_err(|error| StartError::Io(error.kind()))?,
-            )
+            Some(listen(&config, policy).map_err(|error| StartError::Io(error.kind()))?)
         } else {
             None
         };
         let port = listener.as_ref().and_then(|listener| listener.port().ok());
-        let backend =
-            discovery(port, &config, policy).map_err(|error| StartError::Io(error.kind()))?;
+        let backend = discovery(listener.as_ref(), &config, policy)
+            .map_err(|error| StartError::Io(error.kind()))?;
         let table = contacts
             .discovery_table(now)
             .map_err(|_| StartError::Io(std::io::ErrorKind::Other))?;
@@ -756,12 +753,13 @@ impl State {
                 // one), never the old one again by default, which another
                 // program may have taken meanwhile.
                 let was = self.lan_port.get();
-                let Ok(listener) = LanListener::bind(self.config.lan.port, self.policy) else {
+                let Ok(listener) = listen(&self.config, self.policy) else {
                     return Response::error(ErrorCode::Internal, "the listener could not reopen");
                 };
                 let port = listener.port().ok();
-                if port != Some(was) {
-                    let backend = discovery(port, &self.config, self.policy);
+                // The peer-to-peer port is new each time: discovery too.
+                if port != Some(was) || listener.peer_to_peer_port().is_some() {
+                    let backend = discovery(Some(&listener), &self.config, self.policy);
                     *self.backend.borrow_mut() = backend.unwrap_or(Backend::Off);
                     self.lan_port.set(port.unwrap_or(0));
                 }
@@ -1526,20 +1524,45 @@ fn parse_token(text: &str) -> Option<[u8; DISCOVERY_TOKEN_LEN]> {
     Some(out)
 }
 
-/// The discovery backend for a listener on `port`: a shared folder (tests)
-/// or mDNS, none without a listener.
+/// Listens on the LAN; on Apple platforms, where discovery is the
+/// system's Bonjour, over peer-to-peer Wi-Fi (AWDL) too (§10.1). A
+/// peer-to-peer listener that cannot start leaves the LAN one alone.
+fn listen(config: &CoreConfig, policy: LanPolicy) -> std::io::Result<LanListener> {
+    #[allow(unused_mut, reason = "only Apple platforms add peer-to-peer")]
+    let mut listener = LanListener::bind(config.lan.port, policy)?;
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    if config.discovery_folder.is_none() && !config.lan.allow_loopback {
+        let _ = listener.accept_peer_to_peer();
+    }
+    Ok(listener)
+}
+
+/// The discovery backend for `listener`: a shared folder (tests) or mDNS
+/// (with its peer-to-peer port, if it has one), none without a listener.
 fn discovery(
-    port: Option<u16>,
+    listener: Option<&LanListener>,
     config: &CoreConfig,
     policy: LanPolicy,
 ) -> std::io::Result<Backend> {
-    Ok(match (port, &config.discovery_folder) {
-        (Some(port), Some(folder)) => {
-            Backend::Folder(crate::discovery::Folder::new(folder.clone(), port, policy)?)
-        }
-        (Some(port), None) => Mdns::start(port, policy).map_or(Backend::Off, Backend::Mdns),
-        (None, _) => Backend::Off,
-    })
+    let Some(port) = listener.and_then(|listener| listener.port().ok()) else {
+        return Ok(Backend::Off);
+    };
+    if let Some(folder) = &config.discovery_folder {
+        return Ok(Backend::Folder(crate::discovery::Folder::new(
+            folder.clone(),
+            port,
+            policy,
+        )?));
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let started = Mdns::start(
+        port,
+        listener.and_then(LanListener::peer_to_peer_port),
+        policy,
+    );
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let started = Mdns::start(port, policy);
+    Ok(started.map_or(Backend::Off, Backend::Mdns))
 }
 
 /// The core loop: requests, incoming links, and the tick.

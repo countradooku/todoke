@@ -437,11 +437,11 @@ impl LanListener {
     ///
     /// The peer-to-peer listener could not start.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    pub fn with_peer_to_peer(mut self) -> io::Result<Self> {
-        if self.kind == LinkKind::Lan {
+    pub fn accept_peer_to_peer(&mut self) -> io::Result<()> {
+        if self.kind == LinkKind::Lan && self.peer_to_peer.is_none() {
             self.peer_to_peer = Some(crate::peer_to_peer::Accepting::start()?);
         }
-        Ok(self)
+        Ok(())
     }
 
     /// The port peer-to-peer connections come to, if accepted.
