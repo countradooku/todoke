@@ -32,6 +32,9 @@
 //! failure queues an `Error`, ends every transfer, and closes the engine.
 
 mod ended;
+mod link;
+
+pub use link::LinkError;
 mod incoming;
 mod outgoing;
 mod served;
@@ -42,7 +45,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use todoke_crypto::consent::SessionBinding;
 use todoke_crypto::identity::{KeyId, KeyStore};
-use todoke_proto::link::LinkAbilities;
+use todoke_proto::link::{LinkAbilities, LinkOffer, LinkResult, OFFER_ID_LEN};
 use todoke_proto::session::{ErrorRecord, ErrorScope, FrameType};
 use todoke_proto::time::UnixTime;
 use todoke_proto::transfer::{Cancel, CancelReason, Capabilities, RejectReason, TransferId};
@@ -189,8 +192,8 @@ pub struct TransferEngine<'k, K: KeyStore, S: SendSource, R: ReceiveSink> {
     events: VecDeque<TransferEvent>,
     revocations: VecDeque<Vec<u8>>,
     revocations_seen: usize,
-    /// Whether the peer has sent `LinkAbilities` (§10.2), at most once.
-    link_abilities_seen: bool,
+    /// Link setup (§10.2).
+    link: link::LinkSetup,
     /// Accept nonces seen in this session, both directions (§7.3: unique
     /// per session).
     accept_nonces: BTreeSet<[u8; 16]>,
@@ -251,7 +254,7 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             events: VecDeque::new(),
             revocations: VecDeque::new(),
             revocations_seen: 0,
-            link_abilities_seen: false,
+            link: link::LinkSetup::new(),
             accept_nonces: BTreeSet::new(),
             resume_query: None,
             revalidation_pending: false,
@@ -500,6 +503,8 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             FrameType::CANCEL_ACK => self.on_cancel_ack(body),
             FrameType::ERROR => self.on_transfer_error(body),
             FrameType::LINK_ABILITIES => self.on_link_abilities(body),
+            FrameType::LINK_OFFER => self.on_link_offer(body),
+            FrameType::LINK_ANSWER => self.on_link_answer(body),
             FrameType::REVOKE => {
                 if self.revocations_seen >= MAX_REVOCATIONS {
                     return Err(violation(FailureCode::Limit));
@@ -513,15 +518,105 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         }
     }
 
-    /// The peer's link abilities (§10.2): checked, once per session. This
-    /// engine sets up no link (it never sends its own `LinkAbilities`), so
-    /// the peer must never send a `LinkOffer` or `LinkAnswer` (STATE).
+    /// Whether this device's key is the lexicographically smaller of the
+    /// two full device keys (it hosts a link both can host, §10.2).
+    fn own_key_smaller(&self) -> bool {
+        self.session.local_device().as_bytes() < self.session.peer_device().as_bytes()
+    }
+
+    /// The peer's link abilities (§10.2): checked, once per session.
     fn on_link_abilities(&mut self, body: &[u8]) -> Handled {
-        LinkAbilities::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
-        if core::mem::replace(&mut self.link_abilities_seen, true) {
-            return Err(violation(FailureCode::State));
-        }
+        let smaller = self.own_key_smaller();
+        let step = self.link.on_abilities(body, smaller)?;
+        self.link_step(step);
         Ok(())
+    }
+
+    /// The host's offer (§10.2): checked against the choice, then reported
+    /// for this side to join (or decline).
+    fn on_link_offer(&mut self, body: &[u8]) -> Handled {
+        let step = self.link.on_offer(body)?;
+        self.link_step(step);
+        Ok(())
+    }
+
+    /// The joiner's answer to this side's offer (§10.2).
+    fn on_link_answer(&mut self, body: &[u8]) -> Handled {
+        let step = self.link.on_answer(body)?;
+        self.link_step(step);
+        Ok(())
+    }
+
+    fn link_step(&mut self, step: link::Step) {
+        match step {
+            link::Step::Nothing => {}
+            link::Step::Chosen(choice) => self.event(TransferEvent::LinkChosen(choice)),
+            link::Step::Offered(offer) => self.event(TransferEvent::LinkOffered(offer)),
+            link::Step::Answered(answer) => self.event(TransferEvent::LinkAnswered(answer)),
+        }
+    }
+
+    /// Sends what this endpoint can host and join now (`LinkAbilities`,
+    /// §10.2), at most once per session, after Capabilities. Send it only
+    /// if it can take part; once both sides have, the choice (if any) is
+    /// reported as [`TransferEvent::LinkChosen`].
+    ///
+    /// # Errors
+    ///
+    /// [`LinkError::NotReady`] before Capabilities were exchanged or after
+    /// the engine closed; [`LinkError::AlreadySent`].
+    pub fn send_link_abilities(&mut self, abilities: LinkAbilities) -> Result<(), LinkError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(LinkError::NotReady);
+        }
+        let smaller = self.own_key_smaller();
+        let step = self.link.send_abilities(abilities, smaller)?;
+        self.queue(FrameType::LINK_ABILITIES, abilities.encode().to_vec());
+        self.link_step(step);
+        Ok(())
+    }
+
+    /// Sends the host's offer (§10.2): exactly the chosen kind and
+    /// security, once per session. The secret goes out in a zeroized
+    /// buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`LinkError::NotReady`]; [`LinkError::NotChosen`] unless this side
+    /// is the chosen host; [`LinkError::WrongOffer`]; [`LinkError::Done`].
+    pub fn offer_link(&mut self, offer: &LinkOffer) -> Result<(), LinkError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(LinkError::NotReady);
+        }
+        self.link.offer(offer)?;
+        self.queue_secret(FrameType::LINK_OFFER, offer.encode());
+        Ok(())
+    }
+
+    /// Sends the joiner's answer to the offer it got (§10.2). After
+    /// `Joined`, both sides close this session and the joiner connects over
+    /// the new link; `Declined` and `Failed` end link setup for the session.
+    ///
+    /// # Errors
+    ///
+    /// [`LinkError::NotReady`]; [`LinkError::NoOffer`]; [`LinkError::Done`].
+    pub fn answer_link(
+        &mut self,
+        offer_id: &[u8; OFFER_ID_LEN],
+        result: LinkResult,
+    ) -> Result<(), LinkError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(LinkError::NotReady);
+        }
+        let answer = self.link.answer(offer_id, result)?;
+        self.queue(FrameType::LINK_ANSWER, answer.encode().to_vec());
+        Ok(())
+    }
+
+    /// The link chosen in this session, once both sides sent abilities.
+    #[must_use]
+    pub const fn link_choice(&self) -> Option<todoke_proto::link::LinkChoice> {
+        self.link.choice()
     }
 
     /// A transfer-scoped `Error` from the peer ends that transfer (§12);

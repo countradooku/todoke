@@ -319,6 +319,14 @@ pub enum TransferEvent {
         /// The content suite new files use.
         suite: ContentSuite,
     },
+    /// Both sides sent `LinkAbilities` and a link fits (§10.2): the chosen
+    /// host may offer it (for a transfer the user started or accepted).
+    LinkChosen(todoke_proto::link::LinkChoice),
+    /// The host's offer, checked against the choice: join it (or decline)
+    /// and answer. It holds the link's secret.
+    LinkOffered(Box<todoke_proto::link::LinkOffer>),
+    /// The joiner's answer to this side's offer.
+    LinkAnswered(todoke_proto::link::LinkAnswer),
     /// A validated offer awaits the user's decision (§7.2). Accept or
     /// reject it within 300 seconds.
     OfferReceived(Box<OfferView>),
