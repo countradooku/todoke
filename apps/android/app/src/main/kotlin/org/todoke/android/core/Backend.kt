@@ -14,10 +14,26 @@ import org.todoke.ffi.Offer
 import org.todoke.ffi.Status
 import org.todoke.ffi.Stranger
 import org.todoke.ffi.Transfer
+import org.todoke.ffi.UwbController
 
-/** A QR pairing offer to draw: a square of modules, true for dark. */
-class QrCode(val width: Int, private val modules: BooleanArray, val expiresAt: Long) {
+/** A QR pairing offer to draw: a square of modules, true for dark. `nfc`
+ * serves the same offer to an NFC reader while it shows (tap to pair). */
+class QrCode(
+    val width: Int,
+    private val modules: BooleanArray,
+    val expiresAt: Long,
+    val nfc: NfcTag? = null,
+) {
     fun dark(x: Int, y: Int): Boolean = modules[y * width + x]
+}
+
+/** The tag an NFC reader reads while a QR offer shows (host card
+ * emulation): command APDUs in, responses out. Close it when the offer
+ * goes. */
+interface NfcTag : AutoCloseable {
+    fun respond(apdu: ByteArray): ByteArray
+
+    override fun close() {}
 }
 
 /** A pairing code to show; the user reads it out to the other device. */
@@ -45,6 +61,9 @@ interface Backend {
     /** Pairs with the device whose QR text was scanned. */
     suspend fun scanQr(text: String): String
 
+    /** Pairs with the device whose NFC tag was read (its NDEF message). */
+    suspend fun scanNfc(message: ByteArray): String
+
     suspend fun showCode(): PairingCode
 
     suspend fun strangers(): List<Stranger>
@@ -63,6 +82,19 @@ interface Backend {
     suspend fun decline(transfer: String)
 
     suspend fun cancel(transfer: String)
+
+    /** This device can be pointed at with ultra-wideband now, or not. */
+    suspend fun setRangingReady(ready: Boolean)
+
+    /** Points at nearby contacts with these prepared controllers. */
+    suspend fun pointStart(controllers: List<UwbController>)
+
+    suspend fun pointStop()
+
+    /** Ranges with `contact`, which points at this device, at `controlee`. */
+    suspend fun acceptRanging(contact: String, sessionId: UInt, controlee: UShort)
+
+    suspend fun refuseRanging(contact: String, sessionId: UInt)
 
     /** The core's events from now on; ends when the core stops. */
     fun events(): Flow<CoreEvent>

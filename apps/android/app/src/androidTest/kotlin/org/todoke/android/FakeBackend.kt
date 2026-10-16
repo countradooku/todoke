@@ -120,6 +120,28 @@ class FakeBackend : Backend {
         requests += "cancel $transfer"
     }
 
+    override suspend fun scanNfc(message: ByteArray): String = scanQr("nfc")
+
+    override suspend fun setRangingReady(ready: Boolean) {
+        requests += "ranging-ready $ready"
+    }
+
+    override suspend fun pointStart(controllers: List<org.todoke.ffi.UwbController>) {
+        requests += "point-start ${controllers.map { it.address }}"
+    }
+
+    override suspend fun pointStop() {
+        requests += "point-stop"
+    }
+
+    override suspend fun acceptRanging(contact: String, sessionId: UInt, controlee: UShort) {
+        requests += "accept-ranging $sessionId $controlee"
+    }
+
+    override suspend fun refuseRanging(contact: String, sessionId: UInt) {
+        requests += "refuse-ranging $sessionId"
+    }
+
     override fun events(): Flow<CoreEvent> = events
 
     companion object {

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Point to share (PROTOCOL §10.4): ultra-wideband ranging, in the play
+     build only (androidx.core.uwb needs Play services). -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.UWB_RANGING" />
+    <uses-feature android:name="android.hardware.uwb" android:required="false" />
+</manifest>

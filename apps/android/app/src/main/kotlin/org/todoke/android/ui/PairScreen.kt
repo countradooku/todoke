@@ -1,5 +1,7 @@
 // Pairing (PROTOCOL §3): show a QR code (drawn from the core's modules; its
 // text never reaches the app), scan another device's, or pair with a code.
+// While the QR code shows, an NFC reader can take the same offer by tapping
+// (§3.1.1); the scan tab reads such taps too.
 // While a secret is on screen the window is FLAG_SECURE: no screenshot, no
 // thumbnail in recent apps. Leaving stops the pairing offer.
 
@@ -8,6 +10,7 @@ package org.todoke.android.ui
 import android.app.Activity
 import android.view.WindowManager
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.LocalActivity
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -41,7 +44,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -54,6 +56,7 @@ import org.todoke.android.R
 import org.todoke.android.core.Backend
 import org.todoke.android.core.PairingCode
 import org.todoke.android.core.QrCode
+import org.todoke.android.radio.NfcPairing
 import org.todoke.ffi.Stranger
 
 @Composable
@@ -84,7 +87,7 @@ fun PairScreen(backend: Backend, onDone: () -> Unit, startTab: Int = 0) {
 /** Marks the window secure while shown. */
 @Composable
 private fun SecureWindow() {
-    val activity = LocalContext.current as? Activity ?: return
+    val activity = LocalActivity.current ?: return
     DisposableEffect(activity) {
         activity.window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         onDispose { activity.window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE) }
@@ -95,10 +98,22 @@ private fun SecureWindow() {
 private fun ShowQr(backend: Backend) {
     var qr by remember { mutableStateOf<QrCode?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
+    val activity = LocalActivity.current
     LaunchedEffect(Unit) {
         runCatching { backend.showQr() }.onSuccess { qr = it }.onFailure { error = it.message }
     }
+    // The same offer by NFC, only while it is on screen.
+    val tag = qr?.nfc
+    if (activity != null && tag != null) {
+        DisposableEffect(tag) {
+            NfcPairing.serve(activity, tag)
+            onDispose { NfcPairing.stop(activity, tag) }
+        }
+    }
     Text(stringResource(R.string.pair_show_qr_hint))
+    if (tag != null && activity != null && NfcPairing.enabled(activity)) {
+        Text(stringResource(R.string.pair_tap_hint), style = MaterialTheme.typography.bodySmall)
+    }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     qr?.let { QrView(it) }
 }
@@ -132,20 +147,35 @@ private fun ScanQr(backend: Backend, onDone: () -> Unit) {
     val scope = rememberCoroutineScope()
     var error by remember { mutableStateOf<String?>(null) }
     var busy by remember { mutableStateOf(false) }
+    val activity = LocalActivity.current
+    fun pair(attempt: suspend () -> String) {
+        if (busy) return
+        busy = true
+        scope.launch {
+            runCatching { attempt() }
+                .onSuccess { onDone() }
+                .onFailure {
+                    error = it.message
+                    busy = false
+                }
+        }
+    }
+    // Taps on a device showing its QR code (NFC reader mode, this screen only).
+    if (activity != null) {
+        DisposableEffect(activity) {
+            val stop = NfcPairing.read(activity) { message ->
+                activity.runOnUiThread { pair { backend.scanNfc(message) } }
+            }
+            onDispose { stop() }
+        }
+    }
     Text(stringResource(R.string.pair_scan_hint))
+    if (activity != null && NfcPairing.enabled(activity)) {
+        Text(stringResource(R.string.pair_tap_scan_hint), style = MaterialTheme.typography.bodySmall)
+    }
     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     if (!busy) {
-        QrScanner(onScanned = { text ->
-            busy = true
-            scope.launch {
-                runCatching { backend.scanQr(text) }
-                    .onSuccess { onDone() }
-                    .onFailure {
-                        error = it.message
-                        busy = false
-                    }
-            }
-        })
+        QrScanner(onScanned = { text -> pair { backend.scanQr(text) } })
     }
 }
 

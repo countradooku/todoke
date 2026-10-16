@@ -16,9 +16,30 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.CAMERA" />
+    <!-- Direct Wi-Fi links (PROTOCOL §10.2): Wi-Fi Direct groups, Wi-Fi
+         Aware data paths, and joining hotspots. Android 13 and later ask for
+         nearby Wi-Fi devices, never for location; before, Wi-Fi Direct and
+         Aware need fine location (never in the background). -->
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="33" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="32" />
+    <uses-permission
+        android:name="android.permission.ACCESS_COARSE_LOCATION"
+        android:maxSdkVersion="32" />
+    <!-- NFC tap-to-pair (PROTOCOL §3.1.1). -->
+    <uses-permission android:name="android.permission.NFC" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
 
     <uses-feature android:name="android.hardware.camera.any" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi.direct" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi.aware" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc.hce" android:required="false" />
 
     <!-- No backups: a restored profile could reuse a ratchet generation
          (PROTOCOL §16 O3), and the key is bound to this device. -->
@@ -60,6 +81,20 @@
             android:name=".core.TransferService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+
+        <!-- The NFC tag a shown QR offer is served as (host card emulation):
+             it answers only while the offer is on screen. -->
+        <service
+            android:name=".radio.PairingTagService"
+            android:exported="true"
+            android:permission="android.permission.BIND_NFC_SERVICE">
+            <intent-filter>
+                <action android:name="android.nfc.cardemulation.action.HOST_APDU_SERVICE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.nfc.cardemulation.host_apdu_service"
+                android:resource="@xml/pairing_tag" />
+        </service>
 
         <service
             android:name=".tile.VisibilityTile"

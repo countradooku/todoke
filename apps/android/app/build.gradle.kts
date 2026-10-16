@@ -103,6 +103,9 @@ dependencies {
     implementation(libs.profileinstaller)
     baselineProfile(project(":baselineprofile"))
     implementation(libs.coroutines.android)
+    // Pointing with ultra-wideband: androidx.core.uwb depends on Google
+    // Play services, so the fdroid flavor has no pointing.
+    "playImplementation"(libs.uwb)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

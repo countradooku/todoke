@@ -30,6 +30,8 @@ class TransferService : LifecycleService() {
             0
         }
         ServiceCompat.startForeground(this, NOTIFICATION, notification(0, 0), type)
+        // Direct links may be set up while a transfer runs, in the background too.
+        (application as TodokeApplication).radios.transferRunning = true
         lifecycleScope.launch { watch() }
         return START_NOT_STICKY
     }
@@ -48,7 +50,13 @@ class TransferService : LifecycleService() {
         }
     }
 
+    override fun onDestroy() {
+        (application as TodokeApplication).radios.transferRunning = false
+        super.onDestroy()
+    }
+
     private fun stop() {
+        (application as TodokeApplication).radios.transferRunning = false
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }

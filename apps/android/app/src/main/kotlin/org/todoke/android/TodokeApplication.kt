@@ -1,6 +1,7 @@
 // The process-wide state: the core, started once (off the main thread, after
-// the user unlocks when the key is gated), the export of received files to
-// the folder the user chose, and the settings the app keeps.
+// the user unlocks when the key is gated), its direct Wi-Fi links and
+// pointing, the export of received files to the folder the user chose, and
+// the settings the app keeps.
 
 package org.todoke.android
 
@@ -23,6 +24,10 @@ import org.todoke.android.core.CoreBackend
 import org.todoke.android.core.Exporter
 import org.todoke.android.core.SafFolder
 import org.todoke.android.core.TodokeNotifier
+import org.todoke.android.radio.AndroidLinks
+import org.todoke.android.radio.Pointing
+import org.todoke.android.radio.Radios
+import org.todoke.android.radio.platformUwb
 import org.todoke.ffi.Core
 import org.todoke.ffi.CoreEvent
 import org.todoke.ffi.Guarded
@@ -55,6 +60,15 @@ class TodokeApplication : Application() {
 
     private var guarded: Guarded<Core>? = null
 
+    /** When the radios may be used (a screen shows, or a transfer runs). */
+    lateinit var radios: Radios
+        private set
+
+    /** Point to share, once the core runs (none in tests). */
+    @Volatile
+    var pointing: Pointing? = null
+        private set
+
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     private val received by lazy { File(filesDir, "received") }
@@ -63,6 +77,7 @@ class TodokeApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        radios = Radios(this)
         Channels.create(this)
         // The key is gated when the device has a lock screen: decided once,
         // when the profile's key is made.
@@ -109,6 +124,8 @@ class TodokeApplication : Application() {
             val core = Core(settings, keys)
             try {
                 core.setNotifier(TodokeNotifier(this@TodokeApplication))
+                // Direct Wi-Fi links (§10.2), set up only for transfers.
+                core.setLinks(AndroidLinks(this@TodokeApplication, radios::active))
             } catch (error: Throwable) {
                 // Never leave a core running that nothing holds: a retry
                 // would start a second one on the same profile.
@@ -125,6 +142,7 @@ class TodokeApplication : Application() {
             // Whatever finished while the app was away, then each
             // incoming transfer as it ends.
             val backend = CoreBackend(held, this, exporter.receiving)
+            pointing = Pointing(this, backend, platformUwb(this), radios, scope)
             scope.launch {
                 exportReceived(backend)
                 held.events().collect {
@@ -195,6 +213,11 @@ class Prefs(application: Application) {
         store.edit().putString("shortcut-key", android.util.Base64.encodeToString(key, android.util.Base64.NO_WRAP)).apply()
         return key
     }
+
+    /** Whether the permission for `key` was explained (it is, once). */
+    fun explained(key: String): Boolean = store.getBoolean("explained-$key", false)
+
+    fun setExplained(key: String) = store.edit().putBoolean("explained-$key", true).apply()
 
     /** The folder received files are exported to (a SAF tree URI). */
     var exportTree: String?
