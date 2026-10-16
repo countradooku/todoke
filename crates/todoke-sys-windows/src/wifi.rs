@@ -9,10 +9,9 @@
 //! hexadecimal form, so no text reaches the profile's XML unescaped; the
 //! passphrase is checked to be the §10.2 alphabet first.
 //!
-//! Hosting is not offered here: Mobile Hotspot is Internet Connection
-//! Sharing (NAT and a DNS proxy, which §10.2 forbids a host), and what the
-//! Wi-Fi Direct legacy access point's DHCP offers its clients (a router,
-//! DNS) is undocumented (docs/adr/0018-desktop-links.md).
+//! Hosting is in [`crate::wifi_host`] (the Wi-Fi Direct legacy access
+//! point), never Mobile Hotspot: that is Internet Connection Sharing (NAT
+//! and a DNS proxy, which §10.2 forbids a host).
 //!
 //! The only unsafe code is the Win32 calls below; each block says why it
 //! is sound. Buffers the system allocates are freed with `WlanFreeMemory`.
@@ -453,6 +452,84 @@ fn adapter(guid: &GUID) -> Option<(Ipv4Addr, Ipv4Addr, u32)> {
         return (host != local && on_link(local, prefix, host)).then_some((local, host, index));
     }
     None
+}
+
+/// `IF_TYPE_IEEE80211`.
+const IEEE80211: u32 = 71;
+/// `IfOperStatusUp`.
+const UP: i32 = 1;
+
+/// The Wi-Fi Direct virtual adapters that are up with an IPv4 address
+/// (not link-local): each address and the adapter's index.
+pub(crate) fn direct_adapters() -> Vec<(Ipv4Addr, u32)> {
+    let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    let mut size = 16 * 1024_u32;
+    let mut buffer: Vec<u64>;
+    loop {
+        buffer = vec![0; (size as usize).div_ceil(8)];
+        // SAFETY: as in `adapter`.
+        let status = unsafe {
+            GetAdaptersAddresses(
+                u32::from(AF_INET),
+                flags,
+                core::ptr::null(),
+                buffer.as_mut_ptr().cast(),
+                &raw mut size,
+            )
+        };
+        match status {
+            NO_ERROR => break,
+            BUFFER_OVERFLOW if size <= 1 << 20 => {}
+            _ => return Vec::new(),
+        }
+    }
+    let mut found = Vec::new();
+    let mut next = buffer.as_ptr().cast::<IP_ADAPTER_ADDRESSES_LH>();
+    while !next.is_null() {
+        // SAFETY: as in `adapter`.
+        let adapter = unsafe { &*next };
+        next = adapter.Next;
+        if adapter.IfType != IEEE80211
+            || adapter.OperStatus != UP
+            || !wide_contains(adapter.Description, "Wi-Fi Direct")
+        {
+            continue;
+        }
+        let mut unicast = adapter.FirstUnicastAddress;
+        while !unicast.is_null() {
+            // SAFETY: a node of the list in `buffer`.
+            let node = unsafe { &*unicast };
+            unicast = node.Next;
+            if let Some(ip) = ipv4(node.Address.lpSockaddr.cast(), node.Address.iSockaddrLength)
+                && !ip.is_link_local()
+            {
+                // SAFETY: as in `adapter`.
+                let index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
+                found.push((ip, index));
+                break;
+            }
+        }
+    }
+    found
+}
+
+/// Whether the NUL-terminated wide string `text` (at most 256 units read)
+/// contains `needle`.
+fn wide_contains(text: *const u16, needle: &str) -> bool {
+    if text.is_null() {
+        return false;
+    }
+    let mut units = Vec::new();
+    for at in 0..256 {
+        // SAFETY: `text` is NUL-terminated (the system wrote it); reading
+        // stops at the NUL or the bound.
+        let unit = unsafe { *text.add(at) };
+        if unit == 0 {
+            break;
+        }
+        units.push(unit);
+    }
+    String::from_utf16_lossy(&units).contains(needle)
 }
 
 /// Whether `host` is inside `local`'s network of `prefix` bits.

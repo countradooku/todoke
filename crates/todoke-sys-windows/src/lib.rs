@@ -36,3 +36,5 @@ pub mod package;
 pub mod socket;
 #[cfg(windows)]
 pub mod wifi;
+#[cfg(all(windows, feature = "host"))]
+pub mod wifi_host;

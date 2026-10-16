@@ -1,10 +1,12 @@
 //! This machine's part in direct Wi-Fi links (PROTOCOL §10.2), for the
 //! core: joining a Wi-Fi Direct group or a hotspot another device hosts,
 //! through `NetworkManager` on Linux and Native Wifi on Windows, with the
-//! security the device supports (WPA3 where it has SAE). Desktops host
-//! nothing and join no Wi-Fi Aware data path; macOS takes no part (its
-//! public join API saves the network). docs/adr/0018-desktop-links.md
-//! says why.
+//! security the device supports (WPA3 where it has SAE), and on Windows
+//! hosting Wi-Fi Direct groups (the legacy access point, which forwards
+//! nothing). Linux hosts nothing (`NetworkManager`'s shared mode is NAT and
+//! DNS); no desktop joins a Wi-Fi Aware data path; macOS takes no part (its
+//! public join API saves the network). docs/adr/0018-desktop-links.md and
+//! docs/adr/0019-android-radios.md say why.
 
 use std::sync::Arc;
 
@@ -30,13 +32,23 @@ mod imp {
     #[cfg(windows)]
     use todoke_sys_windows::wifi;
 
+    /// How long a group may take to come up and get its address.
+    #[cfg(windows)]
+    const HOST_WITHIN: std::time::Duration = std::time::Duration::from_secs(30);
+
     struct Joiner {
         device: wifi::WifiDevice,
+        /// Hosts Wi-Fi Direct groups (Windows).
+        hosts: bool,
     }
 
     pub(super) fn platform() -> Option<Arc<dyn LinkPlatform>> {
         let device = wifi::probe()?;
-        Some(Arc::new(Joiner { device }))
+        #[cfg(windows)]
+        let hosts = todoke_sys_windows::wifi_host::available();
+        #[cfg(not(windows))]
+        let hosts = false;
+        Some(Arc::new(Joiner { device, hosts }))
     }
 
     impl Joiner {
@@ -65,9 +77,32 @@ mod imp {
             if self.device.sae != Some(false) {
                 security.insert(0, LinkSecurity::Wpa3);
             }
-            LinkAbilities::new(&[], &[LinkKind::WifiDirect, LinkKind::Hotspot], &security)
+            let host: &[LinkKind] = if self.hosts {
+                &[LinkKind::WifiDirect]
+            } else {
+                &[]
+            };
+            LinkAbilities::new(host, &[LinkKind::WifiDirect, LinkKind::Hotspot], &security)
         }
 
+        #[cfg(windows)]
+        fn host(&self, request: &HostRequest) -> io::Result<LinkLease> {
+            if !self.hosts
+                || request.kind != LinkKind::WifiDirect
+                || request.security != LinkSecurity::Wpa2
+            {
+                return Err(io::ErrorKind::Unsupported.into());
+            }
+            let hosted = todoke_sys_windows::wifi_host::host(
+                &request.ssid,
+                &request.secret,
+                HOST_WITHIN,
+                &request.cancel,
+            )?;
+            Ok(LinkLease::new(hosted.local, None, hosted.interface, hosted))
+        }
+
+        #[cfg(not(windows))]
         fn host(&self, _: &HostRequest) -> io::Result<LinkLease> {
             Err(io::ErrorKind::Unsupported.into())
         }
