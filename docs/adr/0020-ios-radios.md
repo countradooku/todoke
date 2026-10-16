@@ -89,13 +89,20 @@ included:
 - `todoke-sys-macos::p2p` makes and accepts TCP connections with
   Network.framework's C API (peer-to-peer included) and bridges each to a
   local socket pair the transport reads as a LAN link (`TcpLink`), with
-  backpressure both ways and end of stream as FIN. Network.framework is
+  backpressure both ways and end of stream as FIN. Nothing waits on a
+  connection's dispatch queue: a writer thread writes what arrives to the
+  pair and only then receives again, a sender thread sends what the pair
+  holds one buffer at a time. The link owns its connection: dropping it
+  cancels the connection once the last bytes are sent (at most 10 seconds
+  later), so a peer that goes quiet keeps nothing. Network.framework is
   loaded at runtime (`dlopen`), so no consumer of the static library has to
   link it.
 - The LAN listener also accepts peer-to-peer connections on a port of its
   own; the TCP connector reaches link-local addresses scoped to a
   peer-to-peer interface (`awdl*`, `llw*`) through Network.framework. The
-  LAN policy checks every remote address, both ways.
+  LAN policy checks every remote address, both ways; an incoming connection
+  from a source it refuses is cancelled before it gets a thread, and at
+  most 16 get ready at once.
 - Discovery on Apple platforms is the system's Bonjour (macOS too, from
   `mdns-sd` before: only Bonjour reaches peer-to-peer Wi-Fi). Browsing,
   resolving, and lookups include peer-to-peer; on peer-to-peer interfaces
@@ -146,15 +153,19 @@ protocol).
 ### Testing
 
 - `todoke-sys-macos`: the Network.framework bridge over loopback (bytes both
-  ways across chunks, FIN both ways, refusals failing at once, accept
-  timeouts, sockaddr conversions, runtime loading); the routing table read
-  (synthetic tables, the real one).
+  ways across chunks, a megabyte each way at once with nobody reading, FIN
+  both ways, a dropped end freeing its pump while the peer is quiet or
+  still sending, refusals failing at once, accept timeouts, sources not
+  admitted, a full backlog, sockaddr conversions, runtime loading); the
+  routing table read (synthetic tables, the real one).
 - Transport: a peer-to-peer listener's bridged links are LAN links; the
   policy still refuses sources.
 - The FFI adapter fills a join's host from the gateway.
-- Peer ranging in proto, engine (including an accept of the other kind),
-  core, and FFI; the record fuzzed.
-- The iOS app's unit and UI tests on iOS 26. Radios themselves (AWDL,
+- Peer ranging in proto, engine (including an accept of the other kind and
+  tokens out of bounds), core, and FFI; the record fuzzed.
+- The iOS app's unit and UI tests on iOS 26, `Pointing` against the
+  scripted core (not pointable without precise distance, a contact refused
+  or answered, readiness and pointing ending off screen). Radios themselves (AWDL,
   joining, Nearby Interaction) need devices: `docs/qa/radios.md`.
 
 ## Consequences
@@ -174,9 +185,21 @@ protocol).
 - **Peer-to-peer interfaces are recognized by name** (`awdl*`, `llw*`),
   which is not API. Fix: confirm in the lab; Apple's resolve callbacks
   report the interface, which could be kept with each address instead.
+- **An incoming AWDL connection's address may come without its scope**
+  (unverified: loopback tests carry none). A link-local source the policy
+  cannot place would be refused. Fix: check in the lab; if so, scope it
+  with the connection's path interface before the policy check.
 - **The peer-to-peer listener listens on every interface** (Network.framework
   has no peer-to-peer-only listener), so its port also answers on the LAN,
-  under the same policy and handshake. Fix: none needed beyond the policy.
+  under the same policy (checked before any thread), the 16 at once, and
+  the handshake. Fix: none needed beyond these; no switch to turn it off,
+  since the same policy already guards the LAN port.
+- **Each bridged connection costs two threads** while it lives (and one
+  while it gets ready). The session layer bounds unauthenticated
+  connections (§13). Fix: an event-driven pump if the lab shows thread
+  pressure.
+- **A dropped connection can linger up to 10 seconds** sending its last
+  bytes to a peer that does not read them. Fix: none needed (bounded).
 - **The bridge copies every byte through a socket pair** (and a dispatch
   data buffer): more CPU than direct TCP. Fix: measure AWDL throughput in
   the lab; a zero-copy path if it is the bottleneck.
@@ -194,6 +217,10 @@ protocol).
   interoperable.
 - **Discovery tokens cross the FFI as bytes** and sit in event queues
   unzeroized, like the STS keys (ADR 0019). Fix: as there.
+- **Pointing's ranging with Nearby Interaction is untested off devices:**
+  the simulator gives tokens but ranges with nothing, so suspension,
+  invalidation, and a peer leaving are handled but unexercised. Fix:
+  `docs/qa/radios.md`.
 
 ## Sources
 
