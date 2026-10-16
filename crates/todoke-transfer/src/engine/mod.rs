@@ -33,8 +33,10 @@
 
 mod ended;
 mod link;
+mod ranging;
 
 pub use link::LinkError;
+pub use ranging::RangingError;
 mod incoming;
 mod outgoing;
 mod served;
@@ -194,6 +196,8 @@ pub struct TransferEngine<'k, K: KeyStore, S: SendSource, R: ReceiveSink> {
     revocations_seen: usize,
     /// Link setup (§10.2).
     link: link::LinkSetup,
+    /// Pointing (§10.4).
+    pointing: ranging::Pointing,
     /// Accept nonces seen in this session, both directions (§7.3: unique
     /// per session).
     accept_nonces: BTreeSet<[u8; 16]>,
@@ -255,6 +259,7 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             revocations: VecDeque::new(),
             revocations_seen: 0,
             link: link::LinkSetup::new(),
+            pointing: ranging::Pointing::default(),
             accept_nonces: BTreeSet::new(),
             resume_query: None,
             revalidation_pending: false,
@@ -399,6 +404,9 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         for outgoing in self.outgoing.values() {
             deadline = deadline.min(outgoing.deadline());
         }
+        if let Some(at) = self.pointing.deadline() {
+            deadline = deadline.min(at);
+        }
         deadline
     }
 
@@ -452,9 +460,13 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
                     Ok(())
                 }
             }
-            Phase::Ready(_) => self
-                .poll_incoming(now)
-                .and_then(|()| self.poll_outgoing(now)),
+            Phase::Ready(_) => {
+                if let Some(session_id) = self.pointing.expire(now) {
+                    self.event(TransferEvent::RangingStopped { session_id });
+                }
+                self.poll_incoming(now)
+                    .and_then(|()| self.poll_outgoing(now))
+            }
         };
         self.after(result, now)
     }
@@ -505,6 +517,21 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
             FrameType::LINK_ABILITIES => self.on_link_abilities(body),
             FrameType::LINK_OFFER => self.on_link_offer(body),
             FrameType::LINK_ANSWER => self.on_link_answer(body),
+            FrameType::RANGING_READY => {
+                let step = self.pointing.on_ready(body)?;
+                self.ranging_step(step);
+                Ok(())
+            }
+            FrameType::RANGING_START => {
+                let step = self.pointing.on_start(body, now)?;
+                self.ranging_step(step);
+                Ok(())
+            }
+            FrameType::RANGING_STOP => {
+                let step = self.pointing.on_stop(body)?;
+                self.ranging_step(step);
+                Ok(())
+            }
             FrameType::REVOKE => {
                 if self.revocations_seen >= MAX_REVOCATIONS {
                     return Err(violation(FailureCode::Limit));
@@ -611,6 +638,68 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         }
         let answer = self.link.answer(offer_id, result)?;
         self.queue(FrameType::LINK_ANSWER, answer.encode().to_vec());
+        Ok(())
+    }
+
+    fn ranging_step(&mut self, step: ranging::Step) {
+        self.event(match step {
+            ranging::Step::PeerReady(ready) => TransferEvent::RangingReady(ready),
+            ranging::Step::Requested(start) => TransferEvent::RangingRequested(start),
+            ranging::Step::Stopped(session_id) => TransferEvent::RangingStopped { session_id },
+        });
+    }
+
+    /// Says this side can range as a controlee now (`RangingReady`,
+    /// §10.4), at most once per session, after Capabilities.
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::AlreadySent`].
+    pub fn send_ranging_ready(
+        &mut self,
+        ready: todoke_proto::ranging::RangingReady,
+    ) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        self.pointing.send_ready(ready)?;
+        self.queue(FrameType::RANGING_READY, ready.encode().to_vec());
+        Ok(())
+    }
+
+    /// Starts ranging as the controller (`RangingStart`, §10.4): only after
+    /// the peer's `RangingReady`, with a configuration it announced, one at
+    /// a time, at most 8 per session. The key goes out in a zeroized
+    /// buffer.
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::PeerNotReady`];
+    /// [`RangingError::Busy`].
+    pub fn start_ranging(
+        &mut self,
+        start: &todoke_proto::ranging::RangingStart,
+        now: Duration,
+    ) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        self.pointing.start(start, now)?;
+        self.queue_secret(FrameType::RANGING_START, start.encode());
+        Ok(())
+    }
+
+    /// Stops the running ranging (`RangingStop`, §10.4).
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::NotRunning`].
+    pub fn stop_ranging(&mut self, session_id: u32) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        let stop = self.pointing.stop(session_id)?;
+        self.queue(FrameType::RANGING_STOP, stop.encode().to_vec());
         Ok(())
     }
 

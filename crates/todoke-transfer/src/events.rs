@@ -327,6 +327,17 @@ pub enum TransferEvent {
     LinkOffered(Box<todoke_proto::link::LinkOffer>),
     /// The joiner's answer to this side's offer.
     LinkAnswered(todoke_proto::link::LinkAnswer),
+    /// The peer can range as a controlee now (§10.4).
+    RangingReady(todoke_proto::ranging::RangingReady),
+    /// The peer starts ranging with this side as the controlee. It holds
+    /// the STS key.
+    RangingRequested(Box<todoke_proto::ranging::RangingStart>),
+    /// The ranging with this session ID ended (stopped by the peer, or its
+    /// time was up).
+    RangingStopped {
+        /// The ranging session ID.
+        session_id: u32,
+    },
     /// A validated offer awaits the user's decision (§7.2). Accept or
     /// reject it within 300 seconds.
     OfferReceived(Box<OfferView>),
