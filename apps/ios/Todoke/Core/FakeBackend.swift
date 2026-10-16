@@ -147,6 +147,16 @@ final class FakeBackend: Backend, @unchecked Sendable {
         record("background \(background)")
     }
 
+    func setRangingReady(_ configs: UInt8?) async throws { record("ranging-ready \(configs.map(String.init) ?? "none")") }
+    func pointStartPeer(tokens: [Data]) async throws { record("point-start \(tokens.count)") }
+    func pointStop() async throws { record("point-stop") }
+
+    func acceptPeerRanging(contact: String, sessionId: UInt32, token: Data) async throws {
+        record("accept-ranging \(sessionId)")
+    }
+
+    func refuseRanging(contact: String, sessionId: UInt32) async throws { record("refuse-ranging \(sessionId)") }
+
     func send(to contact: String, documents: [Picked]) async throws -> String {
         record("send \(documents.count)")
         return String(repeating: "f9", count: 16)

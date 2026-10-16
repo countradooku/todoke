@@ -94,6 +94,23 @@ final class CoreBackend: Backend, @unchecked Sendable {
     func decline(_ transfer: String) async throws { try await call { try $0.transfer(id: transfer).decline() } }
     func cancel(_ transfer: String) async throws { try await call { try $0.transfer(id: transfer).cancel() } }
 
+    func setRangingReady(_ configs: UInt8?) async throws {
+        try await call { core in
+            if let configs { try core.setRangingReady(configs: configs) } else { try core.clearRangingReady() }
+        }
+    }
+
+    func pointStartPeer(tokens: [Data]) async throws { try await call { try $0.pointStartPeer(tokens: tokens) } }
+    func pointStop() async throws { try await call { try $0.pointStop() } }
+
+    func acceptPeerRanging(contact: String, sessionId: UInt32, token: Data) async throws {
+        try await call { try $0.acceptPeerRanging(contact: contact, sessionId: sessionId, token: token) }
+    }
+
+    func refuseRanging(contact: String, sessionId: UInt32) async throws {
+        try await call { try $0.refuseRanging(contact: contact, sessionId: sessionId) }
+    }
+
     func events() -> AsyncStream<CoreEvent> {
         let core = core
         return AsyncStream { continuation in

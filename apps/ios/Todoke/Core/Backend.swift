@@ -51,6 +51,15 @@ protocol Backend: AnyObject, Sendable {
     func accept(_ transfer: String, files: [UInt32]) async throws
     func decline(_ transfer: String) async throws
     func cancel(_ transfer: String) async throws
+    /// Whether this iPhone can be pointed at now (PROTOCOL §10.4): the
+    /// configurations it ranges with (bit 1, Apple peer ranging), or none.
+    func setRangingReady(_ configs: UInt8?) async throws
+    /// Points at nearby iPhones with these prepared sessions' tokens.
+    func pointStartPeer(tokens: [Data]) async throws
+    func pointStop() async throws
+    /// Ranges with `contact`, which points at this iPhone, with `token`.
+    func acceptPeerRanging(contact: String, sessionId: UInt32, token: Data) async throws
+    func refuseRanging(contact: String, sessionId: UInt32) async throws
     /// The core's events until it stops.
     func events() -> AsyncStream<CoreEvent>
 }
