@@ -201,7 +201,10 @@ mod tests {
         let cases = [
             (StartError::Disabled, "Disabled"),
             (StartError::Profile(ProfileError::StorageKey), "KeyStore"),
-            (StartError::Profile(ProfileError::StorageKeyRefused), "Locked"),
+            (
+                StartError::Profile(ProfileError::StorageKeyRefused),
+                "Locked",
+            ),
             (StartError::Profile(ProfileError::Random), "Profile"),
             (
                 StartError::Profile(ProfileError::Corrupt("the identity")),
