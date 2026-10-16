@@ -6,8 +6,8 @@
 use core::time::Duration;
 
 use todoke_proto::ranging::{
-    CONFIG_PROVISIONED_DS_TWR, MAX_STARTS, RangingAccept, RangingReady, RangingStart, RangingStop,
-    STS_KEY_LEN,
+    CONFIG_APPLE_PEER, CONFIG_PROVISIONED_DS_TWR, MAX_STARTS, PeerRanging, RangingAccept,
+    RangingReady, RangingStart, RangingStop, STS_KEY_LEN,
 };
 use todoke_proto::session::FrameType;
 use zeroize::Zeroizing;
@@ -371,5 +371,110 @@ fn each_side_starts_eight() -> TestResult {
     }
     link.a.start_ranging(&start(100), link.now)?;
     link.settle()?;
+    Ok(())
+}
+
+/// Apple peer ranging: tokens instead of addresses, only toward a peer
+/// that announced it, accepted once with the controlee's own token; an
+/// accept of the other kind is STATE; the starts are the same eight.
+#[test]
+fn peer_ranging_runs_like_fira() -> TestResult {
+    let fixture = fixture()?;
+    let apple = RangingReady {
+        configs: CONFIG_APPLE_PEER,
+    };
+    let peer = |session_id, byte| PeerRanging {
+        session_id,
+        token: vec![byte; 200],
+    };
+    let mut fira = link(&fixture)?;
+    fira.b.send_ranging_ready(READY)?;
+    fira.settle()?;
+    // Bob ranges with FiRa only.
+    assert_eq!(
+        fira.a.start_peer_ranging(&peer(5, 1), fira.now),
+        Err(RangingError::PeerNotReady)
+    );
+    let mut apple_link = link(&fixture)?;
+    apple_link.b.send_ranging_ready(apple)?;
+    apple_link.settle()?;
+    assert_eq!(
+        apple_link.a.start_ranging(&start(4), apple_link.now),
+        Err(RangingError::PeerNotReady)
+    );
+    apple_link
+        .a
+        .start_peer_ranging(&peer(5, 1), apple_link.now)?;
+    apple_link.settle()?;
+    let requested = apple_link.b_events.iter().find_map(|event| match event {
+        TransferEvent::PeerRangingRequested(start) => Some(start.clone()),
+        _ => None,
+    });
+    assert_eq!(requested.as_deref(), Some(&peer(5, 1)));
+    // A FiRa accept for it, or an empty token: refused.
+    assert_eq!(
+        apple_link.b.accept_ranging(5, 0x2222),
+        Err(RangingError::NotRunning)
+    );
+    assert_eq!(
+        apple_link.b.accept_peer_ranging(5, Vec::new()),
+        Err(RangingError::Address)
+    );
+    apple_link.b.accept_peer_ranging(5, vec![2; 200])?;
+    apple_link.settle()?;
+    assert!(
+        apple_link
+            .a_events
+            .contains(&TransferEvent::PeerRangingAccepted(Box::new(peer(5, 2))))
+    );
+    apple_link.a.stop_ranging(5)?;
+    apple_link.settle()?;
+    assert!(
+        apple_link
+            .b_events
+            .contains(&TransferEvent::RangingStopped { session_id: 5 })
+    );
+    // From the peer: an accept of the other kind is STATE.
+    let mut mixed = link(&fixture)?;
+    mixed
+        .a
+        .handle_frame(FrameType::RANGING_READY, &apple.encode(), mixed.now)?;
+    mixed.a.start_peer_ranging(&peer(6, 1), mixed.now)?;
+    let fira_accept = RangingAccept {
+        session_id: 6,
+        controlee: 0x2222,
+    }
+    .encode();
+    let result = mixed
+        .a
+        .handle_frame(FrameType::RANGING_ACCEPT, &fira_accept, mixed.now);
+    assert_eq!(session_failure(result), Some(FailureCode::State));
+    // A peer start to a side that announced FiRa only: STATE.
+    let mut fira_only = link(&fixture)?;
+    fira_only.b.send_ranging_ready(READY)?;
+    let result = fira_only.b.handle_frame(
+        FrameType::PEER_RANGING_START,
+        &peer(7, 1).encode(),
+        fira_only.now,
+    );
+    assert_eq!(session_failure(result), Some(FailureCode::State));
+    // Both kinds share the eight starts.
+    let mut both = link(&fixture)?;
+    both.b.send_ranging_ready(RangingReady {
+        configs: CONFIG_APPLE_PEER | CONFIG_PROVISIONED_DS_TWR,
+    })?;
+    both.settle()?;
+    for id in 1..=u32::from(MAX_STARTS) {
+        if id % 2 == 0 {
+            both.a.start_ranging(&start(id), both.now)?;
+        } else {
+            both.a.start_peer_ranging(&peer(id, 1), both.now)?;
+        }
+        both.a.stop_ranging(id)?;
+    }
+    assert_eq!(
+        both.a.start_peer_ranging(&peer(99, 1), both.now),
+        Err(RangingError::Busy)
+    );
     Ok(())
 }

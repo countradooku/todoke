@@ -301,9 +301,11 @@ impl Model {
             }
             Event::Missed { .. } => EVERYTHING.to_vec(),
             // Pointing is for phones with UWB.
-            Event::PointTarget(_) | Event::RangingRequested(_) | Event::RangingStopped { .. } => {
-                Vec::new()
-            }
+            Event::PointTarget(_)
+            | Event::RangingRequested(_)
+            | Event::PeerPointTarget(_)
+            | Event::PeerRangingRequested(_)
+            | Event::RangingStopped { .. } => Vec::new(),
         }
     }
 

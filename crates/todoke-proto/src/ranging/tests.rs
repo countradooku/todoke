@@ -50,7 +50,7 @@ fn fields_outside_their_limits_are_refused() {
         RangingAccept::decode(&[1, 2, 3, 4, 5]),
         Err(DecodeError::Length)
     );
-    for configs in [0, 0b10, 0b11, 0x80] {
+    for configs in [0, 0b100, 0b111, 0x80] {
         assert_eq!(RangingReady::decode(&[configs]), Err(DecodeError::Reserved));
     }
     assert_eq!(RangingReady::decode(&[1, 2]), Err(DecodeError::Length));
@@ -104,4 +104,53 @@ fn fields_outside_their_limits_are_refused() {
 fn the_key_is_never_printed() {
     let printed = format!("{:?}", start());
     assert!(!printed.contains("7, 7"));
+}
+
+/// Apple peer ranging: the token crosses whole, within its bounds; the
+/// configurations bit is announced like `FiRa`'s, never taken by a `FiRa`
+/// start.
+#[test]
+fn peer_ranging_records() -> Result<(), DecodeError> {
+    let peer = PeerRanging {
+        session_id: 9,
+        token: vec![7; 300],
+    };
+    let body = peer.encode();
+    assert_eq!(&body[..6], &[0, 0, 0, 9, 0x01, 0x2c]);
+    assert_eq!(PeerRanging::decode(&body)?, peer);
+    assert!(!format!("{peer:?}").contains("7, 7"));
+    for configs in [
+        CONFIG_APPLE_PEER,
+        CONFIG_APPLE_PEER | CONFIG_PROVISIONED_DS_TWR,
+    ] {
+        assert_eq!(RangingReady::decode(&[configs])?.configs, configs);
+    }
+    let mut apple_start = start().encode().to_vec();
+    apple_start[8] = CONFIG_APPLE_PEER;
+    assert_eq!(
+        RangingStart::decode(&apple_start),
+        Err(DecodeError::Reserved)
+    );
+    let encode = |session_id: u32, token: &[u8], declared: u16| {
+        let mut out = session_id.to_be_bytes().to_vec();
+        out.extend_from_slice(&declared.to_be_bytes());
+        out.extend_from_slice(token);
+        out
+    };
+    let long = vec![1; MAX_TOKEN_LEN + 1];
+    for body in [
+        encode(9, &[], 0),
+        encode(9, &[1, 2], 3),
+        encode(9, &[1, 2, 3], 2),
+        encode(9, &long, 1025),
+        vec![0, 0, 0, 9, 0],
+    ] {
+        assert_eq!(PeerRanging::decode(&body), Err(DecodeError::Length));
+    }
+    assert_eq!(
+        PeerRanging::decode(&encode(0, &[1], 1)),
+        Err(DecodeError::ZeroIdentifier)
+    );
+    assert!(PeerRanging::decode(&encode(9, &vec![1; MAX_TOKEN_LEN], 1024)).is_ok());
+    Ok(())
 }

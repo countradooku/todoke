@@ -402,7 +402,7 @@ class BindingsTest {
         Core(settings(home("point"))).use { core ->
             core.setRangingReady(1u)
             assertFailsWith<TodokeError.Invalid> { core.setRangingReady(0u) }
-            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(2u) }
+            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(4u) }
             core.clearRangingReady()
             assertFailsWith<TodokeError.Invalid> { core.pointStart(emptyList()) }
             assertFailsWith<TodokeError.Invalid> { core.pointStart(listOf(UwbController(7u, 6u, 10u))) }

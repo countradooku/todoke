@@ -675,6 +675,7 @@ the session; its cipher state MUST NOT be reused on another pipe.
 | 0x0023 | RangingReady, §10.4 |
 | 0x0024 / 0x0025 | RangingStart / RangingStop, §10.4 |
 | 0x0026 | RangingAccept, §10.4 |
+| 0x0027 / 0x0028 | PeerRangingStart / PeerRangingAccept, §10.4 |
 | 0x0040 | Revoke, §2 |
 | 0x0100..0x01ff | Reserved Tor |
 | 0x0200..0x02ff | Reserved PQ variants |
@@ -1592,7 +1593,7 @@ the foreground).
 
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
-| configs | 1 | Bitmask of supported configurations; bit 0: provisioned-STS unicast DS-TWR. Other bits reserved zero; 0 is MALFORMED |
+| configs | 1 | Bitmask of supported configurations; bit 0: provisioned-STS unicast DS-TWR (FiRa); bit 1: Apple Nearby Interaction peer ranging. Other bits reserved zero; 0 is MALFORMED |
 
 `RangingStart` (0x0024): from the controller, only after the peer's `RangingReady`,
 at most 8 per session from each endpoint, and never while one is running.
@@ -1603,7 +1604,7 @@ at most 8 per session from each endpoint, and never while one is running.
 | controller | 2 | The controller's UWB short address for this ranging, not 0x0000 or 0xffff |
 | channel | 1 | 5 or 9 |
 | preamble | 1 | 9..12 or 25..32 |
-| config | 1 | One configuration bit the peer announced |
+| config | 1 | Bit 0 (FiRa), which the peer announced |
 | sts_key | 16 | Random from a CSPRNG for this start; the provisioned STS key |
 
 `RangingAccept` (0x0026): from the controlee, at most once per `RangingStart`, while
@@ -1613,6 +1614,23 @@ it runs; then both endpoints range.
 | --- | ---: | --- |
 | session_id | 4 | The running ranging's |
 | controlee | 2 | The controlee's UWB short address for this ranging, not 0x0000 or 0xffff, and not the controller's |
+
+Apple Nearby Interaction (bit 1) ranges with opaque per-session tokens instead of
+addresses, channels, and keys; each token belongs to one ranging session of its
+endpoint. `PeerRangingStart` (0x0027) replaces `RangingStart` for it, and
+`PeerRangingAccept` (0x0028) replaces `RangingAccept`:
+
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| session_id | 4 | As in `RangingStart` (the accept: the running ranging's) |
+| token_len | 2 | 1..1024 |
+| token | token_len | The sender's discovery token for this ranging (an archived `NIDiscoveryToken`), never reused |
+
+They follow every rule for `RangingStart` and `RangingAccept`: only after the peer
+announced bit 1, the same limits (each start counts toward the endpoint's eight), one
+ranging at a time of either kind, the same crossing rules, and `RangingStop`. An
+accept of the other kind than the running ranging is STATE. Neither endpoint logs a
+token or keeps it once its ranging ends.
 
 `RangingStop` (0x0025): from either endpoint, `session_id` (4 bytes) of the running
 ranging, accepted or not.

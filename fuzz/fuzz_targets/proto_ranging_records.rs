@@ -1,18 +1,20 @@
 //! Pointing records (PROTOCOL §10.4) on arbitrary bytes: the first byte
 //! picks the record (0 `RangingReady`, 1 `RangingStart`, 2 `RangingAccept`,
-//! 3 `RangingStop`), the rest is its body. An accepted body must be
-//! canonical, re-encoding to exactly its input, and within the record's
-//! limits.
+//! 3 `RangingStop`, 4 `PeerRangingStart`/`PeerRangingAccept`), the rest is
+//! its body. An accepted body must be canonical, re-encoding to exactly its
+//! input, and within the record's limits.
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use todoke_proto::ranging::{RangingAccept, RangingReady, RangingStart, RangingStop};
+use todoke_proto::ranging::{
+    MAX_TOKEN_LEN, PeerRanging, RangingAccept, RangingReady, RangingStart, RangingStop,
+};
 
 fuzz_target!(|data: &[u8]| {
     let Some((&kind, body)) = data.split_first() else {
         return;
     };
-    match kind % 4 {
+    match kind % 5 {
         0 => {
             if let Ok(ready) = RangingReady::decode(body) {
                 assert_eq!(ready.encode().as_slice(), body);
@@ -34,9 +36,16 @@ fuzz_target!(|data: &[u8]| {
                 assert_ne!(accept.session_id, 0);
             }
         }
-        _ => {
+        3 => {
             if let Ok(stop) = RangingStop::decode(body) {
                 assert_eq!(stop.encode().as_slice(), body);
+            }
+        }
+        _ => {
+            if let Ok(peer) = PeerRanging::decode(body) {
+                assert_eq!(peer.encode().as_slice(), body);
+                assert!((1..=MAX_TOKEN_LEN).contains(&peer.token.len()));
+                assert_ne!(peer.session_id, 0);
             }
         }
     }

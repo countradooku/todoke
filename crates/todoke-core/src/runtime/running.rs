@@ -832,13 +832,21 @@ impl State {
             }
             Request::SetBackground { background } => self.set_background(background),
             Request::SetRangingReady { ready } => self.set_ranging_ready(ready),
-            Request::PointStart { controllers } => self.point_start(controllers),
+            Request::PointStart {
+                controllers,
+                peer_tokens,
+            } => self.point_start(controllers, &peer_tokens),
             Request::PointStop => self.point_stop(),
             Request::RangingAnswer {
                 contact,
                 session_id,
                 controlee,
             } => self.ranging_answer(&contact, session_id, controlee).await,
+            Request::PeerRangingAccept {
+                contact,
+                session_id,
+                token,
+            } => self.peer_ranging_accept(&contact, session_id, &token).await,
             Request::History => Response::History(self.history.borrow().list(wall())),
             Request::ClearHistory => {
                 if self.history.borrow_mut().clear() {

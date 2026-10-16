@@ -335,6 +335,12 @@ pub enum TransferEvent {
     /// The peer accepts the ranging this side started, at its address:
     /// range now.
     RangingAccepted(todoke_proto::ranging::RangingAccept),
+    /// The peer starts Apple peer ranging with this side as the
+    /// controlee, with its token.
+    PeerRangingRequested(Box<todoke_proto::ranging::PeerRanging>),
+    /// The peer accepts the Apple peer ranging this side started, with its
+    /// token: range now.
+    PeerRangingAccepted(Box<todoke_proto::ranging::PeerRanging>),
     /// The ranging with this session ID ended (stopped by the peer, or its
     /// time was up).
     RangingStopped {

@@ -569,6 +569,47 @@ impl Core {
                     preamble: controller.preamble,
                 })
                 .collect(),
+            peer_tokens: Vec::new(),
+        })
+    }
+
+    /// Points at nearby iPhones for 120 seconds with Apple Nearby
+    /// Interaction (PROTOCOL §10.4): `tokens` are the archived discovery
+    /// tokens of sessions the platform prepared (1 to 8, each serves one
+    /// contact). Each contact that accepts comes as a
+    /// `CoreEvent::PeerPointTarget` naming the token to range with.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for no, too many, repeated, or empty
+    /// tokens, or one over 1024 bytes.
+    pub fn point_start_peer(&self, tokens: Vec<Vec<u8>>) -> Result<(), TodokeError> {
+        self.shared.done(Request::PointStart {
+            controllers: Vec::new(),
+            peer_tokens: tokens.iter().map(todoke_core::api::hex).collect(),
+        })
+    }
+
+    /// Accepts the Apple peer ranging `contact` requested
+    /// (`CoreEvent::PeerRangingRequested`) with `token`, the archived
+    /// discovery token of a session the platform prepared for it: range
+    /// with the contact's token next. Refuse with `Core::refuse_ranging`.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for an empty token or one over 1024
+    /// bytes; [`TodokeError::State`] when that ranging no longer runs;
+    /// [`TodokeError::Unreachable`] when the session ended.
+    pub fn accept_peer_ranging(
+        &self,
+        contact: String,
+        session_id: u32,
+        token: Vec<u8>,
+    ) -> Result<(), TodokeError> {
+        self.shared.done(Request::PeerRangingAccept {
+            contact,
+            session_id,
+            token: todoke_core::api::hex(&token),
         })
     }
 

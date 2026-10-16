@@ -365,7 +365,7 @@ final class TodokeTests: XCTestCase {
         let core = try Core(settings: home.settings())
         try core.setRangingReady(configs: 1)
         XCTAssertThrowsError(try core.setRangingReady(configs: 0))
-        XCTAssertThrowsError(try core.setRangingReady(configs: 2))
+        XCTAssertThrowsError(try core.setRangingReady(configs: 4))
         try core.clearRangingReady()
         XCTAssertThrowsError(try core.pointStart(controllers: []))
         XCTAssertThrowsError(

@@ -707,7 +707,7 @@ fn pointing_between_two_cores() -> TestResult {
         channel,
         preamble,
     };
-    for configs in [0, 2] {
+    for configs in [0, 4] {
         assert!(matches!(
             b.set_ranging_ready(configs),
             Err(TodokeError::Invalid { .. })
@@ -756,6 +756,42 @@ fn pointing_between_two_cores() -> TestResult {
         _ => None,
     })?;
     b.clear_ranging_ready()?;
+    Ok(())
+}
+
+/// Apple peer pointing through the binding (§10.4): A's token reaches B,
+/// B's comes back, and A's target names both, as bytes.
+#[test]
+fn peer_pointing_between_two_cores() -> TestResult {
+    let _serial = serial();
+    let (a_home, b_home) = (Scratch::new("peer-a")?, Scratch::new("peer-b")?);
+    let (a, b, _) = paired(&a_home, &b_home)?;
+    let (a_events, b_events) = (a.subscribe()?, b.subscribe()?);
+    assert!(matches!(
+        a.point_start_peer(vec![Vec::new()]),
+        Err(TodokeError::Invalid { .. })
+    ));
+    b.set_ranging_ready(2)?;
+    a.point_start_peer(vec![vec![0xa1; 40], vec![0xa2; 40]])?;
+    let requested = wait_for(&b_events, |event| match event {
+        CoreEvent::PeerRangingRequested { ranging } => Some(ranging),
+        _ => None,
+    })?;
+    assert_eq!(requested.peer_token, vec![0xa1; 40]);
+    assert_eq!(requested.local_token, None);
+    b.accept_peer_ranging(
+        requested.contact.clone(),
+        requested.session_id,
+        vec![0xb1; 30],
+    )?;
+    let target = wait_for(&a_events, |event| match event {
+        CoreEvent::PeerPointTarget { ranging } => Some(ranging),
+        _ => None,
+    })?;
+    assert_eq!(target.contact, b.status()?.device);
+    assert_eq!(target.peer_token, vec![0xb1; 30]);
+    assert_eq!(target.local_token, Some(vec![0xa1; 40]));
+    a.point_stop()?;
     Ok(())
 }
 

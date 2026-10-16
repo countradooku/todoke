@@ -1612,7 +1612,12 @@ async fn pointing_parameters_are_checked() -> AnyResult<()> {
         vec![controller(0x1111, 9, 10); 9],
     ] {
         assert!(matches!(
-            device.request(Request::PointStart { controllers }).await,
+            device
+                .request(Request::PointStart {
+                    controllers,
+                    peer_tokens: Vec::new(),
+                })
+                .await,
             Response::Error {
                 code: ErrorCode::Invalid,
                 ..
@@ -1622,7 +1627,7 @@ async fn pointing_parameters_are_checked() -> AnyResult<()> {
     assert!(matches!(
         device
             .request(Request::SetRangingReady {
-                ready: Some(RangingAbility { configs: 2 }),
+                ready: Some(RangingAbility { configs: 4 }),
             })
             .await,
         Response::Error {
@@ -1670,7 +1675,10 @@ async fn pointing_at_a_nearby_contact() -> AnyResult<()> {
     let pool = vec![controller(0x1111, 9, 10), controller(0x1112, 9, 10)];
     assert_eq!(
         alice
-            .request(Request::PointStart { controllers: pool })
+            .request(Request::PointStart {
+                controllers: pool,
+                peer_tokens: Vec::new(),
+            })
             .await,
         Response::Done
     );
@@ -1735,6 +1743,7 @@ async fn pointing_at_a_nearby_contact() -> AnyResult<()> {
         alice
             .request(Request::PointStart {
                 controllers: vec![controller(0x1113, 5, 9)],
+                peer_tokens: Vec::new(),
             })
             .await,
         Response::Done
@@ -1762,6 +1771,7 @@ async fn pointing_at_a_nearby_contact() -> AnyResult<()> {
     assert_eq!(
         bob.request(Request::PointStart {
             controllers: vec![controller(0x3333, 5, 9)],
+            peer_tokens: Vec::new(),
         })
         .await,
         Response::Done
@@ -1775,5 +1785,92 @@ async fn pointing_at_a_nearby_contact() -> AnyResult<()> {
     })
     .await;
     assert!(none.is_err(), "a request to a contact that cannot range");
+    Ok(())
+}
+
+/// Apple peer pointing (§10.4): a contact that announced Apple peer
+/// ranging gets this device's token and answers with its own; the
+/// pointing device reports both. Tokens of bad shape are refused.
+#[tokio::test]
+async fn pointing_with_apple_tokens() -> AnyResult<()> {
+    use crate::api::RangingAbility;
+    let scratch = Scratch::new("peer-pointing")?;
+    let discovery = scratch.0.join("discovery");
+    let alice = device(&scratch.0, "alice", &discovery)?;
+    let bob = device(&scratch.0, "bob", &discovery)?;
+    let (alice_hex, bob_hex) = (device_hex(&alice).await?, device_hex(&bob).await?);
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    pair(&alice, &bob).await?;
+    let point = |peer_tokens: Vec<&str>| Request::PointStart {
+        controllers: Vec::new(),
+        peer_tokens: peer_tokens.into_iter().map(str::to_owned).collect(),
+    };
+    for tokens in [vec![], vec!["0a0"], vec!["zz"], vec!["0a", "0a"], vec![""]] {
+        assert!(matches!(
+            alice.request(point(tokens)).await,
+            Response::Error {
+                code: ErrorCode::Invalid,
+                ..
+            }
+        ));
+    }
+    assert_eq!(
+        bob.request(Request::SetRangingReady {
+            ready: Some(RangingAbility { configs: 2 }),
+        })
+        .await,
+        Response::Done
+    );
+    assert_eq!(alice.request(point(vec!["0a0b0c"])).await, Response::Done);
+    let requested = wait_for(&mut bob_events, |event| match event {
+        Event::PeerRangingRequested(ranging) => Some(ranging.clone()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(requested.contact, alice_hex);
+    assert_eq!(requested.peer_token, "0a0b0c");
+    assert_eq!(requested.local_token, None);
+    // A FiRa answer to Apple ranging, or a token that is not hex: refused.
+    assert!(matches!(
+        bob.request(Request::RangingAnswer {
+            contact: alice_hex.clone(),
+            session_id: requested.session_id,
+            controlee: Some(0x2222),
+        })
+        .await,
+        Response::Error { .. }
+    ));
+    let accept = |token: &str| Request::PeerRangingAccept {
+        contact: alice_hex.clone(),
+        session_id: requested.session_id,
+        token: token.to_owned(),
+    };
+    assert!(matches!(
+        bob.request(accept("xyz")).await,
+        Response::Error {
+            code: ErrorCode::Invalid,
+            ..
+        }
+    ));
+    assert_eq!(bob.request(accept("0d0e")).await, Response::Done);
+    let target = wait_for(&mut alice_events, |event| match event {
+        Event::PeerPointTarget(ranging) => Some(ranging.clone()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(target.contact, bob_hex);
+    assert_eq!(target.session_id, requested.session_id);
+    assert_eq!(target.peer_token, "0d0e");
+    assert_eq!(target.local_token.as_deref(), Some("0a0b0c"));
+    // The token never shows in a printout.
+    assert!(!format!("{target:?}").contains("0d0e"));
+    assert!(!format!("{:?}", accept("0d0e")).contains("0d0e"));
+    assert_eq!(alice.request(Request::PointStop).await, Response::Done);
+    wait_for(&mut bob_events, |event| match event {
+        Event::RangingStopped { session_id, .. } if *session_id == target.session_id => Some(()),
+        _ => None,
+    })
+    .await?;
     Ok(())
 }

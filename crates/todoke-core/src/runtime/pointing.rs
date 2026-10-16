@@ -29,7 +29,12 @@ use zeroize::Zeroizing;
 
 use super::running::State;
 use super::session::SessionCommand;
-use crate::api::{ErrorCode, Event, Ranging, RangingAbility, Response, UwbController, hex};
+use crate::api::{
+    ErrorCode, Event, PeerRangingInfo, Ranging, RangingAbility, Response, UwbController, hex,
+};
+use todoke_proto::ranging::{
+    CONFIG_APPLE_PEER, CONFIG_PROVISIONED_DS_TWR, MAX_TOKEN_LEN, PeerRanging,
+};
 
 type Engine<'k> = super::session::Engine<'k>;
 
@@ -39,10 +44,15 @@ const DIAL_PAUSE: Duration = Duration::from_secs(5);
 /// This device pointing now.
 #[derive(Debug)]
 pub(super) struct Pointer {
-    /// The controllers the app prepared, each used for one ranging.
+    /// The `FiRa` controllers the app prepared, each used for one ranging.
     controllers: Vec<UwbController>,
     /// The first unused one.
     next: usize,
+    /// The Apple Nearby Interaction tokens the app prepared, each used for
+    /// one ranging.
+    tokens: Vec<Vec<u8>>,
+    /// The first unused one.
+    next_token: usize,
     /// Which `PointStart` this is: a session ranges once per pointing.
     epoch: u64,
     until: Duration,
@@ -70,7 +80,26 @@ impl State {
 
     /// `Request::PointStart`: point for 120 seconds; sessions open to the
     /// contacts on the local network.
-    pub(super) fn point_start(self: &Rc<Self>, controllers: Vec<UwbController>) -> Response {
+    pub(super) fn point_start(
+        self: &Rc<Self>,
+        controllers: Vec<UwbController>,
+        peer_tokens: &[String],
+    ) -> Response {
+        let tokens: Option<Vec<Vec<u8>>> = peer_tokens.iter().map(|token| unhex(token)).collect();
+        let Some(tokens) = tokens.filter(|tokens| {
+            let mut distinct = tokens.clone();
+            distinct.sort_unstable();
+            distinct.dedup();
+            distinct.len() == tokens.len()
+                && tokens
+                    .iter()
+                    .all(|token| (1..=MAX_TOKEN_LEN).contains(&token.len()))
+        }) else {
+            return Response::error(
+                ErrorCode::Invalid,
+                "not distinct discovery tokens of 1 to 1024 bytes",
+            );
+        };
         let valid = |controller: &UwbController| {
             controller.address != 0
                 && controller.address != u16::MAX
@@ -80,14 +109,15 @@ impl State {
         let mut addresses: Vec<u16> = controllers.iter().map(|c| c.address).collect();
         addresses.sort_unstable();
         addresses.dedup();
-        if controllers.is_empty()
-            || controllers.len() > usize::from(MAX_STARTS)
+        let total = controllers.len() + tokens.len();
+        if total == 0
+            || total > usize::from(MAX_STARTS)
             || addresses.len() != controllers.len()
             || !controllers.iter().all(valid)
         {
             return Response::error(
                 ErrorCode::Invalid,
-                "not 1 to 8 UWB controllers with distinct addresses, channels 5 or 9, and preambles 9 to 12 or 25 to 32",
+                "not 1 to 8 UWB controllers and tokens, controllers with distinct addresses, channels 5 or 9, and preambles 9 to 12 or 25 to 32",
             );
         }
         let epoch = self.point_epoch.get() + 1;
@@ -95,6 +125,8 @@ impl State {
         *self.pointer.borrow_mut() = Some(Pointer {
             controllers,
             next: 0,
+            tokens,
+            next_token: 0,
             epoch,
             until: self.mono() + Duration::from_secs(MAX_RANGING_SECONDS),
         });
@@ -115,6 +147,24 @@ impl State {
         session_id: u32,
         controlee: Option<u16>,
     ) -> Response {
+        let answer = controlee.map_or(Answer::Refuse, Answer::Fira);
+        self.answer(contact, session_id, answer).await
+    }
+
+    /// `Request::PeerRangingAccept`: to the session with `contact`.
+    pub(super) async fn peer_ranging_accept(
+        &self,
+        contact: &str,
+        session_id: u32,
+        token: &str,
+    ) -> Response {
+        let Some(token) = unhex(token) else {
+            return Response::error(ErrorCode::Invalid, "not a discovery token");
+        };
+        self.answer(contact, session_id, Answer::Peer(token)).await
+    }
+
+    async fn answer(&self, contact: &str, session_id: u32, answer: Answer) -> Response {
         let peer = match self.resolve_contact(contact).await {
             Ok(peer) => peer,
             Err(response) => return response,
@@ -123,11 +173,8 @@ impl State {
         let Some(session) = session else {
             return Response::error(ErrorCode::Unreachable, "the contact is not connected");
         };
-        let (reply, answer) = tokio::sync::oneshot::channel();
-        let command = SessionCommand::Ranging {
-            session_id,
-            controlee,
-        };
+        let (reply, outcome) = tokio::sync::oneshot::channel();
+        let command = SessionCommand::Ranging { session_id, answer };
         if session
             .send(SessionCommand::with_reply(command, reply))
             .await
@@ -135,7 +182,7 @@ impl State {
         {
             return Response::error(ErrorCode::Unreachable, "the session ended");
         }
-        answer
+        outcome
             .await
             .unwrap_or_else(|_| Response::error(ErrorCode::Unreachable, "the session ended"))
     }
@@ -154,13 +201,24 @@ impl State {
         Some(epoch)
     }
 
-    /// The next unused controller of the pointing, taken.
-    fn take_controller(&self) -> Option<UwbController> {
+    /// How to range with a peer announcing `configs`: the next unused
+    /// controller (`FiRa`, preferred) or token (Apple), taken.
+    fn take_method(&self, configs: u8) -> Option<Method> {
         let mut pointer = self.pointer.borrow_mut();
         let pointer = pointer.as_mut()?;
-        let controller = pointer.controllers.get(pointer.next).copied()?;
-        pointer.next += 1;
-        Some(controller)
+        if configs & CONFIG_PROVISIONED_DS_TWR != 0
+            && let Some(controller) = pointer.controllers.get(pointer.next).copied()
+        {
+            pointer.next += 1;
+            return Some(Method::Fira(controller));
+        }
+        if configs & CONFIG_APPLE_PEER != 0
+            && let Some(token) = pointer.tokens.get(pointer.next_token).cloned()
+        {
+            pointer.next_token += 1;
+            return Some(Method::Peer(token));
+        }
+        None
     }
 
     /// Opens a session to every contact on the local network that has
@@ -195,14 +253,36 @@ impl State {
     }
 }
 
+/// How this device ranges as the controller with one contact.
+enum Method {
+    Fira(UwbController),
+    /// Apple peer ranging with this token.
+    Peer(Vec<u8>),
+}
+
+/// The app's answer to a ranging request.
+pub(super) enum Answer {
+    /// Range (`FiRa`) at this controlee address.
+    Fira(u16),
+    /// Range (Apple) with this token.
+    Peer(Vec<u8>),
+    Refuse,
+}
+
+/// What a controller keeps of its start until the peer accepts it (then
+/// reported as the target).
+enum Started {
+    Fira(RangingStart),
+    /// This device's token.
+    Peer(Vec<u8>),
+}
+
 /// The ranging running in a session.
 struct Running {
     session_id: u32,
     /// This side started it.
     controller: bool,
-    /// The controller's start, kept until the peer accepts it (then
-    /// reported as the target).
-    start: Option<RangingStart>,
+    start: Option<Started>,
 }
 
 /// One session's part in pointing.
@@ -252,28 +332,46 @@ impl SessionPointing {
             TransferEvent::RangingRequested(start) => {
                 // No longer pointable (UWB off, app in the background): the
                 // start is refused at once (§10.4).
-                if state.ranging_ready.get().is_none() || !self.local {
+                if !self.pointable(state, CONFIG_PROVISIONED_DS_TWR) {
                     let _ = engine.stop_ranging(start.session_id);
                     return None;
                 }
-                self.running = Some(Running {
-                    session_id: start.session_id,
-                    controller: false,
-                    start: None,
-                });
+                self.requested(start.session_id);
                 state.emit(Event::RangingRequested(ranging(self.peer, &start, None)));
                 None
             }
+            TransferEvent::PeerRangingRequested(start) => {
+                if !self.pointable(state, CONFIG_APPLE_PEER) {
+                    let _ = engine.stop_ranging(start.session_id);
+                    return None;
+                }
+                self.requested(start.session_id);
+                state.emit(Event::PeerRangingRequested(PeerRangingInfo {
+                    contact: hex(self.peer.as_bytes()),
+                    session_id: start.session_id,
+                    peer_token: hex(&start.token),
+                    local_token: None,
+                }));
+                None
+            }
             TransferEvent::RangingAccepted(accept) => {
-                if let Some(running) = self.running.as_mut()
-                    && running.session_id == accept.session_id
-                    && let Some(start) = running.start.take()
-                {
+                if let Some(Started::Fira(start)) = self.accepted(accept.session_id) {
                     state.emit(Event::PointTarget(ranging(
                         self.peer,
                         &start,
                         Some(accept.controlee),
                     )));
+                }
+                None
+            }
+            TransferEvent::PeerRangingAccepted(accept) => {
+                if let Some(Started::Peer(local)) = self.accepted(accept.session_id) {
+                    state.emit(Event::PeerPointTarget(PeerRangingInfo {
+                        contact: hex(self.peer.as_bytes()),
+                        session_id: accept.session_id,
+                        peer_token: hex(&accept.token),
+                        local_token: Some(hex(&local)),
+                    }));
                 }
                 None
             }
@@ -302,16 +400,10 @@ impl SessionPointing {
         engine: &mut Engine<'_>,
         command: SessionCommand,
     ) -> Option<SessionCommand> {
-        let (session_id, controlee, reply) = match command {
-            SessionCommand::Ranging {
-                session_id,
-                controlee,
-            } => (session_id, controlee, None),
+        let (session_id, answer, reply) = match command {
+            SessionCommand::Ranging { session_id, answer } => (session_id, answer, None),
             SessionCommand::Reply(command, reply) => match *command {
-                SessionCommand::Ranging {
-                    session_id,
-                    controlee,
-                } => (session_id, controlee, Some(reply)),
+                SessionCommand::Ranging { session_id, answer } => (session_id, answer, Some(reply)),
                 other => return Some(SessionCommand::with_reply(other, reply)),
             },
             other => return Some(other),
@@ -320,23 +412,28 @@ impl SessionPointing {
             .running
             .as_ref()
             .is_some_and(|running| running.session_id == session_id && !running.controller);
-        let outcome = if !mine {
-            Err(todoke_transfer::RangingError::NotRunning)
-        } else if let Some(controlee) = controlee {
-            engine.accept_ranging(session_id, controlee)
-        } else {
-            let stopped = engine.stop_ranging(session_id);
-            if stopped.is_ok() {
-                self.stopped(state, session_id);
+        let outcome = if mine {
+            match answer {
+                Answer::Fira(controlee) => engine.accept_ranging(session_id, controlee),
+                Answer::Peer(token) => engine.accept_peer_ranging(session_id, token),
+                Answer::Refuse => {
+                    let stopped = engine.stop_ranging(session_id);
+                    if stopped.is_ok() {
+                        self.stopped(state, session_id);
+                    }
+                    stopped
+                }
             }
-            stopped
+        } else {
+            Err(todoke_transfer::RangingError::NotRunning)
         };
         if let Some(reply) = reply {
             let _ = reply.send(match outcome {
                 Ok(()) => Response::Done,
-                Err(todoke_transfer::RangingError::Address) => {
-                    Response::error(ErrorCode::Invalid, "not a UWB address for this ranging")
-                }
+                Err(todoke_transfer::RangingError::Address) => Response::error(
+                    ErrorCode::Invalid,
+                    "not a UWB address or token for this ranging",
+                ),
                 Err(error) => Response::error(ErrorCode::State, error.to_string()),
             });
         }
@@ -372,20 +469,69 @@ impl SessionPointing {
         if !self.local || self.running.is_some() || self.ranged == Some(epoch) {
             return;
         }
-        let Some(controller) = state.take_controller() else {
+        let Some(method) = state.take_method(peer.configs) else {
             return;
         };
         self.ranged = Some(epoch);
-        let Some(start) = fresh_start(controller, peer) else {
+        let Some(session_id) = fresh_session_id() else {
             return;
         };
-        if engine.start_ranging(&start, now).is_ok() {
+        let started = match method {
+            Method::Fira(controller) => {
+                let Some(start) = fresh_start(session_id, controller) else {
+                    return;
+                };
+                engine
+                    .start_ranging(&start, now)
+                    .is_ok()
+                    .then_some(Started::Fira(start))
+            }
+            Method::Peer(token) => {
+                let start = PeerRanging {
+                    session_id,
+                    token: token.clone(),
+                };
+                engine
+                    .start_peer_ranging(&start, now)
+                    .is_ok()
+                    .then_some(Started::Peer(token))
+            }
+        };
+        if let Some(started) = started {
             self.running = Some(Running {
-                session_id: start.session_id,
+                session_id,
                 controller: true,
-                start: Some(start),
+                start: Some(started),
             });
         }
+    }
+
+    /// Whether this side can be pointed at now with `config`, on a local
+    /// link.
+    fn pointable(&self, state: &State, config: u8) -> bool {
+        self.local
+            && state
+                .ranging_ready
+                .get()
+                .is_some_and(|ready| ready.configs & config != 0)
+    }
+
+    /// The peer started a ranging with this side as the controlee.
+    fn requested(&mut self, session_id: u32) {
+        self.running = Some(Running {
+            session_id,
+            controller: false,
+            start: None,
+        });
+    }
+
+    /// The peer accepted the ranging this side started: its start, once.
+    fn accepted(&mut self, session_id: u32) -> Option<Started> {
+        self.running
+            .as_mut()
+            .filter(|running| running.session_id == session_id)?
+            .start
+            .take()
     }
 
     /// The session ends: a ranging still running ends with it.
@@ -396,23 +542,42 @@ impl SessionPointing {
     }
 }
 
-/// A start with `controller`, a fresh session ID and key, and the
-/// configuration the peer announced (provisioned-STS DS-TWR).
-fn fresh_start(controller: UwbController, peer: RangingReady) -> Option<RangingStart> {
+/// A fresh ranging session ID (never zero).
+fn fresh_session_id() -> Option<u32> {
     let mut id = [0_u8; 4];
-    let mut sts_key = Zeroizing::new([0_u8; STS_KEY_LEN]);
     getrandom::fill(&mut id).ok()?;
+    Some(u32::from_be_bytes(id)).filter(|&id| id != 0)
+}
+
+/// A `FiRa` start with `controller` and a fresh key (provisioned-STS
+/// DS-TWR).
+fn fresh_start(session_id: u32, controller: UwbController) -> Option<RangingStart> {
+    let mut sts_key = Zeroizing::new([0_u8; STS_KEY_LEN]);
     getrandom::fill(&mut *sts_key).ok()?;
-    let session_id = u32::from_be_bytes(id);
-    let config = peer.configs & peer.configs.wrapping_neg();
-    (session_id != 0 && config != 0).then_some(RangingStart {
+    Some(RangingStart {
         session_id,
         controller: controller.address,
         channel: controller.channel,
         preamble: controller.preamble,
-        config,
+        config: CONFIG_PROVISIONED_DS_TWR,
         sts_key,
     })
+}
+
+/// Hexadecimal text as bytes.
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let digit = |byte: u8| {
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    };
+    let (pairs, []) = text.as_bytes().as_chunks::<2>() else {
+        return None;
+    };
+    pairs
+        .iter()
+        .map(|pair| Some((digit(pair[0])? << 4) | digit(pair[1])?))
+        .collect()
 }
 
 fn ranging(peer: Ed25519PublicKey, start: &RangingStart, controlee: Option<u16>) -> Ranging {

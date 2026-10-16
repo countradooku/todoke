@@ -532,6 +532,16 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
                 self.ranging_step(step);
                 Ok(())
             }
+            FrameType::PEER_RANGING_START => {
+                let step = self.pointing.on_peer_start(body, now)?;
+                self.ranging_step(step);
+                Ok(())
+            }
+            FrameType::PEER_RANGING_ACCEPT => {
+                let step = self.pointing.on_peer_accept(body)?;
+                self.ranging_step(step);
+                Ok(())
+            }
             FrameType::RANGING_STOP => {
                 let step = self.pointing.on_stop(body)?;
                 self.ranging_step(step);
@@ -655,7 +665,16 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
                 }
                 self.event(TransferEvent::RangingRequested(start));
             }
+            ranging::Step::PeerRequested { start, replaced } => {
+                if let Some(session_id) = replaced {
+                    self.event(TransferEvent::RangingStopped { session_id });
+                }
+                self.event(TransferEvent::PeerRangingRequested(start));
+            }
             ranging::Step::Accepted(accept) => self.event(TransferEvent::RangingAccepted(accept)),
+            ranging::Step::PeerAccepted(accept) => {
+                self.event(TransferEvent::PeerRangingAccepted(accept));
+            }
             ranging::Step::Stopped(session_id) => {
                 self.event(TransferEvent::RangingStopped { session_id });
             }
@@ -716,6 +735,46 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         }
         let accept = self.pointing.accept(session_id, controlee)?;
         self.queue(FrameType::RANGING_ACCEPT, accept.encode().to_vec());
+        Ok(())
+    }
+
+    /// Starts Apple peer ranging as the controller (`PeerRangingStart`,
+    /// §10.4): as [`Self::start_ranging`], after the peer announced it.
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::PeerNotReady`];
+    /// [`RangingError::Busy`].
+    pub fn start_peer_ranging(
+        &mut self,
+        start: &todoke_proto::ranging::PeerRanging,
+        now: Duration,
+    ) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        self.pointing.start_peer(start, now)?;
+        self.queue(FrameType::PEER_RANGING_START, start.encode());
+        Ok(())
+    }
+
+    /// Accepts the Apple peer ranging the peer started
+    /// (`PeerRangingAccept`, §10.4) with this side's `token` for it.
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::NotRunning`];
+    /// [`RangingError::Address`] for a token outside its bounds.
+    pub fn accept_peer_ranging(
+        &mut self,
+        session_id: u32,
+        token: Vec<u8>,
+    ) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        let accept = self.pointing.accept_peer(session_id, token)?;
+        self.queue(FrameType::PEER_RANGING_ACCEPT, accept.encode());
         Ok(())
     }
 

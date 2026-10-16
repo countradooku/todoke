@@ -38,7 +38,7 @@ pub(super) enum SessionCommand {
     /// controlee address, or refuse.
     Ranging {
         session_id: u32,
-        controlee: Option<u16>,
+        answer: super::pointing::Answer,
     },
     /// A decision with somewhere to report its outcome.
     Reply(Box<SessionCommand>, oneshot::Sender<Response>),

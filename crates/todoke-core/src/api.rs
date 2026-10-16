@@ -113,9 +113,14 @@ pub enum Request {
     /// address serves one ranging); an [`Event::PointTarget`] follows each
     /// that accepts. Ends with [`Request::PointStop`] or after 120 seconds.
     PointStart {
-        /// This device's controllers for this pointing: 1 to 8, each with
+        /// This device's `FiRa` controllers for this pointing, each with
         /// its own address.
         controllers: Vec<UwbController>,
+        /// This device's Apple Nearby Interaction discovery tokens for this
+        /// pointing, hex: one per contact ranged (each from its own
+        /// session). With `controllers`, 1 to 8 in all.
+        #[serde(default)]
+        peer_tokens: Vec<String>,
     },
     /// Stop pointing: every ranging this device started stops.
     PointStop,
@@ -129,6 +134,17 @@ pub enum Request {
         /// This device's controlee address for the ranging, or none.
         controlee: Option<u16>,
     },
+    /// The acceptance of an [`Event::PeerRangingRequested`]: range with
+    /// `token`, this device's fresh discovery token for it (refusing is
+    /// [`Request::RangingAnswer`] without a controlee).
+    PeerRangingAccept {
+        /// The contact that points, hex.
+        contact: String,
+        /// The ranging session ID.
+        session_id: u32,
+        /// This device's token, hex.
+        token: String,
+    },
     /// Finished transfers kept under the history policy
     /// (`history_days`), newest first.
     History,
@@ -140,6 +156,24 @@ impl fmt::Debug for Request {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::PairScanQr { .. } => f.write_str("PairScanQr { <redacted> }"),
+            // Discovery tokens are never printed (§10.4).
+            Self::PointStart {
+                controllers,
+                peer_tokens,
+            } => write!(
+                f,
+                "PointStart {{ controllers: {}, peer_tokens: {} }}",
+                controllers.len(),
+                peer_tokens.len()
+            ),
+            Self::PeerRangingAccept {
+                contact,
+                session_id,
+                ..
+            } => write!(
+                f,
+                "PeerRangingAccept {{ contact: {contact}, session_id: {session_id}, <redacted> }}"
+            ),
             Self::PairEnterCode { .. } => f.write_str("PairEnterCode { <redacted> }"),
             Self::Send { paths, .. } => write!(f, "Send {{ paths: {} }}", paths.len()),
             other => {
@@ -249,6 +283,28 @@ impl core::fmt::Debug for Ranging {
             .field("session_id", &self.session_id)
             .field("controller", &self.controller)
             .field("controlee", &self.controlee)
+            .finish_non_exhaustive()
+    }
+}
+
+/// One Apple peer ranging between this device and a contact (§10.4).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PeerRangingInfo {
+    /// The contact, hex.
+    pub contact: String,
+    /// The ranging session ID.
+    pub session_id: u32,
+    /// The contact's discovery token for this ranging, hex.
+    pub peer_token: String,
+    /// This device's token for it, hex (none in a request).
+    pub local_token: Option<String>,
+}
+
+impl core::fmt::Debug for PeerRangingInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PeerRangingInfo")
+            .field("contact", &self.contact)
+            .field("session_id", &self.session_id)
             .finish_non_exhaustive()
     }
 }
@@ -615,6 +671,13 @@ pub enum Event {
     /// [`Request::RangingAnswer`], then range with it as the controlee.
     /// Holds the STS key.
     RangingRequested(Ranging),
+    /// While pointing: this contact accepted Apple peer ranging; run the
+    /// session whose token is `local_token` with `peer_token`.
+    PeerPointTarget(PeerRangingInfo),
+    /// A contact points at this device with Apple peer ranging: accept
+    /// with [`Request::PeerRangingAccept`] (or refuse), then range with
+    /// `peer_token`.
+    PeerRangingRequested(PeerRangingInfo),
     /// A ranging ended (stopped, its time up, or its session gone).
     RangingStopped {
         /// The contact, hex.
@@ -707,6 +770,12 @@ mod tests {
                     channel: 9,
                     preamble: 10,
                 }],
+                peer_tokens: vec!["0a0b".into()],
+            },
+            Request::PeerRangingAccept {
+                contact: "ab".into(),
+                session_id: 9,
+                token: "0c".into(),
             },
             Request::PointStop,
             Request::RangingAnswer {
