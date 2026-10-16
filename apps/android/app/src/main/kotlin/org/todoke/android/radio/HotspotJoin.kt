@@ -1,5 +1,5 @@
-// Joining another device's hotspot (PROTOCOL §10.2 kind 3), Android 10 and
-// later: a WifiNetworkSpecifier request for exactly the offer's network,
+// Joining another device's hotspot (PROTOCOL §10.2 kind 3): a
+// WifiNetworkSpecifier request for exactly the offer's network,
 // without internet, so the network stays the app's and is never saved or
 // suggested; the system asks the user once per request. Sockets are bound
 // to it; it goes when the request is withdrawn.
@@ -15,9 +15,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.net.wifi.WifiManager
 import android.net.wifi.WifiNetworkSpecifier
-import android.os.Build
 import android.os.Handler
-import androidx.annotation.RequiresApi
 import org.todoke.ffi.LinkRequest
 import org.todoke.ffi.LinkSecurity
 
@@ -25,18 +23,16 @@ internal class HotspotJoin(private val context: Context, private val handler: Ha
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
     private val wifi = context.getSystemService(WifiManager::class.java)
 
-    fun available(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && wifi?.isWifiEnabled == true
+    fun available(): Boolean = wifi?.isWifiEnabled == true
 
     /** What this device joins with (Wi-Fi Direct groups too: WPA2). */
     fun securities(): List<LinkSecurity> = buildList {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && wifi?.isWpa3SaeSupported == true) {
+        if (wifi?.isWpa3SaeSupported == true) {
             add(LinkSecurity.WPA3)
             add(LinkSecurity.WPA3_TRANSITION)
         }
         add(LinkSecurity.WPA2)
     }
-
-    @RequiresApi(Build.VERSION_CODES.Q)
     private fun specifier(request: LinkRequest): WifiNetworkSpecifier {
         val passphrase = String(request.secret, Charsets.US_ASCII)
         val sae = wifi?.isWpa3SaeSupported == true
@@ -52,7 +48,6 @@ internal class HotspotJoin(private val context: Context, private val handler: Ha
 
     @SuppressLint("MissingPermission")
     fun join(request: LinkRequest): Held {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) throw failed("joining hotspots needs Android 10")
         val connectivity = connectivity ?: throw failed("no connectivity service")
         val networkRequest = NetworkRequest.Builder()
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -74,7 +69,7 @@ internal class HotspotJoin(private val context: Context, private val handler: Ha
             val (network, properties) = up.await(within, "joining the hotspot")
             val local = properties.linkAddresses.first { it.address.usableV4() }.address
             // The hotspot's own address: its DHCP server, else its router.
-            val host = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) properties.dhcpServerAddress else null)
+            val host = properties.dhcpServerAddress
                 ?: properties.routes.firstOrNull { it.isDefaultRoute && it.gateway?.usableV4() == true }?.gateway
                 ?: throw failed("the hotspot named no address")
             return Held(local.text(), host.text(), indexOf(properties.interfaceName), network, teardown = teardown)

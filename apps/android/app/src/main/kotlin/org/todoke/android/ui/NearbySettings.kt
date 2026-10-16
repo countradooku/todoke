@@ -47,7 +47,7 @@ fun NearbySettings() {
         granted = { NearbyPermissions.wifiGranted(context) },
     )
     val pointing = app.pointing
-    if (pointing != null && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.S &&
+    if (pointing != null &&
         context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_UWB)
     ) {
         val scope = rememberCoroutineScope()

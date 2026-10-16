@@ -10,8 +10,8 @@ android {
     compileSdk = 37
 
     defaultConfig {
-        // Android 7 (P16's minimum).
-        minSdk = 24
+        // Android 13: nearby Wi-Fi devices without location, and every radio API todoke uses (ADR 0019).
+        minSdk = 33
         consumerProguardFiles("consumer-rules.pro")
     }
 

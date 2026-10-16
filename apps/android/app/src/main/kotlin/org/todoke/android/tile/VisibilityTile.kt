@@ -2,7 +2,6 @@
 
 package org.todoke.android.tile
 
-import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import kotlinx.coroutines.CoroutineScope
@@ -30,9 +29,7 @@ class VisibilityTile : TileService() {
         val hidden = app.prefs.hidden
         tile.state = if (hidden) Tile.STATE_INACTIVE else Tile.STATE_ACTIVE
         tile.label = getString(R.string.app_name)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            tile.subtitle = getString(if (hidden) R.string.visibility_hidden else R.string.visibility_contacts)
-        }
+        tile.subtitle = getString(if (hidden) R.string.visibility_hidden else R.string.visibility_contacts)
         tile.updateTile()
     }
 }

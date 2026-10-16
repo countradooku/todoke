@@ -16,7 +16,6 @@ package org.todoke.android.radio
 
 import android.content.Context
 import android.net.Network
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.ParcelFileDescriptor
@@ -66,7 +65,7 @@ class AndroidLinks(
 
     override fun abilities(): LinkAbilities {
         val none = LinkAbilities(emptyList(), emptyList(), emptyList())
-        if (!active() || !NearbyPermissions.wifiGranted(context) || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+        if (!active() || !NearbyPermissions.wifiGranted(context)) {
             return none
         }
         val host = mutableListOf<LinkKind>()
@@ -155,9 +154,4 @@ internal fun InetAddress.usableV4() = this is Inet4Address && !isLoopbackAddress
 internal fun InetAddress.linkLocalV6() = this is Inet6Address && isLinkLocalAddress
 
 /** The index of the interface `name`, or 0. */
-internal fun indexOf(name: String?): Int =
-    if (name == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
-        0
-    } else {
-        runCatching { Os.if_nametoindex(name) }.getOrDefault(0)
-    }
+internal fun indexOf(name: String?): Int = name?.let { runCatching { Os.if_nametoindex(it) }.getOrDefault(0) } ?: 0

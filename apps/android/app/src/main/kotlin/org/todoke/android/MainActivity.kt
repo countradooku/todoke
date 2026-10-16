@@ -166,21 +166,13 @@ class MainActivity : FragmentActivity() {
         )
         val info = BiometricPrompt.PromptInfo.Builder()
             .setTitle(getString(R.string.unlock_title))
-            .apply {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
-                } else {
-                    @Suppress("DEPRECATION")
-                    setDeviceCredentialAllowed(true)
-                }
-            }
+            .setAllowedAuthenticators(BIOMETRIC_STRONG or DEVICE_CREDENTIAL)
             .build()
         prompt.authenticate(info)
     }
 
     @Composable
     private fun AskForNotifications() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {}
         LaunchedEffect(Unit) {
             if (ContextCompat.checkSelfPermission(this@MainActivity, Manifest.permission.POST_NOTIFICATIONS) !=

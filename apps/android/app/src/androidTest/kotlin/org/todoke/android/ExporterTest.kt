@@ -6,7 +6,6 @@
 
 package org.todoke.android
 
-import android.os.Build
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -133,15 +132,10 @@ class ExporterTest {
         }
         assertTrue(File(received, "done.txt").exists())
 
-        // Interrupted: it may resume, and before Android 11 publication is
-        // a copy, so the export waits it out there.
+        // Interrupted: nothing is being written (a resumed file publishes by
+        // renaming), so the export goes ahead.
         backend.transfers = listOf(FakeBackend.transfer("t2", TransferState.INTERRUPTED, 1, 2))
-        val copies = Build.VERSION.SDK_INT < Build.VERSION_CODES.R
-        assertEquals(if (copies) 0 else 1, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
-
-        // Waiting for a decision: nothing is being written.
-        backend.transfers = listOf(FakeBackend.transfer("t1", TransferState.AWAITING_DECISION, 0, 2))
-        assertEquals(if (copies) 1 else 0, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
+        assertEquals(1, exporter.exportWhenQuiet(backend, DirFolder(chosen)))
         assertFalse(File(received, "done.txt").exists())
     }
 

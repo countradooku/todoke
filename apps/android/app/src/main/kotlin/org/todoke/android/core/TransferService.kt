@@ -9,7 +9,6 @@ import android.app.Notification
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
@@ -24,12 +23,12 @@ import org.todoke.ffi.TransferState
 class TransferService : LifecycleService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
-        val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-        } else {
-            0
-        }
-        ServiceCompat.startForeground(this, NOTIFICATION, notification(0, 0), type)
+        ServiceCompat.startForeground(
+            this,
+            NOTIFICATION,
+            notification(0, 0),
+            ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
+        )
         // Direct links may be set up while a transfer runs, in the background too.
         (application as TodokeApplication).radios.transferRunning = true
         lifecycleScope.launch { watch() }

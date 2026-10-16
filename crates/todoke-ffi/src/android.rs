@@ -54,9 +54,9 @@ fn api_level() -> Option<u32> {
 
 #[cfg(test)]
 mod tests {
-    /// Android 7 is the oldest the app supports.
+    /// Android 13 is the oldest the app supports.
     #[test]
     fn the_api_level_reads_as_a_release() {
-        assert!(super::api_level().is_some_and(|level| level >= 24));
+        assert!(super::api_level().is_some_and(|level| level >= 33));
     }
 }

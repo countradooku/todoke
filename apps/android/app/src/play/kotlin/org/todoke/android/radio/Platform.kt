@@ -7,7 +7,6 @@ package org.todoke.android.radio
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import androidx.core.uwb.RangingParameters
 import androidx.core.uwb.RangingResult
 import androidx.core.uwb.UwbAddress
@@ -25,7 +24,7 @@ import org.todoke.ffi.RangingInfo
 import org.todoke.ffi.UwbController
 
 fun platformUwb(context: Context): Uwb? =
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && context.packageManager.hasSystemFeature(PackageManager.FEATURE_UWB)) {
+    if (context.packageManager.hasSystemFeature(PackageManager.FEATURE_UWB)) {
         PlayUwb(context)
     } else {
         null

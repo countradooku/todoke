@@ -1,6 +1,6 @@
 # Android client
 
-The todoke app for Android 7 and later: Kotlin and Jetpack Compose
+The todoke app for Android 13 and later: Kotlin and Jetpack Compose
 (Material 3 Expressive) over the core through the BoltFFI AAR
 (`crates/todoke-ffi/android`). Rust owns all protocol, cryptographic, and
 file logic, consent included; the app presents state and submits the

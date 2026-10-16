@@ -1,4 +1,4 @@
-// Wi-Fi Direct groups (PROTOCOL §10.2 kind 2), Android 10 and later: a
+// Wi-Fi Direct groups (PROTOCOL §10.2 kind 2): a
 // group with exactly the offer's name and passphrase (WPA2-PSK, never
 // persistent, never WPS), hosted or joined through WifiP2pConfig.Builder.
 // The group owner's system DHCP names it as router and DNS server; it
@@ -16,9 +16,7 @@ import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pGroup
 import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
-import android.os.Build
 import android.os.Handler
-import androidx.annotation.RequiresApi
 import java.net.NetworkInterface
 import org.todoke.ffi.LinkRequest
 import org.todoke.ffi.LinkSecurity
@@ -27,12 +25,9 @@ internal class WifiDirect(private val context: Context, private val handler: Han
     private val manager: WifiP2pManager? = context.getSystemService(WifiP2pManager::class.java)
 
     fun available(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-            manager != null &&
+        manager != null &&
             context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_DIRECT) &&
             context.getSystemService(WifiManager::class.java)?.isWifiEnabled == true
-
-    @RequiresApi(Build.VERSION_CODES.Q)
     private fun config(request: LinkRequest, owner: Boolean): WifiP2pConfig {
         if (request.security != LinkSecurity.WPA2) throw failed("Wi-Fi Direct groups are WPA2")
         return WifiP2pConfig.Builder()
@@ -45,7 +40,6 @@ internal class WifiDirect(private val context: Context, private val handler: Han
 
     @SuppressLint("MissingPermission")
     fun host(request: LinkRequest): Held {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) throw failed("Wi-Fi Direct groups need Android 10")
         val manager = manager ?: throw failed("this device has no Wi-Fi Direct")
         val channel = manager.initialize(context, handler.looper, null) ?: throw failed("Wi-Fi Direct is off")
         val teardown = {
@@ -68,7 +62,6 @@ internal class WifiDirect(private val context: Context, private val handler: Han
 
     @SuppressLint("MissingPermission")
     fun join(request: LinkRequest): Held {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) throw failed("Wi-Fi Direct groups need Android 10")
         val manager = manager ?: throw failed("this device has no Wi-Fi Direct")
         val channel = manager.initialize(context, handler.looper, null) ?: throw failed("Wi-Fi Direct is off")
         val teardown = {

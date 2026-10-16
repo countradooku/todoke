@@ -1,11 +1,10 @@
 // Wi-Fi Aware data paths (PROTOCOL §10.2 kind 1). The host publishes the
 // service `todoke` with the offer's eight bytes of service information and
-// accepts a data path from any subscriber holding the PMK (Android 12 and
-// later); the joiner subscribes, and requests a data path to each matching
-// publisher once, until one comes up (Android 11 and later). The data path
-// is the app's network: never open (always the PMK, NCS-SK-128, or
-// NCS-SK-256 from Android 13 where the hardware has it), and it goes when
-// the request is withdrawn.
+// accepts a data path from any subscriber holding the PMK; the joiner
+// subscribes, and requests a data path to each matching publisher once,
+// until one comes up. The data path is the app's network: never open
+// (always the PMK, NCS-SK-128, or NCS-SK-256 where the hardware has it),
+// and it goes when the request is withdrawn.
 //
 // The host's address on the data path exists only once the joiner sets it
 // up, after the offer: the host names the Aware data interfaces instead, and
@@ -34,19 +33,14 @@ import android.net.wifi.aware.WifiAwareManager
 import android.net.wifi.aware.WifiAwareNetworkInfo
 import android.net.wifi.aware.WifiAwareNetworkSpecifier
 import android.net.wifi.aware.WifiAwareSession
-import android.os.Build
 import android.os.Handler
-import androidx.annotation.RequiresApi
 import java.util.Collections
 import org.todoke.ffi.LinkRequest
 import org.todoke.ffi.LinkSecurity
 
 internal class Aware(private val context: Context, private val handler: Handler) {
-    // Only from Android 11 (setPmk): the class does not exist before 8.
     private val manager: WifiAwareManager? by lazy {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-            context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE)
-        ) {
+        if (context.packageManager.hasSystemFeature(PackageManager.FEATURE_WIFI_AWARE)) {
             context.getSystemService(WifiAwareManager::class.java)
         } else {
             null
@@ -54,10 +48,10 @@ internal class Aware(private val context: Context, private val handler: Handler)
     }
     private val connectivity = context.getSystemService(ConnectivityManager::class.java)
 
-    fun available(): Boolean = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && manager?.isAvailable == true
+    fun available(): Boolean = manager?.isAvailable == true
 
-    /** Hosting needs a publisher that accepts any subscriber (Android 12). */
-    fun canPublish(): Boolean = available() && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && interfaces().isNotEmpty()
+    /** Hosting needs a data interface to listen on. */
+    fun canPublish(): Boolean = available() && interfaces().isNotEmpty()
 
     fun securities(): List<LinkSecurity> = buildList {
         if (sk256()) add(LinkSecurity.AWARE_SK256)
@@ -65,20 +59,17 @@ internal class Aware(private val context: Context, private val handler: Handler)
     }
 
     private fun sk256(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            (manager?.characteristics?.supportedCipherSuites ?: 0) and
+        (manager?.characteristics?.supportedCipherSuites ?: 0) and
             Characteristics.WIFI_AWARE_CIPHER_SUITE_NCS_SK_256 != 0
 
     /** The Aware data interfaces' indexes (the data path comes up on one). */
     private fun interfaces(): List<Int> = (0 until MAX_INTERFACES).map { indexOf("aware_data$it") }.filter { it > 0 }
-
-    @RequiresApi(Build.VERSION_CODES.R)
     private fun secure(builder: WifiAwareNetworkSpecifier.Builder, request: LinkRequest): WifiAwareNetworkSpecifier {
         if (request.secret.size != PMK_LEN) throw failed("not a data path key")
         when (request.security) {
             LinkSecurity.AWARE_SK128 -> builder.setPmk(request.secret.copyOf())
             LinkSecurity.AWARE_SK256 -> {
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || !sk256()) throw failed("no NCS-SK-256 here")
+                if (!sk256()) throw failed("no NCS-SK-256 here")
                 builder.setDataPathSecurityConfig(
                     WifiAwareDataPathSecurityConfig.Builder(Characteristics.WIFI_AWARE_CIPHER_SUITE_NCS_SK_256)
                         .setPmk(request.secret.copyOf())
@@ -91,7 +82,6 @@ internal class Aware(private val context: Context, private val handler: Handler)
     }
 
     @SuppressLint("MissingPermission")
-    @RequiresApi(Build.VERSION_CODES.R)
     private fun attach(): WifiAwareSession {
         val manager = manager ?: throw failed("this device has no Wi-Fi Aware")
         val waiter = Waiter<WifiAwareSession>()
@@ -108,7 +98,6 @@ internal class Aware(private val context: Context, private val handler: Handler)
 
     @SuppressLint("MissingPermission")
     fun host(request: LinkRequest): Held {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) throw failed("Wi-Fi Aware hosting needs Android 12")
         val connectivity = connectivity ?: throw failed("no connectivity service")
         val scopes = interfaces().ifEmpty { throw failed("no Wi-Fi Aware data interface") }
         val session = attach()
@@ -149,7 +138,6 @@ internal class Aware(private val context: Context, private val handler: Handler)
 
     @SuppressLint("MissingPermission")
     fun join(request: LinkRequest): Held {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) throw failed("Wi-Fi Aware needs Android 11")
         val connectivity = connectivity ?: throw failed("no connectivity service")
         val within = request.withinMs.toLong().takeIf { it > 0 } ?: STEP_MS
         val session = attach()
@@ -214,8 +202,6 @@ internal class Aware(private val context: Context, private val handler: Handler)
             throw error
         }
     }
-
-    @RequiresApi(Build.VERSION_CODES.R)
     private fun aware(specifier: WifiAwareNetworkSpecifier) = NetworkRequest.Builder()
         .addTransportType(NetworkCapabilities.TRANSPORT_WIFI_AWARE)
         .setNetworkSpecifier(specifier)

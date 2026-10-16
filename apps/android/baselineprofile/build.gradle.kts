@@ -15,7 +15,7 @@ android {
 
     defaultConfig {
         // Macrobenchmark needs Android 9.
-        minSdk = 28
+        minSdk = 33
         targetSdk = 37
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

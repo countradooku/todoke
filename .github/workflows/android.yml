@@ -5,7 +5,7 @@ name: Android app
 # the 15 MB target, no proprietary dependency in the F-Droid flavor, and the
 # instrumented tests (every UI flow with accessibility checks, the export to
 # a chosen folder, two real cores in the app's sandbox) on AOSP emulators
-# without Google services: Android 7, 10, and 16. Nothing is published or
+# without Google services: Android 13 and 16. Nothing is published or
 # signed.
 on:
   push:
@@ -97,10 +97,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 36: publication by renameat2. 29: Android 10, where apps get
-        # neither renameat2 nor hard links, so files publish by copying.
-        # 24: the minimum (Android 7).
-        api: [36, 29, 24]
+        # 33: the minimum (Android 13). 36: the current release.
+        api: [36, 33]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

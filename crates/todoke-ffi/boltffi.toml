@@ -42,8 +42,8 @@ standalone_archive = true
 [targets.android]
 enabled = true
 output = "dist/android"
-# Android 7 (P16's minimum).
-min_sdk = 24
+# Android 13: nearby Wi-Fi devices without location, and every radio API todoke uses (ADR 0019).
+min_sdk = 33
 
 [targets.android.kotlin]
 package = "org.todoke.ffi"
