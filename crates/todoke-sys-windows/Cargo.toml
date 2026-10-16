@@ -36,11 +36,14 @@ broken_intra_doc_links = "deny"
 
 [target.'cfg(windows)'.dependencies]
 zeroize.workspace = true
-# DPAPI and the TPM's key storage provider, and one Winsock option (raw
-# bindings; the calls are in dpapi.rs and socket.rs, each unsafe block
-# justified).
+# DPAPI and the TPM's key storage provider, one Winsock option, and
+# joining a direct link's network (raw bindings; the calls are in
+# dpapi.rs, socket.rs, and wifi.rs, each unsafe block justified).
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Foundation",
+    "Win32_NetworkManagement_IpHelper",
+    "Win32_NetworkManagement_Ndis",
+    "Win32_NetworkManagement_WiFi",
     "Win32_Networking_WinSock",
     "Win32_Security_Cryptography",
 ] }

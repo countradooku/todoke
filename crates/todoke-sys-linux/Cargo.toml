@@ -39,6 +39,5 @@ zeroize.workspace = true
 # The freedesktop Secret Service over the session bus (pure Rust; already
 # in the graph for GPUI's accessibility and portals).
 zbus = "=5.19.0"
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
+# Connection UUIDs for direct links.
 getrandom.workspace = true
