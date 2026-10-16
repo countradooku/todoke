@@ -69,6 +69,7 @@ impl Device {
             hidden: false,
             history_days: 30,
             key_storage: todoke_core::config::KeyStorage::File,
+            direct_links: todoke_core::link::DirectLinks::FromRelay,
         };
         std::fs::write(&paths.config_file, serde_json::to_vec_pretty(&config)?)?;
         Ok(Self {

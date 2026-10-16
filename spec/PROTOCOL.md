@@ -1500,12 +1500,16 @@ networks MUST NOT be used.
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
 | offer_id | 16 | The offer answered |
-| result | 1 | 1 joined, 2 declined, 3 failed |
+| result | 1 | 1 joining, 2 declined, 3 failed |
 
-Total: 17 bytes. `declined` or `failed` ends link setup for the session: there is no
-second offer. After `joined`, both endpoints close the session (§4 allows one
-session per pair) and the joiner opens TCP to the host over the new link (§10.1) and
-runs a full contact handshake as the initiator. The host accepts one connection for
+Total: 17 bytes. The joiner checks the offer and its own ability to join it, then
+answers before it asks its operating system to join: a device with one radio leaves
+the network that carries the session when it joins another, so an answer sent after
+joining could not arrive. `failed` means it cannot join this offer (for example, the
+security it requires); `declined` that it will not. Either ends link setup for the
+session: there is no second offer. After `joining`, both endpoints close the session
+(§4 allows one session per pair), the joiner joins, opens TCP to the host over the
+new link (§10.1), and runs a full contact handshake as the initiator. The host accepts one connection for
 the offer, only on that link, only before `expires_in`. A transfer resumes on the new
 session with a fresh Accept (§5, §7.5); if the new link fails, the endpoints connect
 again however they can and resume the same way.

@@ -26,6 +26,10 @@ type AnyResult<T> = Result<T, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Pairs meeting at once.
 const BATCH: u32 = 250;
+/// Client endpoints (UDP sockets, each with its own driver) the
+/// connections are spread over: on one, 20000 connections starve its
+/// driver on a small CI runner until keep-alives miss the idle timeout.
+const CLIENTS: usize = 8;
 
 fn token(index: u32) -> AnyResult<RendezvousToken> {
     let mut bytes = [0xa5; 32];
@@ -71,8 +75,10 @@ async fn ten_thousand_concurrent_rendezvous() -> AnyResult<()> {
     });
     let metrics = relay.metrics();
     tokio::spawn(relay.run(Arc::new(tokio::sync::Notify::new())));
-    // One UDP socket for every client connection.
-    let client = Arc::new(RelayClient::new()?);
+    // A few UDP sockets for every client connection.
+    let clients = (0..CLIENTS)
+        .map(|_| RelayClient::new().map(Arc::new))
+        .collect::<Result<Vec<_>, _>>()?;
     let started = Instant::now();
     // Pairs arrive in batches, as handshakes allow; every tunnel stays
     // open, so all of them are open together at the end.
@@ -84,7 +90,9 @@ async fn ten_thousand_concurrent_rendezvous() -> AnyResult<()> {
         let mut tasks = Vec::with_capacity(2 * BATCH as usize);
         for index in batch {
             for side in [0_u8, 1] {
-                let (client, endpoint) = (Arc::clone(&client), Arc::clone(&endpoint));
+                let client =
+                    Arc::clone(&clients[(2 * index as usize + usize::from(side)) % CLIENTS]);
+                let endpoint = Arc::clone(&endpoint);
                 tasks.push(tokio::spawn(async move {
                     // As the app does: a connection that did not come up
                     // (a lost handshake under a burst of UDP) is tried

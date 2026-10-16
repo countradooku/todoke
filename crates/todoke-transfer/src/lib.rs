@@ -74,7 +74,7 @@ mod tests;
 pub use capabilities::{CapabilitiesError, LocalCapabilities, Negotiated};
 pub use clock::Clock;
 pub use driver::{DriveError, pump};
-pub use engine::{EngineConfig, EngineError, OutgoingFrame, TransferEngine};
+pub use engine::{EngineConfig, EngineError, LinkError, OutgoingFrame, TransferEngine};
 pub use events::{
     Direction, Failure, FailureCode, OfferEntry, OfferView, Party, Progress, TransferEvent,
 };

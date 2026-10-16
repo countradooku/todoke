@@ -16,6 +16,7 @@
 //! | [`dpapi`] | The storage key under DPAPI, wrapped by the TPM where present |
 //! | [`package`] | Whether todoke runs from its MSIX package |
 //! | [`socket`] | Socket options the portable crates lack (`SO_EXCLUSIVEADDRUSE`) |
+//! | [`wifi`] | Joining a network hosted for a direct link (Native Wifi) |
 //!
 //! Read `docs/adr/0011-os-integration.md` before adding behavior.
 
@@ -33,3 +34,5 @@ pub mod dpapi;
 pub mod package;
 #[cfg(windows)]
 pub mod socket;
+#[cfg(windows)]
+pub mod wifi;

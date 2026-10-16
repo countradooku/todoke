@@ -118,6 +118,7 @@ pub fn contacts(contacts: &[ContactInfo]) -> String {
             match contact.route {
                 Some(Route::Lan) => ", connected on the LAN",
                 Some(Route::Relay) => ", connected through a relay",
+                Some(Route::Direct) => ", connected over a direct Wi-Fi link",
                 None if contact.connected => ", connected",
                 None => "",
             },

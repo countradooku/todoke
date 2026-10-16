@@ -282,7 +282,7 @@ fn the_link_its_host_and_its_security_are_chosen_by_rule() -> TestResult {
 #[test]
 fn answers_have_three_results() -> TestResult {
     for (code, result) in [
-        (1, LinkResult::Joined),
+        (1, LinkResult::Joining),
         (2, LinkResult::Declined),
         (3, LinkResult::Failed),
     ] {
@@ -296,7 +296,7 @@ fn answers_have_three_results() -> TestResult {
     }
     let mut body = LinkAnswer {
         offer_id: ID,
-        result: LinkResult::Joined,
+        result: LinkResult::Joining,
     }
     .encode();
     body[16] = 4;

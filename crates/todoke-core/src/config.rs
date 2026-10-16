@@ -97,6 +97,11 @@ pub struct CoreConfig {
     /// Where the key that seals the state is kept.
     #[serde(default)]
     pub key_storage: KeyStorage,
+    /// When to set up a direct Wi-Fi link with a contact (§10.2), given a
+    /// platform that can ([`crate::runtime::Core::start_with_links`]): by
+    /// default only to move a session off a relay.
+    #[serde(default)]
+    pub direct_links: crate::link::DirectLinks,
 }
 
 /// Where the key that seals the state is kept (§16 O9).
@@ -139,6 +144,7 @@ impl CoreConfig {
             hidden: false,
             history_days: default_history_days(),
             key_storage: KeyStorage::Auto,
+            direct_links: crate::link::DirectLinks::FromRelay,
         }
     }
 }

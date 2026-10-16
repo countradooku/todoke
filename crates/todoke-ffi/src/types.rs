@@ -82,6 +82,8 @@ pub enum Route {
     Lan,
     /// Through a relay.
     Relay,
+    /// Over a direct Wi-Fi link the two devices set up.
+    Direct,
 }
 
 /// What protects the key that seals this device's state.
@@ -244,6 +246,7 @@ impl From<api::ContactInfo> for Contact {
                 None => Route::None,
                 Some(api::Route::Lan) => Route::Lan,
                 Some(api::Route::Relay) => Route::Relay,
+                Some(api::Route::Direct) => Route::Direct,
             },
             device: contact.device,
             available: contact.available,

@@ -30,6 +30,8 @@ pub mod handoff;
 pub mod ipc;
 #[cfg(not(target_family = "wasm"))]
 pub mod keys;
+#[cfg(not(target_family = "wasm"))]
+pub mod links;
 pub mod paths;
 #[cfg(not(target_family = "wasm"))]
 mod server;
@@ -92,7 +94,8 @@ pub fn run(paths: &Paths) -> Result<(), DaemonError> {
         .block_on(endpoint::Listener::bind(&paths.endpoint()))
         .map_err(DaemonError::Endpoint)?;
     let key = keys::source(&config);
-    let core = todoke_core::Core::start(config, Box::new(key)).map_err(core_error)?;
+    let core = todoke_core::Core::start_with_links(config, Box::new(key), links::platform())
+        .map_err(core_error)?;
     runtime.block_on(async {
         let stop = std::sync::Arc::new(tokio::sync::Notify::new());
         let signal = {
@@ -243,13 +246,15 @@ pub fn host(paths: &Paths) -> Result<Hosted, DaemonError> {
                     return;
                 }
             };
-            let core = match todoke_core::Core::start(config, Box::new(key)) {
-                Ok(core) => core,
-                Err(error) => {
-                    let _ = started.send(Err(core_error(error)));
-                    return;
-                }
-            };
+            let core =
+                match todoke_core::Core::start_with_links(config, Box::new(key), links::platform())
+                {
+                    Ok(core) => core,
+                    Err(error) => {
+                        let _ = started.send(Err(core_error(error)));
+                        return;
+                    }
+                };
             if started.send(Ok(core.clone())).is_err() {
                 return;
             }

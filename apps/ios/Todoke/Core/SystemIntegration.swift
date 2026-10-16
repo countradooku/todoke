@@ -44,6 +44,11 @@ final class Notifications: Notifier, @unchecked Sendable {
     }
 
     static func requestPermission() async {
+        #if DEBUG
+        // The scripted core of the UI tests posts nothing; the system alert
+        // would only interrupt the flows on a fresh simulator.
+        if UserDefaults.standard.string(forKey: "ui-test-scenario") != nil { return }
+        #endif
         _ = try? await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge])
     }
 }

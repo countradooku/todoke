@@ -16,6 +16,10 @@ pub enum LinkKind {
     Lan,
     /// A tunnel through an untrusted relay (§10).
     Relay,
+    /// TCP over a direct Wi-Fi link two devices set up inside a session
+    /// (§10.2): a Wi-Fi Direct group, a hotspot, or a Wi-Fi Aware data
+    /// path, used only between the two.
+    Direct,
     /// An in-memory pipe with simulated latency, bandwidth, and loss
     /// (tests only).
     #[cfg(test)]
@@ -28,6 +32,7 @@ impl LinkKind {
     #[must_use]
     pub const fn rank(self) -> u8 {
         match self {
+            Self::Direct => 20,
             Self::Lan => 10,
             Self::Relay => 1,
             #[cfg(test)]

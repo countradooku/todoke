@@ -74,6 +74,7 @@ impl Todoke {
         let left = format::eta(transfer.bytes_done, transfer.bytes_total, speed);
         let (route_label, route_fill) = match route {
             Some(Route::Lan) => ("Direct (LAN)", palette.success),
+            Some(Route::Direct) => ("Direct (Wi-Fi link)", palette.success),
             Some(Route::Relay) => ("Through relay", palette.warning),
             None => ("Waiting for a connection", palette.muted),
         };

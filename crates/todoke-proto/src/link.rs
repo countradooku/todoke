@@ -479,8 +479,10 @@ impl fmt::Debug for LinkOffer {
 /// The joiner's answer (§10.2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LinkResult {
-    /// It joined; it connects next.
-    Joined,
+    /// It is joining: it leaves the session, joins, and connects over
+    /// the link next (sent before it joins: one radio cannot keep the
+    /// session's network and join another).
+    Joining,
     /// It will not join this offer.
     Declined,
     /// It could not join (for example, the security is not supported).
@@ -503,7 +505,7 @@ impl LinkAnswer {
         let mut out = [0; ANSWER_LEN];
         out[..OFFER_ID_LEN].copy_from_slice(&self.offer_id);
         out[OFFER_ID_LEN] = match self.result {
-            LinkResult::Joined => 1,
+            LinkResult::Joining => 1,
             LinkResult::Declined => 2,
             LinkResult::Failed => 3,
         };
@@ -525,7 +527,7 @@ impl LinkAnswer {
             return Err(DecodeError::ZeroIdentifier);
         }
         let result = match result {
-            [1] => LinkResult::Joined,
+            [1] => LinkResult::Joining,
             [2] => LinkResult::Declined,
             [3] => LinkResult::Failed,
             _ => return Err(DecodeError::UnknownEnum),

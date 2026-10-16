@@ -401,7 +401,7 @@ impl Model {
             return Proximity::Blocked;
         }
         match contact.route {
-            Some(Route::Lan) => Proximity::Direct,
+            Some(Route::Lan | Route::Direct) => Proximity::Direct,
             Some(Route::Relay) => Proximity::Remote,
             None if contact.nearby => Proximity::Direct,
             None if self.relays => Proximity::Remote,

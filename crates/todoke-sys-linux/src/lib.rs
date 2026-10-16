@@ -18,6 +18,7 @@
 //! | [`secret_portal`] | The app's secret from the Secret portal (Flatpak) |
 //! | [`secret_service`] | The storage key in the freedesktop Secret Service |
 //! | [`tray`] | Whether a `StatusNotifierItem` host shows tray items |
+//! | [`wifi`] | Joining a network hosted for a direct link (`NetworkManager`) |
 //!
 //! Read `docs/adr/0011-os-integration.md` before adding behavior.
 
@@ -39,3 +40,5 @@ pub mod secret_portal;
 pub mod secret_service;
 #[cfg(all(target_os = "linux", feature = "desktop"))]
 pub mod tray;
+#[cfg(target_os = "linux")]
+pub mod wifi;

@@ -20,6 +20,9 @@ use crate::api::{EntryInfo, ErrorCode, Event, OfferInfo, Response, TransferState
 const POLL: Duration = Duration::from_millis(100);
 /// A session with nothing to do closes after this long.
 const IDLE: Duration = Duration::from_secs(30);
+/// How long a joiner leaving for a direct link waits for the host to close
+/// the session (§10.2).
+const DRAIN: Duration = Duration::from_secs(5);
 
 /// What the rest of the core asks a session to do.
 pub(super) enum SessionCommand {
@@ -41,7 +44,7 @@ impl SessionCommand {
     }
 }
 
-type Engine<'k> =
+pub(super) type Engine<'k> =
     TransferEngine<'k, crate::profile::Keys, todoke_fs::FsSource, super::running::Sink>;
 
 /// Runs `established` until it ends.
@@ -55,11 +58,14 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
     let queue_source = queue.source;
     let (commands, mut inbox) = mpsc::channel(32);
     state.sessions.borrow_mut().insert(peer, commands);
-    let route = if established.link().kind() == todoke_transport::LinkKind::Relay {
-        crate::api::Route::Relay
-    } else {
-        crate::api::Route::Lan
+    let kind = established.link().kind();
+    let route = match kind {
+        todoke_transport::LinkKind::Relay => crate::api::Route::Relay,
+        todoke_transport::LinkKind::Direct => crate::api::Route::Direct,
+        todoke_transport::LinkKind::Lan => crate::api::Route::Lan,
     };
+    let mut link = super::link::SessionLink::new(&state, peer, kind);
+    let mut departing = None;
     state.routes.borrow_mut().insert(peer, route);
     let identity = &state.identity;
     let session = established.session();
@@ -90,6 +96,14 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
         let session = established.session();
         let until = session.now() + POLL;
         let pumped = pump(session, &mut engine, until).await;
+        // Moving onto a direct link: the answer went out with this pump.
+        if departing.is_some() {
+            engine.close(None);
+            if matches!(departing, Some(super::link::Move::Join { .. })) {
+                drain(established.session()).await;
+            }
+            break;
+        }
         let now = established.session().now();
         while let Some(event) = engine.pop_event() {
             if matches!(event, TransferEvent::Ready { .. }) {
@@ -100,27 +114,27 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
                 for new in prepared.drain(..) {
                     offer_new(&state, &mut engine, &new, now);
                 }
+                link.ready(&mut engine);
             }
-            report(&state, peer, event);
             idle_since = now;
+            if let Some(event) = link.event(&mut engine, event, now)
+                && !accept_retained(&state, peer, &mut engine, &event, now)
+            {
+                report(&state, peer, event);
+            }
         }
         while let Ok(command) = inbox.try_recv() {
             apply(&state, &mut engine, &mut prepared, ready, command, now);
             idle_since = now;
         }
         if pumped.is_err() {
+            // The answer may have come with the session's end (the peer
+            // closed it as it left): the move still stands.
+            departing = link.take_leaving();
             break;
         }
-        let busy = state.transfers.borrow().values().any(|record| {
-            record.peer == peer
-                && matches!(
-                    record.state,
-                    TransferState::Offered
-                        | TransferState::AwaitingDecision
-                        | TransferState::Accepted
-                        | TransferState::Transferring
-                )
-        });
+        departing = link.step(&mut engine, now).await;
+        let busy = busy(&state, &peer);
         if !busy
             && waiting.is_empty()
             && prepared.is_empty()
@@ -132,6 +146,77 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
     }
     finish(&state, peer, engine, &mut inbox, prepared, waiting);
     drop(established);
+    if let Some(to) = departing {
+        tokio::task::spawn_local(Rc::clone(&state).move_to(peer, to));
+    }
+}
+
+/// The joiner, after its answer: reads and drops what the host still sends
+/// until the host closes the session (or a few seconds pass). Closing at
+/// once with records unread would reset the connection, and a reset can
+/// discard the answer before the host reads it.
+async fn drain<L: Link>(
+    session: &mut todoke_crypto::session::Session<L, todoke_transport::TokioTimer>,
+) {
+    let until = session.now() + DRAIN;
+    while session.now() < until {
+        if session.recv_until(until).await.is_err() {
+            break;
+        }
+    }
+}
+
+/// Whether a transfer with `peer` is still being offered, decided, or
+/// moved (the session does not idle out then).
+fn busy(state: &State, peer: &Ed25519PublicKey) -> bool {
+    state.transfers.borrow().values().any(|record| {
+        record.peer == *peer
+            && matches!(
+                record.state,
+                TransferState::Offered
+                    | TransferState::AwaitingDecision
+                    | TransferState::Accepted
+                    | TransferState::Transferring
+            )
+    })
+}
+
+/// A transfer resumed after a move onto a direct link (§10.2): its user's
+/// consent was kept, for the same selection, and the fresh Accept repeats
+/// it without asking again (§7.3). Returns whether it was.
+fn accept_retained(
+    state: &State,
+    peer: Ed25519PublicKey,
+    engine: &mut Engine<'_>,
+    event: &TransferEvent,
+    now: Duration,
+) -> bool {
+    let TransferEvent::OfferReceived(view) = event else {
+        return false;
+    };
+    let Some(selection) = state.take_retained(&view.transfer_id, &peer, &view.manifest_hash) else {
+        return false;
+    };
+    if view
+        .resume_selection
+        .as_ref()
+        .is_some_and(|resumed| *resumed != selection)
+    {
+        return false;
+    }
+    offer_received(state, peer, view, true);
+    if engine
+        .accept(&view.transfer_id, selection.clone(), now)
+        .is_err()
+    {
+        // Listed and asked after all.
+        offer_received(state, peer, view, false);
+        return true;
+    }
+    if let Some(record) = state.transfers.borrow_mut().get_mut(&view.transfer_id) {
+        record.selection = Some(selection);
+    }
+    true
 }
 
 /// Puts whatever was not finished back in `peer`'s queue for the next
@@ -251,7 +336,13 @@ fn apply(
         }
         SessionCommand::Accept(id, files) => {
             let selection = files.unwrap_or_else(|| selectable(state, &id));
-            engine.accept(&id, selection, now)
+            let accepted = engine.accept(&id, selection.clone(), now);
+            if accepted.is_ok()
+                && let Some(record) = state.transfers.borrow_mut().get_mut(&id)
+            {
+                record.selection = Some(selection);
+            }
+            accepted
         }
         SessionCommand::Decline(id) => engine.reject(&id, RejectReason::Declined),
         SessionCommand::Cancel(id) => engine.cancel(&id, CancelReason::User, now),
@@ -306,7 +397,14 @@ fn way(direction: Direction) -> Way {
     }
 }
 
-fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer::OfferView) {
+/// Records an offer; unless `quiet` (a resumed offer whose consent was
+/// kept, accepted at once), lists it and tells the user.
+fn offer_received(
+    state: &State,
+    peer: Ed25519PublicKey,
+    view: &todoke_transfer::OfferView,
+    quiet: bool,
+) {
     state.remember(
         view.transfer_id,
         TransferRecord {
@@ -326,6 +424,7 @@ fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer:
                 .collect(),
             manifest_hash: Some(view.manifest_hash),
             receipt: None,
+            selection: None,
         },
     );
     let offer = OfferInfo {
@@ -346,6 +445,9 @@ fn offer_received(state: &State, peer: Ed25519PublicKey, view: &todoke_transfer:
         total_bytes: view.total_bytes,
         resume: view.resume_selection.clone(),
     };
+    if quiet {
+        return;
+    }
     state
         .received
         .borrow_mut()
@@ -380,7 +482,7 @@ const fn rejection(reason: RejectReason) -> &'static str {
 /// Mirrors an engine event into the core's records and events.
 fn report(state: &State, peer: Ed25519PublicKey, event: TransferEvent) {
     match event {
-        TransferEvent::OfferReceived(view) => offer_received(state, peer, &view),
+        TransferEvent::OfferReceived(view) => offer_received(state, peer, &view, false),
         TransferEvent::OfferSent {
             transfer_id,
             manifest_hash,

@@ -208,6 +208,8 @@ pub(super) struct TransferRecord {
     pub(super) manifest_hash: Option<[u8; 32]>,
     /// The signed receipt's ID and completion time (§7.7).
     pub(super) receipt: Option<([u8; 16], UnixTime)>,
+    /// The files this device's user accepted, for an incoming transfer.
+    pub(super) selection: Option<Vec<u32>>,
 }
 
 /// Where an accepted link came from, and so what it may carry.
@@ -219,6 +221,9 @@ pub(super) enum Origin {
     RelayContact(Ed25519PublicKey),
     /// A relay tunnel opened for a shown QR offer: QR pairing only.
     RelayQr,
+    /// A direct link this device hosts for this contact (§10.2): its
+    /// session only.
+    Direct(Ed25519PublicKey),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -275,6 +280,21 @@ pub(super) struct State {
     /// In the background (§10.3): no listener, no advertisement, no relay
     /// presence; open sessions go on.
     pub(super) background: Cell<bool>,
+    /// What sets up direct Wi-Fi links (§10.2), if this device can.
+    pub(crate) links: std::cell::OnceCell<std::sync::Arc<dyn crate::link::LinkPlatform>>,
+    /// Contacts whose session is moving onto a direct link, until when:
+    /// no other connection to them is started meanwhile (§4: one session
+    /// per pair).
+    pub(super) moving: RefCell<BTreeMap<Ed25519PublicKey, Duration>>,
+    /// Consent the user gave for an incoming transfer, kept (in memory,
+    /// until when) across a move onto a direct link: the new session's
+    /// fresh Accept repeats it without asking again (§7.3, §10.2).
+    pub(super) retained: RefCell<BTreeMap<TransferId, super::link::Retained>>,
+    /// Contacts with whom link setup is paused after a failed or refused
+    /// attempt, until when.
+    pub(super) link_backoff: RefCell<BTreeMap<Ed25519PublicKey, Duration>>,
+    /// Whether this device hosts a link now (§13: one at a time).
+    pub(super) hosting: Cell<bool>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
     /// What protects the storage key.
@@ -378,6 +398,11 @@ impl State {
             strangers_until: Cell::new(Duration::ZERO),
             hidden: Cell::new(hidden),
             background: Cell::new(false),
+            links: std::cell::OnceCell::new(),
+            moving: RefCell::new(BTreeMap::new()),
+            retained: RefCell::new(BTreeMap::new()),
+            link_backoff: RefCell::new(BTreeMap::new()),
+            hosting: Cell::new(false),
             history: RefCell::new(history),
             key_protection,
         }))
@@ -385,6 +410,16 @@ impl State {
 
     pub(super) fn mono(&self) -> Duration {
         self.manager.timer().now()
+    }
+
+    /// Who may be contacted or accepted over the LAN and direct links.
+    pub(super) const fn lan_policy(&self) -> LanPolicy {
+        self.policy
+    }
+
+    /// Opens TCP links (LAN and direct).
+    pub(super) const fn connector(&self) -> &TcpConnector {
+        &self.connector
     }
 
     pub(super) fn emit(&self, event: Event) {
@@ -437,6 +472,7 @@ impl State {
             backend.drain(&mut directory, &table, mono);
             directory.expire(&table, mono);
         }
+        self.prune_links();
         self.reconnect(mono);
         self.relay_tick(now);
     }
@@ -452,7 +488,10 @@ impl State {
             .map(|(peer, _)| *peer)
             .collect();
         for peer in waiting {
-            if self.sessions.borrow().contains_key(&peer) || self.manager.is_busy(&peer) {
+            if self.sessions.borrow().contains_key(&peer)
+                || self.manager.is_busy(&peer)
+                || self.is_moving(&peer)
+            {
                 continue;
             }
             let due = self
@@ -568,9 +607,9 @@ impl State {
                 let Ok(claimed) = contact.claim(&table, now).await else {
                     return false;
                 };
-                // A tunnel opened for one contact carries no other's
-                // session (whoever registered on its token).
-                if let Origin::RelayContact(expected) = origin
+                // A tunnel opened for one contact, or a direct link hosted
+                // for one, carries no other's session.
+                if let Origin::RelayContact(expected) | Origin::Direct(expected) = origin
                     && *claimed.peer() != expected
                 {
                     return false;
@@ -589,7 +628,9 @@ impl State {
                 session::run(Rc::clone(self), established).await;
                 true
             }
-            Incoming::Pairing(incoming) if !matches!(origin, Origin::RelayContact(_)) => {
+            Incoming::Pairing(incoming)
+                if !matches!(origin, Origin::RelayContact(_) | Origin::Direct(_)) =>
+            {
                 let mode = incoming.client_hello().mode();
                 if origin == Origin::RelayQr && mode != SessionMode::Qr {
                     return false;
@@ -1230,6 +1271,7 @@ impl State {
                 names: prepared.top_names(HISTORY_NAMES),
                 manifest_hash: None,
                 receipt: None,
+                selection: None,
             },
         );
         if let Err(response) = self.queue(peer, prepared).await {
@@ -1287,6 +1329,24 @@ impl State {
         };
         if self.sessions.borrow().contains_key(&peer) {
             return self.to_session(transfer, SessionCommand::Cancel).await;
+        }
+        // An incoming transfer between sessions (moving onto a direct
+        // link, say): the consent kept for it goes, and so does the
+        // transfer; a later offer of it asks again.
+        let incoming = self
+            .transfers
+            .borrow()
+            .get(&id)
+            .is_some_and(|record| record.way == Way::Incoming);
+        if incoming {
+            self.forget_retained(&id);
+            session::end(
+                self,
+                &id,
+                TransferState::Cancelled,
+                "the transfer was cancelled",
+            );
+            return Response::Done;
         }
         let mut queues = self.queues.borrow_mut();
         let Some(queue) = queues.get_mut(&peer) else {
