@@ -66,8 +66,12 @@ private struct ShowQr: View {
             } else if let failed {
                 Text(failed).foregroundStyle(Color.warning)
             } else if waitForTap && !asked {
-                Button("Show a QR code") { asked = true }
-                    .primaryAction()
+                Button { asked = true } label: {
+                    Text("Show a QR code")
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity)
+                }
+                .primaryAction()
                     .accessibilityIdentifier("show-qr")
             } else {
                 ProgressView()
