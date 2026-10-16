@@ -78,7 +78,7 @@ fn a_link_is_chosen_offered_and_answered() -> TestResult {
         Err(LinkError::NotChosen)
     );
     assert_eq!(
-        link.a.answer_link(&[1; 16], LinkResult::Joined),
+        link.a.answer_link(&[1; 16], LinkResult::Joining),
         Err(LinkError::NoOffer)
     );
     let offer = hotspot(7, LinkSecurity::Wpa3)?;
@@ -92,12 +92,12 @@ fn a_link_is_chosen_offered_and_answered() -> TestResult {
     assert_eq!(got.as_deref(), Some(&offer));
     // An answer to another offer is refused; then the right one, once.
     assert_eq!(
-        link.b.answer_link(&[8; 16], LinkResult::Joined),
+        link.b.answer_link(&[8; 16], LinkResult::Joining),
         Err(LinkError::NoOffer)
     );
-    link.b.answer_link(&[7; 16], LinkResult::Joined)?;
+    link.b.answer_link(&[7; 16], LinkResult::Joining)?;
     assert_eq!(
-        link.b.answer_link(&[7; 16], LinkResult::Joined),
+        link.b.answer_link(&[7; 16], LinkResult::Joining),
         Err(LinkError::Done)
     );
     link.settle()?;
@@ -109,7 +109,7 @@ fn a_link_is_chosen_offered_and_answered() -> TestResult {
         answered,
         Some(LinkAnswer {
             offer_id: [7; 16],
-            result: LinkResult::Joined,
+            result: LinkResult::Joining,
         })
     );
     Ok(())
@@ -228,7 +228,7 @@ fn offers_and_answers_out_of_line_are_state() -> TestResult {
     setup(&mut unasked)?;
     let answer = LinkAnswer {
         offer_id: [5; 16],
-        result: LinkResult::Joined,
+        result: LinkResult::Joining,
     }
     .encode();
     let result = unasked
@@ -243,7 +243,7 @@ fn offers_and_answers_out_of_line_are_state() -> TestResult {
     again.settle()?;
     let answer = LinkAnswer {
         offer_id: [6; 16],
-        result: LinkResult::Joined,
+        result: LinkResult::Joining,
     }
     .encode();
     let result = again

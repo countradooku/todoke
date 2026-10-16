@@ -594,8 +594,9 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
     }
 
     /// Sends the joiner's answer to the offer it got (§10.2). After
-    /// `Joined`, both sides close this session and the joiner connects over
-    /// the new link; `Declined` and `Failed` end link setup for the session.
+    /// `Joining` (sent before the joiner joins), both sides close this
+    /// session and the joiner joins and connects over the new link;
+    /// `Declined` and `Failed` end link setup for the session.
     ///
     /// # Errors
     ///
