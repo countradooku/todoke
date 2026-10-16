@@ -5,11 +5,19 @@
 //! Each side sends `RangingReady` at most once, after Capabilities, if it
 //! can range as a controlee now. A controller may start only after the
 //! peer's `RangingReady`, with a configuration the peer announced, at most
-//! [`MAX_STARTS`] times per session, never while one runs. The controlee
-//! accepts the running one once, with its own address for it (never the
-//! controller's). Either side may stop the running one, by its session ID.
-//! A ranging ends by itself [`MAX_RANGING_SECONDS`] after its start,
-//! accepted or not. Anything out of line from the peer is STATE.
+//! [`MAX_STARTS`] times per session from each side, never while one runs.
+//! The controlee accepts the running one once, with its own address for it
+//! (never the controller's). Either side may stop the running one, by its
+//! session ID. A ranging ends by itself [`MAX_RANGING_SECONDS`] after its
+//! start, accepted or not.
+//!
+//! Records cross on the wire, so some that look out of line are not:
+//! an accept or a stop for a ranging that ended here (stopped, expired, or
+//! dropped) is ignored; a start from the controller of the running ranging
+//! means it ended there, and replaces it; and when both sides start at
+//! once, the start with the larger session ID stands and the other is
+//! dropped on both sides (equal IDs: both are). Anything else out of line
+//! from the peer is STATE.
 
 use core::time::Duration;
 
@@ -70,20 +78,32 @@ struct Running {
 /// The session's pointing.
 #[derive(Debug, Default)]
 pub(crate) struct Pointing {
-    /// This side's readiness (its controlee address and configurations).
+    /// This side's readiness (its configurations).
     own: Option<RangingReady>,
     /// The peer's.
     peer: Option<RangingReady>,
-    starts: u8,
+    /// Starts this side sent.
+    own_starts: u8,
+    /// Starts the peer sent.
+    peer_starts: u8,
     running: Option<Running>,
+    /// Rangings that ended here, whose records may still be in flight (at
+    /// most one per start: bounded by the start limits).
+    ended: Vec<u32>,
 }
 
 /// What a step produced, for the engine to report.
 pub(crate) enum Step {
     PeerReady(RangingReady),
-    Requested(Box<RangingStart>),
+    /// The peer starts one; `replaced` ended here because of it.
+    Requested {
+        start: Box<RangingStart>,
+        replaced: Option<u32>,
+    },
     Accepted(RangingAccept),
     Stopped(u32),
+    /// A record for a ranging that ended here: nothing to do.
+    Nothing,
 }
 
 impl Pointing {
@@ -103,11 +123,7 @@ impl Pointing {
         Ok(Step::PeerReady(ready))
     }
 
-    fn take_start(&mut self, start: &RangingStart, controller: bool, now: Duration) -> bool {
-        if self.running.is_some() || self.starts >= MAX_STARTS {
-            return false;
-        }
-        self.starts += 1;
+    fn run(&mut self, start: &RangingStart, controller: bool, now: Duration) {
         self.running = Some(Running {
             session_id: start.session_id,
             ends_at: now + Duration::from_secs(MAX_RANGING_SECONDS),
@@ -115,7 +131,13 @@ impl Pointing {
             controller_address: start.controller,
             accepted: false,
         });
-        true
+    }
+
+    /// The running ranging ends here.
+    fn end(&mut self) -> Option<u32> {
+        let running = self.running.take()?;
+        self.ended.push(running.session_id);
+        Some(running.session_id)
     }
 
     /// This side starts ranging as the controller.
@@ -128,9 +150,14 @@ impl Pointing {
         if peer.configs & start.config == 0 {
             return Err(RangingError::PeerNotReady);
         }
-        if !self.take_start(start, true, now) {
+        if self.running.is_some()
+            || self.own_starts >= MAX_STARTS
+            || self.ended.contains(&start.session_id)
+        {
             return Err(RangingError::Busy);
         }
+        self.own_starts += 1;
+        self.run(start, true, now);
         Ok(())
     }
 
@@ -139,10 +166,41 @@ impl Pointing {
         let start = RangingStart::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
         let state = || violation(FailureCode::State);
         let own = self.own.ok_or_else(state)?;
-        if own.configs & start.config == 0 || !self.take_start(&start, false, now) {
+        if own.configs & start.config == 0
+            || self.peer_starts >= MAX_STARTS
+            || self.ended.contains(&start.session_id)
+        {
             return Err(state());
         }
-        Ok(Step::Requested(Box::new(start)))
+        self.peer_starts += 1;
+        let mut replaced = None;
+        if let Some(running) = self.running {
+            if !running.controller {
+                // The peer controlled the running one: it ended there (a
+                // second start for the same ranging is not that).
+                if running.session_id == start.session_id {
+                    return Err(state());
+                }
+                replaced = self.end();
+            } else if running.accepted {
+                return Err(state());
+            } else if start.session_id > running.session_id {
+                // Both started at once: the larger ID stands.
+                replaced = self.end();
+            } else if start.session_id < running.session_id {
+                // Ours stands; the peer drops its own.
+                self.ended.push(start.session_id);
+                return Ok(Step::Nothing);
+            } else {
+                // The same ID from both: neither stands.
+                return Ok(self.end().map_or(Step::Nothing, Step::Stopped));
+            }
+        }
+        self.run(&start, false, now);
+        Ok(Step::Requested {
+            start: Box::new(start),
+            replaced,
+        })
     }
 
     /// This side, the controlee, accepts the running ranging at its
@@ -175,13 +233,20 @@ impl Pointing {
     /// The peer, the controlee, accepts the ranging this side started.
     pub(crate) fn on_accept(&mut self, body: &[u8]) -> Result<Step, Violation> {
         let accept = RangingAccept::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
-        let running = self
+        let Some(running) = self
             .running
             .as_mut()
-            .filter(|running| {
-                running.session_id == accept.session_id && running.controller && !running.accepted
-            })
-            .ok_or_else(|| violation(FailureCode::State))?;
+            .filter(|running| running.session_id == accept.session_id)
+        else {
+            return if self.ended.contains(&accept.session_id) {
+                Ok(Step::Nothing)
+            } else {
+                Err(violation(FailureCode::State))
+            };
+        };
+        if !running.controller || running.accepted {
+            return Err(violation(FailureCode::State));
+        }
         if accept.controlee == running.controller_address {
             return Err(violation(FailureCode::Malformed));
         }
@@ -193,7 +258,7 @@ impl Pointing {
     pub(crate) fn stop(&mut self, session_id: u32) -> Result<RangingStop, RangingError> {
         match self.running {
             Some(running) if running.session_id == session_id => {
-                self.running = None;
+                self.end();
                 Ok(RangingStop { session_id })
             }
             _ => Err(RangingError::NotRunning),
@@ -205,20 +270,21 @@ impl Pointing {
         let stop = RangingStop::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
         match self.running {
             Some(running) if running.session_id == stop.session_id => {
-                self.running = None;
+                self.end();
                 Ok(Step::Stopped(stop.session_id))
             }
+            _ if self.ended.contains(&stop.session_id) => Ok(Step::Nothing),
             _ => Err(violation(FailureCode::State)),
         }
     }
 
     /// The running ranging, if its time is up, ends: its session ID.
     pub(crate) fn expire(&mut self, now: Duration) -> Option<u32> {
-        let running = self.running?;
-        (now >= running.ends_at).then(|| {
-            self.running = None;
-            running.session_id
-        })
+        if self.running.is_some_and(|running| now >= running.ends_at) {
+            self.end()
+        } else {
+            None
+        }
     }
 
     /// When the running ranging ends by itself.

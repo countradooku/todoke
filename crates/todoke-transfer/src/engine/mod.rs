@@ -647,12 +647,20 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
     }
 
     fn ranging_step(&mut self, step: ranging::Step) {
-        self.event(match step {
-            ranging::Step::PeerReady(ready) => TransferEvent::RangingReady(ready),
-            ranging::Step::Requested(start) => TransferEvent::RangingRequested(start),
-            ranging::Step::Accepted(accept) => TransferEvent::RangingAccepted(accept),
-            ranging::Step::Stopped(session_id) => TransferEvent::RangingStopped { session_id },
-        });
+        match step {
+            ranging::Step::PeerReady(ready) => self.event(TransferEvent::RangingReady(ready)),
+            ranging::Step::Requested { start, replaced } => {
+                if let Some(session_id) = replaced {
+                    self.event(TransferEvent::RangingStopped { session_id });
+                }
+                self.event(TransferEvent::RangingRequested(start));
+            }
+            ranging::Step::Accepted(accept) => self.event(TransferEvent::RangingAccepted(accept)),
+            ranging::Step::Stopped(session_id) => {
+                self.event(TransferEvent::RangingStopped { session_id });
+            }
+            ranging::Step::Nothing => {}
+        }
     }
 
     /// Says this side can range as a controlee now (`RangingReady`,

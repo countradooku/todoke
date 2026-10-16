@@ -185,6 +185,14 @@ pub struct LinkRequest {
     pub within_ms: u64,
 }
 
+/// The secret is wiped when the request goes (the app's copy is the app's
+/// to wipe).
+impl Drop for LinkRequest {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.secret);
+    }
+}
+
 impl core::fmt::Debug for LinkRequest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("LinkRequest")

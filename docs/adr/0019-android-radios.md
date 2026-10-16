@@ -121,9 +121,11 @@ one, its feature is off and transfers go over the LAN and the relay.
 The displayer emulates a read-only NFC Forum Type 4 Tag (host card
 emulation, AID `D2760000850101`, unlocked devices only) whose one NDEF
 record carries the QR text; `todoke-proto`'s `Type4Tag` answers every
-command in Rust, bounded by the file it reads. It answers only while the
-QR offer is on screen (the app clears it, and is the preferred service
-while resumed); otherwise "not found". The scanner reads in reader mode on
+command in Rust, bounded by the file it reads; its capability container
+keeps every field in the Type 4 Tag ranges readers check. It answers only
+while the QR offer is on screen and unexpired: from the activity's resume
+to its pause (the app is the preferred service meanwhile); otherwise "not
+found". The scanner reads in reader mode on
 the scan screen and passes the NDEF message to `Core::pair_scan_nfc`,
 which checks it (`pairing_text`) before pairing exactly as from a scanned
 QR code.
@@ -135,7 +137,12 @@ On Android a UWB address serves one ranging session
 ranging session"), so the protocol carries addresses per ranging: the
 controlee answers each `RangingStart` with `RangingAccept` (0x0026) and a
 fresh address; `RangingReady` says only which configurations it can
-range with. Pointing passes the core a pool of up to four controller
+range with. Each side starts at most eight rangings per session. Records
+cross on the wire, so an accept or stop for a ranging that ended here is
+ignored, a new start from the controller replaces its ranging, and when
+both sides start at once the larger session ID stands on both (an R1
+finding: these crossings failed the whole session, and any transfer in
+it). Pointing passes the core a pool of up to four controller
 sessions (one per contact ranged); the core makes each ranging's session
 ID and provisioned STS key (FiRa unicast DS-TWR). The app ranks the
 contacts by how straight ahead each is; choosing one opens the file
@@ -191,7 +198,9 @@ app links it unchanged; its macOS tests run on CI's macOS 15).
   paths, groups, hotspots, HCE, and UWB are unmeasured. Fix: run
   `docs/qa/radios.md` before 1.0.
 - **Secrets cross BoltFFI into the JVM** (§16 O5 stays open): the link
-  passphrase or PMK (the byte array is wiped, but Android's builders take
+  passphrase or PMK (wiped in Rust's `LinkRequest` when it goes, and in
+  the app's byte array once handed over, but BoltFFI's own buffers are
+  not, and Android's builders take
   the passphrase as a `String`, which cannot be wiped), the STS key in
   `PointTarget` and `RangingRequested` (copied into every subscriber's
   event queue, not zeroized there, and kept in core events as hex text),
@@ -225,6 +234,14 @@ app links it unchanged; its macOS tests run on CI's macOS 15).
   fails, never succeeds with the wrong device). Fix: none needed.
 - **Pointing ranges with at most four contacts at once** and needs the
   play flavor. Fix: a larger pool if the lab shows the chips allow it.
+- **The core asks the app for its abilities on its own thread** (once per
+  session that can set up a link, several binder calls on Android) and
+  binds sockets there through JNI: short stalls of the core loop. Fix: ask
+  off the thread (`spawn_blocking`) and cache for a few seconds.
+- **Windows finds the group's adapter by its description** ("Wi-Fi
+  Direct"); a driver with another description makes hosting time out.
+  Fix: the lab check; else match the adapter that appears after the
+  start by interface type alone.
 
 ## Sources
 

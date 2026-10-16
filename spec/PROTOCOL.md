@@ -1595,7 +1595,7 @@ the foreground).
 | configs | 1 | Bitmask of supported configurations; bit 0: provisioned-STS unicast DS-TWR. Other bits reserved zero; 0 is MALFORMED |
 
 `RangingStart` (0x0024): from the controller, only after the peer's `RangingReady`,
-at most 8 per session, and never while one is running.
+at most 8 per session from each endpoint, and never while one is running.
 
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
@@ -1620,12 +1620,21 @@ ranging, accepted or not.
 A controlee that is no longer in the foreground or whose UWB is off does not accept a
 `RangingStart` (it does not range) and sends `RangingStop`. Ranging ends with
 `RangingStop`, when the session ends, when either app leaves the foreground, and in
-any case 120 seconds after its start, accepted or not. Neither endpoint keeps the key
-or the measurements once ranging ends, and neither logs them. A record before its
-precondition, a second `RangingReady`, a `RangingStart` beyond the limit or while one
-runs, a `RangingAccept` from the controller, a second one, or one for another session
-ID, or a `RangingStop` for another session ID is STATE; a field outside its limits
-is MALFORMED.
+any case 120 seconds after its start, accepted or not, by each endpoint's own clock
+(no record is sent then). Neither endpoint keeps the key or the measurements once
+ranging ends, and neither logs them.
+
+Records cross on the wire. An endpoint ignores a `RangingAccept` or `RangingStop` for
+a ranging that ended at its side (stopped, run out, or dropped below). A
+`RangingStart` from the controller of the running ranging means that ranging ended
+there: it ends here too and the new one runs. When both endpoints send a
+`RangingStart` before either is accepted, the one with the larger `session_id`
+stands and both drop the other; with equal IDs both drop both. Otherwise a record
+before its precondition, a second `RangingReady`, a `RangingStart` beyond the limit,
+for a session ID already used, or while an accepted ranging this endpoint controls
+runs, a `RangingAccept` from the controller, a second one, or one for a session ID
+never used, or a `RangingStop` for a session ID never used is STATE; a field outside
+its limits is MALFORMED.
 
 ## 11. Transfer and session state requirements
 
@@ -1716,7 +1725,7 @@ that every device has capacity for the maximum transfer.
 | Incomplete manifest | One incoming/endpoint, <=4 MiB each, 30-second assembly deadline |
 | Consent prompt | 300 seconds from complete manifest, then Reject/expire |
 | Direct link setup | One offer per session; a link offer expires in 10..120 seconds; a device hosts one offered link at a time, §10.2 |
-| Ranging | <=8 starts per session, one at a time; each ends within 120 seconds, §10.4 |
+| Ranging | <=8 starts per session from each endpoint, one at a time; each ends within 120 seconds, §10.4 |
 | Active transfers / files | <=2 incoming transfers and <=2 active incoming files/endpoint, <=4 of each/session |
 | Entries / regular files | <=10000 total, therefore <=10000 files |
 | Name / path / depth | <=255 UTF-8 bytes/component; <=4096 bytes/path; <=64 levels |

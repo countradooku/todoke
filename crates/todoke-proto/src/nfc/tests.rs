@@ -66,7 +66,18 @@ fn a_reader_reads_the_message_and_nothing_more() -> Result<(), NfcError> {
     assert_eq!(&*tag.respond(&select_file(CC_FILE)), &OK);
     let container = tag.respond(&read(0, 15));
     assert_eq!(container.len(), 17);
+    // Every field within the Type 4 Tag ranges readers check (AOSP's
+    // rw_t4t_validate_cc_file): CC length, mapping 2.0, MLe >= 0x000F,
+    // MLc >= 0x0001, the NDEF file control TLV, its file ID, a size from
+    // 0x0005 to 0xFFFE, read access granted, write access none.
     assert_eq!(&container[..3], &[0x00, 0x0f, 0x20]);
+    let word = |at: usize| u16::from_be_bytes([container[at], container[at + 1]]);
+    assert!(word(3) >= 0x000f, "MLe");
+    assert!(word(5) >= 0x0001, "MLc");
+    assert_eq!(&container[7..11], &[0x04, 0x06, 0xe1, 0x04]);
+    assert!((0x0005..=0xfffe).contains(&word(11)), "NDEF file size");
+    assert_eq!(usize::from(word(11)), MESSAGE_LEN + 2);
+    assert_eq!(container[13], 0x00, "read access: granted");
     assert_eq!(container[14], 0xff, "write access: none");
     assert_eq!(&*tag.respond(&select_file([0xe1, 0x05])), &NOT_FOUND);
     assert_eq!(&*tag.respond(&select_file(NDEF_FILE)), &OK);

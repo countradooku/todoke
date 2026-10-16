@@ -137,8 +137,8 @@ fn a_session_starts_at_most_eight() -> TestResult {
 }
 
 /// Out of line from the peer: a start to a side that never said it could
-/// range, a second readiness, a start while one runs, a stop for another
-/// ranging, and a ninth start are all STATE.
+/// range, a second readiness, a second start of the running ranging, a stop
+/// for a ranging that never ran, and a ninth start are all STATE.
 #[test]
 fn pointing_out_of_line_is_state() -> TestResult {
     let fixture = fixture()?;
@@ -162,7 +162,7 @@ fn pointing_out_of_line_is_state() -> TestResult {
         .handle_frame(FrameType::RANGING_START, &body, busy.now)?;
     let result = busy
         .b
-        .handle_frame(FrameType::RANGING_START, &start(6).encode(), busy.now);
+        .handle_frame(FrameType::RANGING_START, &body, busy.now);
     assert_eq!(session_failure(result), Some(FailureCode::State));
     let mut other = link(&fixture)?;
     other.b.send_ranging_ready(READY)?;
@@ -240,5 +240,136 @@ fn pointing_out_of_line_is_state() -> TestResult {
         .a
         .handle_frame(FrameType::RANGING_READY, &[0], malformed.now);
     assert_eq!(session_failure(result), Some(FailureCode::Malformed));
+    Ok(())
+}
+
+/// Records that cross on the wire settle without failing the session: an
+/// accept or a stop for a ranging that ended here is ignored, a new start
+/// from the controller replaces its ranging, and when both sides start at
+/// once the larger session ID stands on both (equal IDs: neither).
+#[test]
+fn crossing_records_settle() -> TestResult {
+    let fixture = fixture()?;
+    let ready = |link: &mut Link<'_>| -> TestResult {
+        link.a.send_ranging_ready(READY)?;
+        link.b.send_ranging_ready(READY)?;
+        link.settle()?;
+        Ok(())
+    };
+    // The controller stops while the accept is on its way.
+    let mut stop_accept = link(&fixture)?;
+    ready(&mut stop_accept)?;
+    stop_accept.a.start_ranging(&start(5), stop_accept.now)?;
+    stop_accept.settle()?;
+    stop_accept.b.accept_ranging(5, 0x2222)?;
+    stop_accept.a.stop_ranging(5)?;
+    stop_accept.settle()?;
+    assert!(
+        !stop_accept
+            .a_events
+            .iter()
+            .any(|event| matches!(event, TransferEvent::RangingAccepted(_)))
+    );
+    assert!(
+        stop_accept
+            .b_events
+            .contains(&TransferEvent::RangingStopped { session_id: 5 })
+    );
+    // Both stop at once.
+    let mut both_stop = link(&fixture)?;
+    ready(&mut both_stop)?;
+    both_stop.a.start_ranging(&start(5), both_stop.now)?;
+    both_stop.settle()?;
+    both_stop.a.stop_ranging(5)?;
+    both_stop.b.stop_ranging(5)?;
+    both_stop.settle()?;
+    // Each side's time runs out on its own clock; a stop for a ranging that
+    // ran out here is ignored.
+    let mut expired = link(&fixture)?;
+    ready(&mut expired)?;
+    expired.a.start_ranging(&start(5), expired.now)?;
+    expired.settle()?;
+    let (a, b) = expired.advance(Duration::from_secs(121));
+    a?;
+    b?;
+    let stop = RangingStop { session_id: 5 }.encode();
+    expired
+        .a
+        .handle_frame(FrameType::RANGING_STOP, &stop, expired.now)?;
+    // The controller starts again: the old ranging ended there.
+    let mut again = link(&fixture)?;
+    ready(&mut again)?;
+    again.a.start_ranging(&start(5), again.now)?;
+    again.settle()?;
+    again
+        .b
+        .handle_frame(FrameType::RANGING_START, &start(6).encode(), again.now)?;
+    again.settle()?;
+    assert!(
+        again
+            .b_events
+            .contains(&TransferEvent::RangingStopped { session_id: 5 })
+    );
+    // Both start at once: 9 stands on both sides, 5 is dropped on both.
+    let mut crossing = link(&fixture)?;
+    ready(&mut crossing)?;
+    crossing.a.start_ranging(&start(5), crossing.now)?;
+    crossing.b.start_ranging(&start(9), crossing.now)?;
+    crossing.settle()?;
+    assert!(
+        crossing
+            .a_events
+            .contains(&TransferEvent::RangingStopped { session_id: 5 })
+    );
+    let requested = |events: &[TransferEvent]| {
+        events
+            .iter()
+            .filter_map(|event| match event {
+                TransferEvent::RangingRequested(start) => Some(start.session_id),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(requested(&crossing.a_events), [9]);
+    assert_eq!(requested(&crossing.b_events), Vec::<u32>::new());
+    crossing.a.accept_ranging(9, 0x2222)?;
+    crossing.settle()?;
+    assert!(
+        crossing
+            .b_events
+            .contains(&TransferEvent::RangingAccepted(RangingAccept {
+                session_id: 9,
+                controlee: 0x2222,
+            }))
+    );
+    // The same ID from both: neither stands, and both may start again.
+    let mut same = link(&fixture)?;
+    ready(&mut same)?;
+    same.a.start_ranging(&start(7), same.now)?;
+    same.b.start_ranging(&start(7), same.now)?;
+    same.settle()?;
+    for events in [&same.a_events, &same.b_events] {
+        assert!(events.contains(&TransferEvent::RangingStopped { session_id: 7 }));
+    }
+    same.a.start_ranging(&start(8), same.now)?;
+    Ok(())
+}
+
+/// Each side has its own eight starts: a contact that pointed eight times
+/// leaves this side its own.
+#[test]
+fn each_side_starts_eight() -> TestResult {
+    let fixture = fixture()?;
+    let mut link = link(&fixture)?;
+    link.a.send_ranging_ready(READY)?;
+    link.b.send_ranging_ready(READY)?;
+    link.settle()?;
+    for id in 1..=u32::from(MAX_STARTS) {
+        link.b.start_ranging(&start(id), link.now)?;
+        link.b.stop_ranging(id)?;
+        link.settle()?;
+    }
+    link.a.start_ranging(&start(100), link.now)?;
+    link.settle()?;
     Ok(())
 }

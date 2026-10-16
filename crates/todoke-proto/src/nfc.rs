@@ -162,7 +162,7 @@ impl Type4Tag {
             mle_high,
             mle_low, // MLe
             0x00,
-            0x00, // MLc: no writes
+            0x01, // MLc: the smallest valid (0 is reserved; writes are refused by the access byte)
             0x04,
             0x06, // NDEF file control TLV
             NDEF_FILE[0],
