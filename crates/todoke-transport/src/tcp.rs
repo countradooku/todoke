@@ -57,9 +57,14 @@ pub struct TcpLink {
 enum Stream {
     Tcp(TcpStream),
     /// TCP the platform carries (Apple peer-to-peer Wi-Fi through
-    /// Network.framework), bridged to a local stream.
+    /// Network.framework), bridged to a local stream; the connection goes
+    /// with it.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
-    Bridged(tokio::net::UnixStream),
+    Bridged(
+        tokio::net::UnixStream,
+        #[expect(dead_code, reason = "kept only to be dropped with the stream")]
+        todoke_sys_macos::p2p::Connection,
+    ),
 }
 
 #[cfg(test)]
@@ -69,7 +74,7 @@ impl Stream {
         match self {
             Self::Tcp(stream) => stream.nodelay(),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Self::Bridged(_) => Ok(true),
+            Self::Bridged(..) => Ok(true),
         }
     }
 }
@@ -88,15 +93,16 @@ impl TcpLink {
         })
     }
 
-    /// A LAN link over TCP the platform carries, bridged to `stream`.
+    /// A LAN link over TCP the platform carries, bridged to a local
+    /// stream.
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub(crate) fn bridged(
-        stream: std::os::unix::net::UnixStream,
+        bridged: todoke_sys_macos::p2p::Bridged,
         remote: Option<SocketAddr>,
         latency: Option<Duration>,
     ) -> io::Result<Self> {
-        stream.set_nonblocking(true)?;
-        let stream = tokio::net::UnixStream::from_std(stream)?;
+        bridged.stream.set_nonblocking(true)?;
+        let stream = tokio::net::UnixStream::from_std(bridged.stream)?;
         let mut info = LinkInfo::new(LinkKind::Lan);
         if let Some(remote) = remote {
             info = info.with_remote(remote);
@@ -105,7 +111,7 @@ impl TcpLink {
             info = info.with_latency(latency);
         }
         Ok(Self {
-            stream: Stream::Bridged(stream),
+            stream: Stream::Bridged(stream, bridged.connection),
             info,
         })
     }
@@ -135,7 +141,7 @@ impl AsyncRead for TcpLink {
         let polled = match &mut self.stream {
             Stream::Tcp(stream) => Pin::new(stream).poll_read(cx, &mut read),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Stream::Bridged(stream) => Pin::new(stream).poll_read(cx, &mut read),
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_read(cx, &mut read),
         };
         match polled {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(read.filled().len())),
@@ -154,7 +160,7 @@ impl AsyncWrite for TcpLink {
         match &mut self.stream {
             Stream::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Stream::Bridged(stream) => Pin::new(stream).poll_write(cx, buf),
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_write(cx, buf),
         }
     }
 
@@ -166,7 +172,7 @@ impl AsyncWrite for TcpLink {
         match &mut self.stream {
             Stream::Tcp(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Stream::Bridged(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_write_vectored(cx, bufs),
         }
     }
 
@@ -174,7 +180,7 @@ impl AsyncWrite for TcpLink {
         match &mut self.stream {
             Stream::Tcp(stream) => Pin::new(stream).poll_flush(cx),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Stream::Bridged(stream) => Pin::new(stream).poll_flush(cx),
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_flush(cx),
         }
     }
 
@@ -182,7 +188,7 @@ impl AsyncWrite for TcpLink {
         match &mut self.stream {
             Stream::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
             #[cfg(any(target_os = "macos", target_os = "ios"))]
-            Stream::Bridged(stream) => Pin::new(stream).poll_shutdown(cx),
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_shutdown(cx),
         }
     }
 }
@@ -439,7 +445,7 @@ impl LanListener {
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub fn accept_peer_to_peer(&mut self) -> io::Result<()> {
         if self.kind == LinkKind::Lan && self.peer_to_peer.is_none() {
-            self.peer_to_peer = Some(crate::peer_to_peer::Accepting::start()?);
+            self.peer_to_peer = Some(crate::peer_to_peer::Accepting::start(self.policy)?);
         }
         Ok(())
     }

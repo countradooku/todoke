@@ -8,7 +8,7 @@ const WAIT: Duration = Duration::from_secs(10);
 
 /// A listener and a connection to it on loopback, bridged both ends.
 fn pair(address: impl Fn(u16) -> SocketAddr) -> io::Result<(Bridged, Bridged)> {
-    let listener = Listener::start(false)?;
+    let listener = Listener::start(false, |_| true)?;
     assert_ne!(listener.port(), 0);
     let client = connect(address(listener.port()), false, WAIT)?;
     let server = listener.accept(WAIT)?;
@@ -71,7 +71,7 @@ fn end_of_stream_crosses() -> io::Result<()> {
 /// bridged; a listener with nothing coming times out its accept.
 #[test]
 fn failures_are_errors() -> io::Result<()> {
-    let listener = Listener::start(false)?;
+    let listener = Listener::start(false, |_| true)?;
     let port = listener.port();
     drop(listener);
     // Cancelling is asynchronous.
@@ -87,7 +87,7 @@ fn failures_are_errors() -> io::Result<()> {
     );
     // Refused at once, not after the timeout.
     assert!(started.elapsed() < Duration::from_secs(2));
-    let idle = Listener::start(false)?;
+    let idle = Listener::start(false, |_| true)?;
     assert_eq!(
         idle.accept(Duration::from_millis(200))
             .map(|_| ())
@@ -126,4 +126,196 @@ fn addresses_round_trip_through_sockaddrs() {
     // SAFETY: null is allowed.
     let none = unsafe { socket_address(core::ptr::null()) };
     assert_eq!(none, None);
+}
+
+/// Both sides sending much more than a chunk at once, neither reading
+/// until it is done writing: nothing waits on the connection's queue, so
+/// neither stalls (receiving used to write to the pair on that queue, and
+/// the sends' completions queued behind it).
+#[test]
+fn both_ways_at_once_never_stall() -> io::Result<()> {
+    const SIZE: usize = 1024 * 1024;
+    let (mut client, mut server) = pair(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+    let pattern = |seed: usize| -> Vec<u8> {
+        (0..SIZE)
+            .map(|i| u8::try_from((i + seed) % 251).unwrap_or(0))
+            .collect()
+    };
+    let mut writers = Vec::new();
+    for (stream, seed) in [(&client.stream, 1), (&server.stream, 2)] {
+        let mut writer = stream.try_clone()?;
+        let bytes = pattern(seed);
+        writers.push(std::thread::spawn(move || writer.write_all(&bytes)));
+    }
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while writers.iter().any(|writer| !writer.is_finished()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the writers stalled with nothing reading"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    for writer in writers {
+        writer
+            .join()
+            .map_err(|_| io::Error::other("a writer panicked"))??;
+    }
+    let mut received = vec![0_u8; SIZE];
+    server.stream.read_exact(&mut received)?;
+    assert_eq!(received, pattern(1));
+    client.stream.read_exact(&mut received)?;
+    assert_eq!(received, pattern(2));
+    Ok(())
+}
+
+/// Waits until `pump` is gone, at most `within`.
+fn gone(pump: &std::sync::Weak<Pump>, within: Duration) -> bool {
+    let deadline = std::time::Instant::now() + within;
+    while std::time::Instant::now() < deadline {
+        if pump.strong_count() == 0 {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    false
+}
+
+/// The caller dropping its end while the peer stays quiet: what it wrote
+/// still arrives, then end of stream, and its pump, threads, and
+/// connection go at once (not after the peer speaks, or never).
+#[test]
+fn dropping_ends_the_connection() -> io::Result<()> {
+    let (mut client, mut server) = pair(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+    let pump = Arc::downgrade(&client.connection.0);
+    client.stream.write_all(b"bye")?;
+    drop(client);
+    let mut all = Vec::new();
+    server.stream.read_to_end(&mut all)?;
+    assert_eq!(all, b"bye");
+    assert!(
+        gone(&pump, Duration::from_secs(5)),
+        "the pump outlived its caller"
+    );
+    // The server side, quiet, then dropped, goes too.
+    let pump = Arc::downgrade(&server.connection.0);
+    drop(server);
+    assert!(
+        gone(&pump, Duration::from_secs(5)),
+        "the pump outlived its caller"
+    );
+    Ok(())
+}
+
+/// The caller dropping its end while the peer keeps sending: the peer's
+/// writes fail soon (the connection is cancelled), not block forever.
+#[test]
+fn dropping_stops_a_sending_peer() -> io::Result<()> {
+    let (client, mut server) = pair(|port| SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
+    let pump = Arc::downgrade(&client.connection.0);
+    drop(client);
+    let deadline = std::time::Instant::now() + Duration::from_secs(15);
+    let chunk = vec![7_u8; CHUNK];
+    server
+        .stream
+        .set_write_timeout(Some(Duration::from_secs(1)))?;
+    loop {
+        match server.stream.write(&chunk) {
+            Ok(_) => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                ) => {}
+            // Broken pipe: the server's pump ended with its connection.
+            Err(_) => break,
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the peer kept sending into a dropped connection"
+        );
+    }
+    assert!(
+        gone(&pump, Duration::from_secs(5)),
+        "the pump outlived its caller"
+    );
+    Ok(())
+}
+
+/// A source the listener does not admit is cancelled unaccepted.
+#[test]
+fn unadmitted_sources_are_cancelled() -> io::Result<()> {
+    let listener = Listener::start(false, |_| false)?;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, listener.port()));
+    if let Ok(mut client) = connect(address, false, Duration::from_secs(3)) {
+        // The kernel may finish the handshake first: then it ends.
+        client
+            .stream
+            .set_read_timeout(Some(Duration::from_secs(5)))?;
+        let mut byte = [0_u8; 1];
+        assert!(!matches!(client.stream.read(&mut byte), Ok(1..)));
+        assert!(!matches!(
+            client.stream.read(&mut byte).map_err(|error| error.kind()),
+            Err(io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut)
+        ));
+    }
+    assert_eq!(
+        listener
+            .accept(Duration::from_millis(500))
+            .map(|_| ())
+            .map_err(|error| error.kind()),
+        Err(io::ErrorKind::TimedOut)
+    );
+    Ok(())
+}
+
+/// Connections beyond the caller's backlog are cancelled, not queued.
+#[test]
+fn a_full_backlog_refuses() -> io::Result<()> {
+    let listener = Listener::start(false, |_| true)?;
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, listener.port()));
+    let mut clients = Vec::new();
+    for _ in 0..=BACKLOG {
+        let client = connect(address, false, WAIT)?;
+        client.stream.set_nonblocking(true)?;
+        clients.push(client);
+    }
+    // Nothing accepted yet: once every server side is ready, one of them
+    // found the backlog full and ended.
+    let ended = |clients: &[Bridged]| {
+        clients
+            .iter()
+            .filter(|client| {
+                let mut byte = [0_u8; 1];
+                !matches!(
+                    (&client.stream)
+                        .read(&mut byte)
+                        .map_err(|error| error.kind()),
+                    Err(io::ErrorKind::WouldBlock)
+                )
+            })
+            .count()
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while ended(&clients) == 0 && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let mut accepted = Vec::new();
+    while let Ok(server) = listener.accept(Duration::from_secs(1)) {
+        accepted.push(server);
+    }
+    assert_eq!(accepted.len(), BACKLOG);
+    assert_eq!(ended(&clients), 1);
+    Ok(())
+}
+
+#[test]
+fn ready_slots_are_bounded() {
+    let pending = Arc::new(AtomicUsize::new(0));
+    let mut slots: Vec<Slot> = (0..BACKLOG).filter_map(|_| Slot::take(&pending)).collect();
+    assert_eq!(slots.len(), BACKLOG);
+    assert!(Slot::take(&pending).is_none());
+    slots.pop();
+    assert!(Slot::take(&pending).is_some());
+    drop(slots);
+    assert_eq!(pending.load(Ordering::Acquire), 0);
 }

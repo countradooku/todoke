@@ -7,11 +7,14 @@
 //! session on top (§4, §5) is the same as on the LAN; the link layer's own
 //! security is not relied on.
 //!
-//! Each connection has its own serial dispatch queue; received data is
-//! written to the pair on it (so a slow reader stops receiving), and data
-//! read from the pair is sent one buffer at a time, waiting for the send to
-//! complete (so a slow link stops the reader). Either side ending ends the
-//! other: end of stream becomes TCP's FIN and back; an error cancels.
+//! Each connection has its own serial dispatch queue, on which only
+//! Network.framework's completions run, and they never wait. A writer
+//! thread writes received data to the pair and only then receives again
+//! (so a slow reader stops receiving); a sender thread sends what it reads
+//! from the pair one buffer at a time, waiting for each send to complete
+//! (so a slow link stops the reader). Either side ending ends the other:
+//! end of stream becomes TCP's FIN and back; an error cancels; the caller
+//! dropping its [`Connection`] cancels once its last bytes are sent.
 //! Nothing logs.
 
 #![allow(
@@ -22,19 +25,22 @@
 use std::ffi::{CStr, c_char, c_void};
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
+use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use block2::{Block, RcBlock};
-use dispatch2::{DispatchData, DispatchQueue, DispatchRetained};
+use dispatch2::{DispatchData, DispatchQueue, DispatchRetained, DispatchTime};
 
 /// Bytes read from the pair and sent at once, and received at most at once.
 const CHUNK: usize = 64 * 1024;
 /// The same, as Network.framework takes it.
 const CHUNK_U32: u32 = 64 * 1024;
-/// Accepted connections waiting for the caller; more are refused.
+/// Accepted connections waiting for the caller, and getting ready; more
+/// are refused.
 const BACKLOG: usize = 16;
 
 type Object = *mut c_void;
@@ -306,78 +312,195 @@ fn remote(connection: &Retained) -> Option<SocketAddr> {
     }
 }
 
-/// A connection bridged to a stream: the caller's end, and the peer's
-/// address.
+/// A connection the caller owns: cancelled (then released) when dropped,
+/// on every path, started or not (Network.framework asks that every
+/// connection be cancelled).
+struct Owned(Retained);
+
+impl Owned {
+    fn cancel(&self) {
+        // SAFETY: a live connection; cancelling twice is harmless.
+        unsafe { (self.0.1.nw_connection_cancel)(self.0.0) };
+    }
+}
+
+impl Drop for Owned {
+    fn drop(&mut self) {
+        self.cancel();
+    }
+}
+
+/// A connection bridged to a stream: the caller's end, the peer's address,
+/// and the connection, which goes when the caller drops it.
 #[derive(Debug)]
 pub struct Bridged {
     /// The caller's end of the pair.
     pub stream: UnixStream,
     /// The peer's address.
     pub remote: Option<SocketAddr>,
+    /// The connection; keep it as long as the stream.
+    pub connection: Connection,
 }
 
-/// One bridged connection's pump.
+/// A bridged connection, kept by the caller with its stream. Dropping it
+/// ends the connection once what the caller wrote has been sent (at most
+/// [`LINGER`] later), so a peer that goes quiet cannot keep it, its pump,
+/// or their descriptors.
+pub struct Connection(Arc<Pump>);
+
+impl core::fmt::Debug for Connection {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("Connection").finish_non_exhaustive()
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        let was = self.0.state.fetch_or(ABANDONED, Ordering::AcqRel);
+        if was & FINISHED != 0 {
+            // Everything the caller wrote is sent.
+            self.0.cancel();
+            return;
+        }
+        // The pump sends what is left, then cancels; or this does, in time
+        // (unless the pump is gone by then).
+        let pump = Arc::downgrade(&self.0);
+        let when = DispatchTime::try_from(LINGER).unwrap_or(DispatchTime::NOW);
+        let scheduled = self.0.queue.after(when, move || {
+            if let Some(pump) = pump.upgrade() {
+                pump.cancel();
+            }
+        });
+        if scheduled.is_err() {
+            self.0.cancel();
+        }
+    }
+}
+
+/// How long a dropped connection may take to send what was left.
+pub const LINGER: Duration = Duration::from_secs(10);
+/// [`Pump::state`]: the caller dropped its [`Connection`].
+const ABANDONED: u8 = 1;
+/// [`Pump::state`]: the caller's end of stream was sent (or sending failed).
+const FINISHED: u8 = 2;
+/// Each end of a pair buffers this much (the system's default is 8 KiB).
+const PAIR_BUFFER: i32 = 4 * 64 * 1024;
+
+/// One bridged connection's pump. Nothing runs on the connection's queue
+/// but Network.framework's own completions, which never wait: received
+/// bytes go to a writer thread, which receives again only once they are
+/// written to the pair (so a slow reader stops receiving); a sender thread
+/// reads the pair and sends one buffer at a time, waiting for each send to
+/// complete (so a slow link stops the reader).
 struct Pump {
-    connection: Retained,
+    connection: Owned,
     queue: DispatchRetained<DispatchQueue>,
-    /// The pump's end of the pair, written by the receive side.
-    pair: Mutex<UnixStream>,
+    /// The pump's end of the pair, closed when the connection is
+    /// cancelled (once the threads' copies go too, the caller's writes
+    /// fail, as after a reset).
+    pair: Mutex<Option<UnixStream>>,
+    /// [`ABANDONED`] and [`FINISHED`]: whoever sets the second cancels.
+    state: AtomicU8,
+}
+
+/// What one receive brought.
+struct Received {
+    bytes: Option<Vec<u8>>,
+    /// The peer's end of stream.
+    end: bool,
+    failed: bool,
+}
+
+impl Received {
+    const FAILED: Self = Self {
+        bytes: None,
+        end: false,
+        failed: true,
+    };
 }
 
 impl Pump {
     /// Starts moving bytes both ways between a ready `connection` and a
     /// new pair; returns the caller's end.
-    fn start(connection: Retained, queue: DispatchRetained<DispatchQueue>) -> io::Result<Bridged> {
+    fn start(connection: Owned, queue: DispatchRetained<DispatchQueue>) -> io::Result<Bridged> {
         let (theirs, ours) = UnixStream::pair()?;
+        for end in [&theirs, &ours] {
+            configure(end)?;
+        }
+        let writer = ours.try_clone()?;
         let reader = ours.try_clone()?;
-        let remote = remote(&connection);
+        let remote = remote(&connection.0);
         let pump = Arc::new(Self {
             connection,
             queue,
-            pair: Mutex::new(ours),
+            pair: Mutex::new(Some(ours)),
+            state: AtomicU8::new(0),
         });
-        pump.receive();
-        let sender = Arc::clone(&pump);
+        // If either thread cannot start, the pump goes and cancels.
+        let delivering = Arc::clone(&pump);
         std::thread::Builder::new()
+            .name("todoke-p2p-receive".to_owned())
+            .spawn(move || delivering.deliver(writer))?;
+        let sending = Arc::clone(&pump);
+        if let Err(error) = std::thread::Builder::new()
             .name("todoke-p2p-send".to_owned())
-            .spawn(move || sender.send_all(reader))?;
+            .spawn(move || sending.send_all(reader))
+        {
+            pump.cancel();
+            return Err(error);
+        }
         Ok(Bridged {
             stream: theirs,
             remote,
+            connection: Connection(pump),
         })
     }
 
-    /// Receives once, writes what came to the pair, and receives again
-    /// until the stream or the connection ends.
-    fn receive(self: &Arc<Self>) {
-        let pump = Arc::clone(self);
+    /// Asks for the next bytes; the answer comes on the returned channel
+    /// (disconnected if the framework drops the request unanswered).
+    fn receive(&self) -> Receiver<Received> {
+        let (answer, answered) = mpsc::sync_channel::<Received>(1);
         let block = RcBlock::new(
             move |content: Object, _context: Object, complete: u8, error: Object| {
-                let mut written = true;
-                if !content.is_null() {
+                let bytes = (!content.is_null()).then(|| {
                     // SAFETY: the framework lends `content`, a dispatch
                     // data object alive during this call.
-                    let bytes = unsafe { &*content.cast::<DispatchData>() }.to_vec();
-                    written = pump
-                        .pair
-                        .lock()
-                        .is_ok_and(|mut pair| pair.write_all(&bytes).is_ok());
-                }
-                if !written || !error.is_null() {
-                    pump.cancel();
-                } else if complete != 0 {
-                    // The peer sent FIN: end of stream for the caller.
-                    if let Ok(pair) = pump.pair.lock() {
-                        let _ = pair.shutdown(Shutdown::Write);
-                    }
-                } else {
-                    pump.receive();
-                }
+                    unsafe { &*content.cast::<DispatchData>() }.to_vec()
+                });
+                // Never waits: one answer per request, one slot.
+                let _ = answer.try_send(Received {
+                    bytes,
+                    end: complete != 0,
+                    failed: !error.is_null(),
+                });
             },
         );
+        let api = self.connection.0.1;
         // SAFETY: a live connection; the block is copied by the framework.
-        unsafe {
-            (self.connection.1.nw_connection_receive)(self.connection.0, 1, CHUNK_U32, &block);
+        unsafe { (api.nw_connection_receive)(self.connection.0.0, 1, CHUNK_U32, &block) };
+        answered
+    }
+
+    /// Writes what the peer sends to the pair, receiving again after each
+    /// write, until the peer's end of stream (then the caller's) or an
+    /// error (then the connection goes).
+    fn deliver(self: Arc<Self>, mut pair: UnixStream) {
+        loop {
+            let received = self.receive().recv().unwrap_or(Received::FAILED);
+            if let Some(bytes) = received.bytes
+                && pair.write_all(&bytes).is_err()
+            {
+                self.cancel();
+                return;
+            }
+            if received.failed {
+                self.cancel();
+                return;
+            }
+            if received.end {
+                let _ = pair.shutdown(Shutdown::Write);
+                return;
+            }
         }
     }
 
@@ -385,23 +508,20 @@ impl Pump {
     /// of stream (then FIN) or an error (then the connection goes).
     fn send_all(self: Arc<Self>, mut reader: UnixStream) {
         let mut buffer = vec![0_u8; CHUNK];
-        loop {
+        let sent = loop {
             let read = match reader.read(&mut buffer) {
-                Ok(0) => {
-                    self.send(None);
-                    return;
-                }
+                Ok(0) => break self.send(None),
                 Ok(read) => read,
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                Err(_) => {
-                    self.cancel();
-                    return;
-                }
+                Err(_) => break false,
             };
             if !self.send(Some(&buffer[..read])) {
-                self.cancel();
-                return;
+                break false;
             }
+        };
+        let was = self.state.fetch_or(FINISHED, Ordering::AcqRel);
+        if !sent || was & ABANDONED != 0 {
+            self.cancel();
         }
     }
 
@@ -409,13 +529,13 @@ impl Pump {
     fn send(&self, bytes: Option<&[u8]>) -> bool {
         let (done, sent) = mpsc::sync_channel::<bool>(1);
         let block = RcBlock::new(move |error: Object| {
-            let _ = done.send(error.is_null());
+            let _ = done.try_send(error.is_null());
         });
         let data = bytes.map(DispatchData::from_bytes);
         let content = data
             .as_ref()
             .map_or(core::ptr::null(), |data| &raw const **data);
-        let api = self.connection.1;
+        let api = self.connection.0.1;
         // SAFETY: a live connection; `content` (or null for FIN) lives
         // through the call and is retained by the framework; the contexts
         // are the framework's constants; the block is copied.
@@ -425,31 +545,68 @@ impl Pump {
             } else {
                 api.context_final_send
             };
-            (api.nw_connection_send)(self.connection.0, content, message, bytes.is_none(), &block);
+            (api.nw_connection_send)(
+                self.connection.0.0,
+                content,
+                message,
+                bytes.is_none(),
+                &block,
+            );
         }
+        // Disconnected: the framework dropped the send unanswered.
         sent.recv().unwrap_or(false)
     }
 
+    /// Ends the connection (gracefully: what was sent still goes) and both
+    /// threads.
     fn cancel(&self) {
-        // SAFETY: a live connection; cancelling twice is harmless.
-        unsafe { (self.connection.1.nw_connection_cancel)(self.connection.0) };
-        if let Ok(pair) = self.pair.lock() {
+        self.connection.cancel();
+        let pair = self.pair.lock().ok().and_then(|mut pair| pair.take());
+        if let Some(pair) = pair {
             let _ = pair.shutdown(Shutdown::Both);
         }
     }
 }
 
-impl Drop for Pump {
-    fn drop(&mut self) {
-        // SAFETY: as in `cancel`.
-        unsafe { (self.connection.1.nw_connection_cancel)(self.connection.0) };
-        let _ = &self.queue;
-    }
+/// A pair end: no `SIGPIPE` when the other end is gone (the library runs
+/// in apps that do not ignore it), and room for a few chunks.
+fn configure(end: &UnixStream) -> io::Result<()> {
+    let set = |option: i32, value: i32| {
+        // SAFETY: a live socket, and an `int` option of that size.
+        let failed = unsafe {
+            setsockopt(
+                end.as_raw_fd(),
+                SOL_SOCKET,
+                option,
+                (&raw const value).cast(),
+                4,
+            )
+        } != 0;
+        if failed {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(())
+        }
+    };
+    set(SO_NOSIGPIPE, 1)?;
+    // Larger buffers are best effort.
+    let _ = set(SO_SNDBUF, PAIR_BUFFER);
+    let _ = set(SO_RCVBUF, PAIR_BUFFER);
+    Ok(())
+}
+
+const SOL_SOCKET: i32 = 0xffff;
+const SO_SNDBUF: i32 = 0x1001;
+const SO_RCVBUF: i32 = 0x1002;
+const SO_NOSIGPIPE: i32 = 0x1022;
+
+unsafe extern "C" {
+    fn setsockopt(socket: i32, level: i32, option: i32, value: *const c_void, length: u32) -> i32;
 }
 
 /// Starts `connection` on a queue of its own and waits until it is ready
-/// (or fails, or `timeout` passes).
-fn ready(connection: Retained, timeout: Duration) -> io::Result<Bridged> {
+/// (or fails, or `timeout` passes); on any failure it is cancelled.
+fn ready(connection: Owned, timeout: Duration) -> io::Result<Bridged> {
     let queue = DispatchQueue::new("org.todoke.p2p", None);
     let (state, changed) = mpsc::sync_channel::<bool>(4);
     let handler = RcBlock::new(move |status: u32, error: Object| match status {
@@ -466,25 +623,18 @@ fn ready(connection: Retained, timeout: Duration) -> io::Result<Bridged> {
         }
         _ => {}
     });
-    let api = connection.1;
+    let api = connection.0.1;
     // SAFETY: a live connection and queue; the handler is copied.
     unsafe {
-        (api.nw_connection_set_queue)(connection.0, &raw const *queue);
-        (api.nw_connection_set_state_changed_handler)(connection.0, &handler);
-        (api.nw_connection_start)(connection.0);
+        (api.nw_connection_set_queue)(connection.0.0, &raw const *queue);
+        (api.nw_connection_set_state_changed_handler)(connection.0.0, &handler);
+        (api.nw_connection_start)(connection.0.0);
     }
+    // Every early return drops `connection`, which cancels it.
     match changed.recv_timeout(timeout) {
         Ok(true) => Pump::start(connection, queue),
-        Ok(false) => {
-            // SAFETY: a live connection.
-            unsafe { (api.nw_connection_cancel)(connection.0) };
-            Err(io::ErrorKind::ConnectionRefused.into())
-        }
-        Err(_) => {
-            // SAFETY: a live connection.
-            unsafe { (api.nw_connection_cancel)(connection.0) };
-            Err(io::ErrorKind::TimedOut.into())
-        }
+        Ok(false) => Err(io::ErrorKind::ConnectionRefused.into()),
+        Err(_) => Err(io::ErrorKind::TimedOut.into()),
     }
 }
 
@@ -509,8 +659,11 @@ pub fn connect(address: SocketAddr, peer_to_peer: bool, timeout: Duration) -> io
         (api.nw_connection_create)(endpoint.0, parameters.0)
     })
     .ok_or_else(|| io::Error::other("no connection"))?;
-    ready(connection, timeout)
+    ready(Owned(connection), timeout)
 }
+
+/// Which remote addresses a listener takes.
+type Admit = dyn Fn(SocketAddr) -> bool + Send + Sync;
 
 /// A TCP listener on every interface, peer-to-peer ones included, whose
 /// connections come bridged.
@@ -530,12 +683,17 @@ impl core::fmt::Debug for Listener {
 }
 
 impl Listener {
-    /// Listens on a free port; returns once it is ready (or fails).
+    /// Listens on a free port; returns once it is ready (or fails). A
+    /// connection whose remote address `admit` refuses is cancelled before
+    /// it starts; at most [`BACKLOG`] get ready at once, more are cancelled.
     ///
     /// # Errors
     ///
     /// The listener failed or did not start in time.
-    pub fn start(peer_to_peer: bool) -> io::Result<Self> {
+    pub fn start(
+        peer_to_peer: bool,
+        admit: impl Fn(SocketAddr) -> bool + Send + Sync + 'static,
+    ) -> io::Result<Self> {
         let api = api()?;
         let parameters = parameters(api, peer_to_peer)?;
         // SAFETY: live parameters; the listener is +1, owned.
@@ -544,15 +702,27 @@ impl Listener {
         let queue = DispatchQueue::new("org.todoke.p2p.listener", None);
         let (accept, accepted) = mpsc::sync_channel::<Bridged>(BACKLOG);
         let accept = Arc::new(accept);
+        let admit: Arc<Admit> = Arc::new(admit);
+        let pending = Arc::new(AtomicUsize::new(0));
         let incoming = RcBlock::new(move |connection: Object| {
-            let accept = Arc::clone(&accept);
-            let Some(connection) = Retained::retain(api, connection) else {
+            let Some(connection) = Retained::retain(api, connection).map(Owned) else {
                 return;
             };
+            // Returning drops (cancels) it.
+            if !remote(&connection.0).is_some_and(|remote| admit(remote)) {
+                return;
+            }
+            let Some(slot) = Slot::take(&pending) else {
+                return;
+            };
+            let accept = Arc::clone(&accept);
             // Readied off the listener's queue: it waits on its own.
             let _ = std::thread::Builder::new()
                 .name("todoke-p2p-accept".to_owned())
-                .spawn(move || offer(&accept, connection));
+                .spawn(move || {
+                    offer(&accept, connection);
+                    drop(slot);
+                });
         });
         let (state, changed) = mpsc::sync_channel::<bool>(4);
         let handler = RcBlock::new(move |status: u32, _error: Object| match status {
@@ -614,17 +784,38 @@ impl Drop for Listener {
     }
 }
 
+/// One of [`BACKLOG`] connections getting ready at once, given back when
+/// dropped.
+struct Slot(Arc<AtomicUsize>);
+
+impl Slot {
+    fn take(pending: &Arc<AtomicUsize>) -> Option<Self> {
+        pending
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |taken| {
+                (taken < BACKLOG).then_some(taken + 1)
+            })
+            .ok()
+            .map(|_| Self(Arc::clone(pending)))
+    }
+}
+
+impl Drop for Slot {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// How long an accepted connection may take to get ready.
+const ACCEPT_READY: Duration = Duration::from_secs(10);
+
 /// Readies an accepted connection and hands it to the caller; refused
-/// when the caller's backlog is full.
-fn offer(accept: &SyncSender<Bridged>, connection: Retained) {
-    let Ok(bridged) = ready(connection, Duration::from_secs(10)) else {
+/// (cancelled) when the caller's backlog is full.
+fn offer(accept: &SyncSender<Bridged>, connection: Owned) {
+    let Ok(bridged) = ready(connection, ACCEPT_READY) else {
         return;
     };
-    if let Err(mpsc::TrySendError::Full(bridged) | mpsc::TrySendError::Disconnected(bridged)) =
-        accept.try_send(bridged)
-    {
-        let _ = bridged.stream.shutdown(Shutdown::Both);
-    }
+    // A refused one is dropped here: its connection cancels.
+    let _ = accept.try_send(bridged);
 }
 
 /// Whether the interface `index` is an Apple peer-to-peer Wi-Fi one

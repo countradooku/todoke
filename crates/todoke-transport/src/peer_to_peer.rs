@@ -33,11 +33,8 @@ pub(crate) async fn connect(address: SocketAddr) -> io::Result<TcpLink> {
     let bridged = tokio::task::spawn_blocking(move || p2p::connect(address, true, CONNECT_TIMEOUT))
         .await
         .map_err(|_| io::Error::other("the peer-to-peer connection did not finish"))??;
-    TcpLink::bridged(
-        bridged.stream,
-        Some(bridged.remote.unwrap_or(address)),
-        Some(started.elapsed()),
-    )
+    let remote = bridged.remote.unwrap_or(address);
+    TcpLink::bridged(bridged, Some(remote), Some(started.elapsed()))
 }
 
 /// A listener for peer-to-peer connections, accepted on a thread of its
@@ -57,9 +54,11 @@ impl core::fmt::Debug for Accepting {
 }
 
 impl Accepting {
-    /// Listens on a free port, peer-to-peer interfaces included.
-    pub(crate) fn start() -> io::Result<Self> {
-        let listener = p2p::Listener::start(true)?;
+    /// Listens on a free port, peer-to-peer interfaces included; a source
+    /// `policy` refuses is cancelled before it gets a thread.
+    pub(crate) fn start(policy: LanPolicy) -> io::Result<Self> {
+        let listener =
+            p2p::Listener::start(true, move |source| policy.check_source(source).is_ok())?;
         let port = listener.port();
         let (accepted, links) = mpsc::channel(QUEUE);
         let stop = Arc::new(AtomicBool::new(false));
@@ -91,8 +90,8 @@ impl Accepting {
         self.port
     }
 
-    /// The next connection from an address the policy allows; `None` once
-    /// the listener is gone.
+    /// The next connection from an address the policy allows (checked
+    /// again here); `None` once the listener is gone.
     pub(crate) async fn next(&self, policy: LanPolicy) -> Option<TcpLink> {
         loop {
             let bridged = self.links.lock().await.recv().await?;
@@ -102,7 +101,7 @@ impl Accepting {
             if policy.check_source(remote).is_err() {
                 continue;
             }
-            if let Ok(link) = TcpLink::bridged(bridged.stream, Some(remote), None) {
+            if let Ok(link) = TcpLink::bridged(bridged, Some(remote), None) {
                 return Some(link);
             }
         }
