@@ -332,6 +332,50 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     Ok(())
 }
 
+/// A core shut down while a handle to it is still held releases its
+/// profile at once: a new core opens it, as an app back from the
+/// background does, while the old handle's requests fail and its events
+/// close. Until then, a second core on the profile is refused.
+#[test]
+fn a_shut_down_core_releases_its_profile_while_still_held() -> AnyResult<()> {
+    let scratch = Scratch::new("shutdown")?;
+    let discovery = scratch.0.join("discovery");
+    let old = device(&scratch.0, "solo", &discovery)?;
+    let held = old.clone();
+    let mut events = old.subscribe();
+    assert!(device(&scratch.0, "solo", &discovery).is_err());
+    old.shutdown();
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        assert!(matches!(
+            held.request(Request::Status).await,
+            Response::Error { .. }
+        ));
+        assert!(matches!(
+            events.recv().await,
+            Err(broadcast::error::RecvError::Closed)
+        ));
+    });
+    assert!(matches!(
+        held.subscribe().try_recv(),
+        Err(broadcast::error::TryRecvError::Closed)
+    ));
+    let new = device(&scratch.0, "solo", &discovery)?;
+    runtime.block_on(async {
+        assert!(matches!(
+            new.request(Request::Status).await,
+            Response::Status(_)
+        ));
+    });
+    // Again: nothing.
+    held.shutdown();
+    drop(held);
+    new.shutdown();
+    Ok(())
+}
+
 /// Back from the background with its old port taken meanwhile by another
 /// listener (with the same options, so the clash is real everywhere), the
 /// listener reopens on a fresh port, which discovery then advertises.

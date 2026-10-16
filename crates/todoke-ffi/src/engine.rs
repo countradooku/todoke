@@ -230,6 +230,17 @@ impl Core {
         env!("CARGO_PKG_VERSION").to_owned()
     }
 
+    /// Stops the core now and waits until it has: sessions and listeners
+    /// closed, the profile released (a new core can open it at once), every
+    /// subscription ended. Every handle to it then fails with
+    /// [`TodokeError::Internal`] ("the core stopped"). Without it the core
+    /// stops when the last handle goes, whenever that is. Blocks: call it
+    /// off the UI thread. Stopping again does nothing.
+    pub fn shutdown(&self) {
+        #[cfg(not(target_family = "wasm"))]
+        self.shared.core.shutdown();
+    }
+
     /// What the core is doing.
     ///
     /// # Errors

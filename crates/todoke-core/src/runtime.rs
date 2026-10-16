@@ -75,12 +75,11 @@ enum Command {
 type Envelope = (Command, oneshot::Sender<Response>);
 
 /// A handle to the running core. Cloning shares it; the core stops when
-/// the last handle is dropped.
+/// the last handle is dropped, or at once with [`Core::shutdown`].
 #[derive(Clone)]
 pub struct Core {
     requests: mpsc::Sender<Envelope>,
-    events: broadcast::Sender<Event>,
-    _thread: std::sync::Arc<Stopper>,
+    running: std::sync::Arc<Stopper>,
 }
 
 impl fmt::Debug for Core {
@@ -92,16 +91,33 @@ impl fmt::Debug for Core {
 struct Stopper {
     stop: std::sync::Mutex<Option<oneshot::Sender<()>>>,
     thread: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// The events' sender, gone once the core stops: subscribers then see
+    /// the channel close.
+    events: std::sync::Mutex<Option<broadcast::Sender<Event>>>,
+}
+
+impl Stopper {
+    /// Stops the core's thread and waits for it (unless called on it), then
+    /// closes the events. Later calls do nothing.
+    fn stop(&self) {
+        if let Some(stop) = self.stop.lock().ok().and_then(|mut stop| stop.take()) {
+            let _ = stop.send(());
+        }
+        let thread = self.thread.lock().ok().and_then(|mut thread| thread.take());
+        if let Some(thread) = thread
+            && thread.thread().id() != std::thread::current().id()
+        {
+            let _ = thread.join();
+        }
+        if let Ok(mut events) = self.events.lock() {
+            events.take();
+        }
+    }
 }
 
 impl Drop for Stopper {
     fn drop(&mut self) {
-        if let Some(stop) = self.stop.lock().ok().and_then(|mut stop| stop.take()) {
-            let _ = stop.send(());
-        }
-        if let Some(thread) = self.thread.lock().ok().and_then(|mut thread| thread.take()) {
-            let _ = thread.join();
-        }
+        self.stop();
     }
 }
 
@@ -174,10 +190,10 @@ impl Core {
             started.recv().map_err(|_| StartError::Thread)??;
             Ok(Self {
                 requests,
-                events,
-                _thread: std::sync::Arc::new(Stopper {
+                running: std::sync::Arc::new(Stopper {
                     stop: std::sync::Mutex::new(Some(stop)),
                     thread: std::sync::Mutex::new(Some(thread)),
+                    events: std::sync::Mutex::new(Some(events)),
                 }),
             })
         }
@@ -216,10 +232,23 @@ impl Core {
     }
 
     /// Events from now on. A receiver that falls more than 1024 events
-    /// behind loses the oldest ones.
+    /// behind loses the oldest ones; after the core stopped, it is closed.
     #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
-        self.events.subscribe()
+        let events = self.running.events.lock().ok();
+        match events.as_ref().and_then(|events| events.as_ref()) {
+            Some(events) => events.subscribe(),
+            None => broadcast::channel(1).1,
+        }
+    }
+
+    /// Stops the core now, for every handle, and waits until it has: its
+    /// sessions and listeners closed, its state released (another core can
+    /// open the same profile at once), its events closed. Requests then
+    /// fail ("the core stopped"). It blocks: not on an async runtime's
+    /// thread. Stopping again does nothing.
+    pub fn shutdown(&self) {
+        self.running.stop();
     }
 }
 
