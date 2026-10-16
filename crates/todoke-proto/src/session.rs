@@ -607,6 +607,12 @@ impl FrameType {
     pub const LINK_OFFER: Self = Self(0x0021);
     /// `LinkAnswer` (§10.2).
     pub const LINK_ANSWER: Self = Self(0x0022);
+    /// `RangingReady` (§10.4).
+    pub const RANGING_READY: Self = Self(0x0023);
+    /// `RangingStart` (§10.4).
+    pub const RANGING_START: Self = Self(0x0024);
+    /// `RangingStop` (§10.4).
+    pub const RANGING_STOP: Self = Self(0x0025);
     /// `Revoke` (§2).
     pub const REVOKE: Self = Self(0x0040);
 

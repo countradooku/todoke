@@ -255,3 +255,17 @@ test = false
 doc = false
 bench = false
 
+
+[[bin]]
+name = "proto_ranging_records"
+path = "fuzz_targets/proto_ranging_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_nfc_tag"
+path = "fuzz_targets/proto_nfc_tag.rs"
+test = false
+doc = false
+bench = false
