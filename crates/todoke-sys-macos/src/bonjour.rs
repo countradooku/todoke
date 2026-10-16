@@ -61,6 +61,8 @@ const FLAG_NO_AUTO_RENAME: Flags = 0x8;
 const FLAG_UNIQUE: Flags = 0x20;
 const FLAG_FORCE_MULTICAST: Flags = 0x400;
 const FLAG_SHARE_CONNECTION: Flags = 0x4000;
+/// `kDNSServiceFlagsIncludeP2P`: Apple peer-to-peer Wi-Fi (AWDL) too.
+const FLAG_INCLUDE_P2P: Flags = 0x20000;
 const INTERFACE_ANY: u32 = 0;
 const INTERFACE_LOCAL_ONLY: u32 = u32::MAX;
 const PROTOCOL_IPV4: u32 = 0x01;
@@ -233,6 +235,7 @@ enum Command {
     Publish {
         instances: Vec<Instance>,
         port: u16,
+        peer_to_peer_port: Option<u16>,
         addresses: Vec<Address>,
     },
 }
@@ -253,18 +256,19 @@ impl core::fmt::Debug for Bonjour {
 
 impl Bonjour {
     /// Starts browsing for `_todoke._tcp` on every interface, or, with
-    /// `local_only`, on this device alone (tests).
+    /// `local_only`, on this device alone (tests); with `peer_to_peer`,
+    /// over Apple peer-to-peer Wi-Fi (AWDL) too.
     ///
     /// # Errors
     ///
     /// mDNSResponder cannot be reached, or the thread cannot start.
-    pub fn start(local_only: bool) -> io::Result<Self> {
+    pub fn start(local_only: bool, peer_to_peer: bool) -> io::Result<Self> {
         let (commands, inbox) = mpsc::channel();
         let (outbox, found) = mpsc::sync_channel(QUEUE);
         let (ready, started) = mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("todoke-bonjour".to_owned())
-            .spawn(move || run(local_only, &inbox, &outbox, &ready))
+            .spawn(move || run(local_only, peer_to_peer, &inbox, &outbox, &ready))
             .map_err(|_| io::Error::other("the Bonjour thread could not start"))?;
         match started.recv() {
             Ok(Ok(())) => Ok(Self {
@@ -284,12 +288,21 @@ impl Bonjour {
     }
 
     /// Advertises exactly `instances` on `port` (replacing the previous
-    /// set), their host names with `addresses`.
-    pub fn publish(&self, instances: Vec<Instance>, port: u16, addresses: Vec<Address>) {
+    /// set), their host names with `addresses`; on peer-to-peer
+    /// interfaces, on `peer_to_peer_port` (the Network.framework
+    /// listener's), or not at all without one.
+    pub fn publish(
+        &self,
+        instances: Vec<Instance>,
+        port: u16,
+        peer_to_peer_port: Option<u16>,
+        addresses: Vec<Address>,
+    ) {
         if let Some(commands) = &self.commands {
             let _ = commands.send(Command::Publish {
                 instances,
                 port,
+                peer_to_peer_port,
                 addresses,
             });
         }
@@ -325,6 +338,7 @@ impl Drop for Bonjour {
 struct Advertised {
     instance: Instance,
     port: u16,
+    peer_to_peer_port: Option<u16>,
     addresses: Vec<Address>,
     /// One registration per interface with an address.
     services: Vec<DnsServiceRef>,
@@ -350,6 +364,8 @@ struct Pending {
 struct State {
     connection: DnsServiceRef,
     interface: u32,
+    /// Browsing, resolving, and advertising over peer-to-peer Wi-Fi too.
+    peer_to_peer: bool,
     outbox: SyncSender<Found>,
     advertised: Vec<Advertised>,
     pending: BTreeMap<String, Pending>,
@@ -357,6 +373,7 @@ struct State {
 
 fn run(
     local_only: bool,
+    peer_to_peer: bool,
     inbox: &Receiver<Command>,
     outbox: &SyncSender<Found>,
     ready: &Sender<io::Result<()>>,
@@ -378,6 +395,7 @@ fn run(
     let context: *mut State = Box::into_raw(Box::new(State {
         connection,
         interface,
+        peer_to_peer,
         outbox: outbox.clone(),
         advertised: Vec::new(),
         pending: BTreeMap::new(),
@@ -390,7 +408,7 @@ fn run(
     let browsing = unsafe {
         DNSServiceBrowse(
             &raw mut browse,
-            FLAG_SHARE_CONNECTION,
+            FLAG_SHARE_CONNECTION | p2p_flag(peer_to_peer),
             interface,
             SERVICE.as_ptr(),
             DOMAIN.as_ptr(),
@@ -416,12 +434,13 @@ fn run(
             Ok(Command::Publish {
                 instances,
                 port,
+                peer_to_peer_port,
                 addresses,
             }) => {
                 // SAFETY: no callback runs outside `DNSServiceProcessResult`
                 // below, so this is the only reference to the state now.
                 let state = unsafe { &mut *context };
-                publish(state, &instances, port, &addresses);
+                publish(state, &instances, (port, peer_to_peer_port), &addresses);
             }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => break,
@@ -493,7 +512,12 @@ fn expire(state: &mut State) {
 }
 
 /// Reconciles the advertised instances with `instances`.
-fn publish(state: &mut State, instances: &[Instance], port: u16, addresses: &[Address]) {
+fn publish(
+    state: &mut State,
+    instances: &[Instance],
+    (port, peer_to_peer_port): (u16, Option<u16>),
+    addresses: &[Address],
+) {
     let (keep, gone): (Vec<_>, Vec<_>) = std::mem::take(&mut state.advertised)
         .into_iter()
         .partition(|advertised| {
@@ -501,6 +525,7 @@ fn publish(state: &mut State, instances: &[Instance], port: u16, addresses: &[Ad
             // (a new network, say) is advertised afresh.
             instances.contains(&advertised.instance)
                 && advertised.port == port
+                && advertised.peer_to_peer_port == peer_to_peer_port
                 && advertised.addresses == addresses
         });
     for advertised in gone {
@@ -515,18 +540,34 @@ fn publish(state: &mut State, instances: &[Instance], port: u16, addresses: &[Ad
         {
             continue;
         }
-        if let Some(advertised) = advertise(state, instance, port, addresses) {
+        if let Some(advertised) = advertise(state, instance, (port, peer_to_peer_port), addresses) {
             state.advertised.push(advertised);
         }
+    }
+}
+
+/// The extra flag for peer-to-peer Wi-Fi, if it is wanted.
+const fn p2p_flag(peer_to_peer: bool) -> Flags {
+    if peer_to_peer { FLAG_INCLUDE_P2P } else { 0 }
+}
+
+/// How an instance goes on `interface`: its port and extra flags; `None`
+/// to leave the interface out (peer-to-peer without a listener there).
+fn placement(state: &State, interface: u32, ports: (u16, Option<u16>)) -> Option<(u16, Flags)> {
+    if state.peer_to_peer && crate::p2p::is_peer_to_peer(interface) {
+        ports.1.map(|port| (port, FLAG_INCLUDE_P2P))
+    } else {
+        Some((ports.0, 0))
     }
 }
 
 fn advertise(
     state: &State,
     instance: &Instance,
-    port: u16,
+    (port, peer_to_peer_port): (u16, Option<u16>),
     addresses: &[Address],
 ) -> Option<Advertised> {
+    let ports = (port, peer_to_peer_port);
     let label = CString::new(instance.label.as_str()).ok()?;
     let host = CString::new(format!("{}.local.", instance.label)).ok()?;
     let txt = txt_record(&instance.txt_value)?;
@@ -560,6 +601,9 @@ fn advertise(
         if interface == INTERFACE_ANY {
             continue;
         }
+        let Some((_, extra)) = placement(state, interface, ports) else {
+            continue;
+        };
         let mut record: DnsRecordRef = std::ptr::null_mut();
         // SAFETY: the shared connection is valid; `host` and `rdata` are
         // valid for the call (dns_sd copies them); `rdata`'s length fits
@@ -569,7 +613,7 @@ fn advertise(
                 state.connection,
                 &raw mut record,
                 // The host name is ours alone: probed for conflicts.
-                FLAG_UNIQUE,
+                FLAG_UNIQUE | extra,
                 interface,
                 host.as_ptr(),
                 rrtype,
@@ -587,6 +631,9 @@ fn advertise(
     }
     let mut services = Vec::new();
     for interface in interfaces {
+        let Some((port, extra)) = placement(state, interface, ports) else {
+            continue;
+        };
         let mut service = state.connection;
         // SAFETY: `service` starts as the shared connection; the strings
         // and the TXT bytes are valid for the call (dns_sd copies them);
@@ -594,7 +641,7 @@ fn advertise(
         let registered = unsafe {
             DNSServiceRegister(
                 &raw mut service,
-                FLAG_SHARE_CONNECTION | FLAG_NO_AUTO_RENAME,
+                FLAG_SHARE_CONNECTION | FLAG_NO_AUTO_RENAME | extra,
                 interface,
                 label.as_ptr(),
                 SERVICE.as_ptr(),
@@ -621,6 +668,7 @@ fn advertise(
     Some(Advertised {
         instance: instance.clone(),
         port,
+        peer_to_peer_port,
         addresses: addresses.to_vec(),
         services,
         records,
@@ -801,7 +849,7 @@ extern "C" fn on_browse(
     let resolving = unsafe {
         DNSServiceResolve(
             &raw mut resolve,
-            FLAG_SHARE_CONNECTION,
+            FLAG_SHARE_CONNECTION | p2p_flag(state.peer_to_peer),
             interface,
             name,
             regtype,
@@ -888,6 +936,7 @@ extern "C" fn on_resolve(
         return;
     };
     let connection = state.connection;
+    let peer_to_peer = state.peer_to_peer;
     let Some(pending) = state.pending.get_mut(&instance) else {
         return;
     };
@@ -904,7 +953,7 @@ extern "C" fn on_resolve(
     let looking = unsafe {
         DNSServiceGetAddrInfo(
             &raw mut lookup,
-            FLAG_SHARE_CONNECTION | FLAG_FORCE_MULTICAST,
+            FLAG_SHARE_CONNECTION | FLAG_FORCE_MULTICAST | p2p_flag(peer_to_peer),
             interface,
             PROTOCOL_IPV4 | PROTOCOL_IPV6,
             host,
@@ -1041,7 +1090,7 @@ mod tests {
             let _ = write!(label, "{byte:02x}");
             label
         });
-        let bonjour = Bonjour::start(true)?;
+        let bonjour = Bonjour::start(true, false)?;
         let instance = Instance {
             label: label.clone(),
             txt_value: "00".repeat(19),
@@ -1050,7 +1099,7 @@ mod tests {
             ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             interface: 0,
         };
-        bonjour.publish(vec![instance], 47_123, vec![address]);
+        bonjour.publish(vec![instance], 47_123, None, vec![address]);
         let resolved = wait(
             &bonjour,
             |found| matches!(found, Found::Resolved { name, .. } if *name == label),
@@ -1071,7 +1120,7 @@ mod tests {
                 .iter()
                 .any(|(ip, _)| *ip == IpAddr::V4(Ipv4Addr::LOCALHOST))
         );
-        bonjour.publish(Vec::new(), 47_123, Vec::new());
+        bonjour.publish(Vec::new(), 47_123, None, Vec::new());
         let removed = wait(
             &bonjour,
             |found| matches!(found, Found::Removed { name } if *name == label),

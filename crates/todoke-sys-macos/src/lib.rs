@@ -26,5 +26,9 @@ pub mod bonjour;
 pub mod keychain;
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 pub mod login_item;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod p2p;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+pub mod route;
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 pub mod services;

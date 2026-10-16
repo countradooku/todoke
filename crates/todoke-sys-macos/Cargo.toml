@@ -43,6 +43,10 @@ security-framework = { version = "=3.7.0", default-features = false, features = 
 # Adding an item without the "create or update" of security-framework's
 # password helpers: a stored key is never replaced.
 core-foundation = "=0.10.1"
+# Apple peer-to-peer Wi-Fi (AWDL) through Network.framework (p2p.rs): its
+# handlers are blocks, its queues and data dispatch objects.
+block2 = "=0.6.2"
+dispatch2 = { version = "=0.3.1", default-features = false, features = ["std", "block2", "objc2"] }
 # The login item (SMAppService) and the Services provider behind "Send with
 # todoke" in Finder; the same objc2 crates the tray already brings.
 objc2 = { workspace = true, optional = true }

@@ -17,6 +17,8 @@ final class AppModel {
     var notice: String?
 
     @ObservationIgnored let backend: Backend
+    /// Point to share (Nearby Interaction), while a screen shows.
+    let pointing: Pointing
     @ObservationIgnored private let activities = TransferActivities()
     @ObservationIgnored private let outbox = Outbox()
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
@@ -27,11 +29,13 @@ final class AppModel {
 
     init(backend: Backend) {
         self.backend = backend
+        pointing = Pointing(backend: backend)
     }
 
     /// Reads everything now, then on every event and every two seconds.
     func run() {
         guard tasks.isEmpty else { return }
+        tasks.append(Task { [pointing] in await pointing.setForeground(true) })
         tasks.append(Task { [weak self] in
             while !Task.isCancelled {
                 await self?.refresh()
@@ -49,6 +53,7 @@ final class AppModel {
     func pause() {
         tasks.forEach { $0.cancel() }
         tasks = []
+        Task { [pointing] in await pointing.setForeground(false) }
     }
 
     var moving: Bool {

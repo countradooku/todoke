@@ -53,7 +53,12 @@ impl AppLinks {
                 host.parse::<IpAddr>()
                     .map_err(|_| invalid("the app gave no host address on the link"))?,
             ),
-            None if joining => return Err(invalid("the app gave no host address on the link")),
+            // Apple platforms name no router for a joined network: the
+            // routing table does (the joined interface's default gateway).
+            None if joining => Some(
+                gateway(lease.interface)
+                    .ok_or_else(|| invalid("the app gave no host address on the link"))?,
+            ),
             _ => None,
         };
         // Unspecified only for a host that names the link's interfaces.
@@ -125,6 +130,21 @@ impl LinkPlatform for AppLinks {
             .map_err(io_error)?;
         self.lease(&lease, true, &request.cancel)
     }
+}
+
+/// The default gateway of `interface`, where the platform has no API for a
+/// joined network's router (Apple's).
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn gateway(interface: u32) -> Option<IpAddr> {
+    (interface != 0)
+        .then(|| todoke_sys_macos::route::gateway(interface))
+        .flatten()
+        .map(IpAddr::V4)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+const fn gateway(_: u32) -> Option<IpAddr> {
+    None
 }
 
 /// The service information to publish or match: Wi-Fi Aware only.

@@ -1,5 +1,6 @@
 //! Pointing records (PROTOCOL §10.4): `RangingReady`, `RangingStart`,
-//! `RangingAccept`, and `RangingStop`, which let two contacts in a session
+//! `RangingAccept`, `RangingStop`, and Apple's `PeerRangingStart` and
+//! `PeerRangingAccept`, which let two contacts in a session
 //! range with ultra-wideband so a user can pick a nearby contact by
 //! pointing at it. Every UWB address serves one ranging only: each side
 //! sends its own with each ranging (the start, the accept).
@@ -34,7 +35,11 @@ pub const MAX_RANGING_SECONDS: u64 = 120;
 
 /// The configurations (bit 0: provisioned-STS unicast DS-TWR).
 pub const CONFIG_PROVISIONED_DS_TWR: u8 = 0b1;
-const CONFIGS: u8 = CONFIG_PROVISIONED_DS_TWR;
+/// Bit 1: Apple Nearby Interaction peer ranging (tokens, not addresses).
+pub const CONFIG_APPLE_PEER: u8 = 0b10;
+const CONFIGS: u8 = CONFIG_PROVISIONED_DS_TWR | CONFIG_APPLE_PEER;
+/// A peer ranging token's largest length.
+pub const MAX_TOKEN_LEN: usize = 1024;
 
 /// A UWB short address that may name a device (not 0x0000 or 0xffff).
 fn address(value: u16) -> Result<u16, DecodeError> {
@@ -133,7 +138,8 @@ impl RangingStart {
         if !matches!(channel, 5 | 9) || !matches!(preamble, 9..=12 | 25..=32) {
             return Err(DecodeError::Range);
         }
-        if config.count_ones() != 1 || config & !CONFIGS != 0 {
+        // FiRa only: Apple peer ranging has records of its own.
+        if config != CONFIG_PROVISIONED_DS_TWR {
             return Err(DecodeError::Reserved);
         }
         let mut sts_key = Zeroizing::new([0; STS_KEY_LEN]);
@@ -213,6 +219,63 @@ impl RangingStop {
             return Err(DecodeError::ZeroIdentifier);
         }
         Ok(Self { session_id })
+    }
+}
+
+/// `PeerRangingStart` (0x0027) and `PeerRangingAccept` (0x0028): Apple
+/// Nearby Interaction peer ranging, with the sender's discovery token for
+/// this ranging (an archived `NIDiscoveryToken`; never printed).
+#[derive(Clone, PartialEq, Eq)]
+pub struct PeerRanging {
+    /// The ranging session ID (not zero).
+    pub session_id: u32,
+    /// The sender's token, 1 to [`MAX_TOKEN_LEN`] bytes.
+    pub token: Vec<u8>,
+}
+
+impl fmt::Debug for PeerRanging {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PeerRanging")
+            .field("session_id", &self.session_id)
+            .field("token_len", &self.token.len())
+            .finish_non_exhaustive()
+    }
+}
+
+impl PeerRanging {
+    /// The body.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(6 + self.token.len());
+        out.extend_from_slice(&self.session_id.to_be_bytes());
+        out.extend_from_slice(&u16::try_from(self.token.len()).unwrap_or(0).to_be_bytes());
+        out.extend_from_slice(&self.token);
+        out
+    }
+
+    /// Decodes a body.
+    ///
+    /// # Errors
+    ///
+    /// [`DecodeError::Length`] for a length that does not match or a
+    /// token outside 1 to [`MAX_TOKEN_LEN`] bytes;
+    /// [`DecodeError::ZeroIdentifier`].
+    pub fn decode(body: &[u8]) -> Result<Self, DecodeError> {
+        let [a, b, c, d, high, low, token @ ..] = body else {
+            return Err(DecodeError::Length);
+        };
+        let length = usize::from(u16::from_be_bytes([*high, *low]));
+        if length == 0 || length > MAX_TOKEN_LEN || token.len() != length {
+            return Err(DecodeError::Length);
+        }
+        let session_id = u32::from_be_bytes([*a, *b, *c, *d]);
+        if session_id == 0 {
+            return Err(DecodeError::ZeroIdentifier);
+        }
+        Ok(Self {
+            session_id,
+            token: token.to_vec(),
+        })
     }
 }
 

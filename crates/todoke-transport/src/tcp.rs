@@ -49,8 +49,34 @@ const BACKLOG: i32 = 16;
 
 /// A TCP connection as a [`Link`].
 pub struct TcpLink {
-    stream: TcpStream,
+    stream: Stream,
     info: LinkInfo,
+}
+
+/// What a link reads and writes.
+enum Stream {
+    Tcp(TcpStream),
+    /// TCP the platform carries (Apple peer-to-peer Wi-Fi through
+    /// Network.framework), bridged to a local stream; the connection goes
+    /// with it.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    Bridged(
+        tokio::net::UnixStream,
+        #[expect(dead_code, reason = "kept only to be dropped with the stream")]
+        todoke_sys_macos::p2p::Connection,
+    ),
+}
+
+#[cfg(test)]
+impl Stream {
+    /// Whether Nagle is off (a bridged stream is the platform's: on).
+    fn nodelay(&self) -> io::Result<bool> {
+        match self {
+            Self::Tcp(stream) => stream.nodelay(),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Self::Bridged(..) => Ok(true),
+        }
+    }
 }
 
 impl TcpLink {
@@ -61,7 +87,33 @@ impl TcpLink {
         if let Some(latency) = latency {
             info = info.with_latency(latency);
         }
-        Ok(Self { stream, info })
+        Ok(Self {
+            stream: Stream::Tcp(stream),
+            info,
+        })
+    }
+
+    /// A LAN link over TCP the platform carries, bridged to a local
+    /// stream.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub(crate) fn bridged(
+        bridged: todoke_sys_macos::p2p::Bridged,
+        remote: Option<SocketAddr>,
+        latency: Option<Duration>,
+    ) -> io::Result<Self> {
+        bridged.stream.set_nonblocking(true)?;
+        let stream = tokio::net::UnixStream::from_std(bridged.stream)?;
+        let mut info = LinkInfo::new(LinkKind::Lan);
+        if let Some(remote) = remote {
+            info = info.with_remote(remote);
+        }
+        if let Some(latency) = latency {
+            info = info.with_latency(latency);
+        }
+        Ok(Self {
+            stream: Stream::Bridged(stream, bridged.connection),
+            info,
+        })
     }
 }
 
@@ -86,7 +138,12 @@ impl AsyncRead for TcpLink {
         buf: &mut [u8],
     ) -> Poll<io::Result<usize>> {
         let mut read = ReadBuf::new(buf);
-        match Pin::new(&mut self.stream).poll_read(cx, &mut read) {
+        let polled = match &mut self.stream {
+            Stream::Tcp(stream) => Pin::new(stream).poll_read(cx, &mut read),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_read(cx, &mut read),
+        };
+        match polled {
             Poll::Ready(Ok(())) => Poll::Ready(Ok(read.filled().len())),
             Poll::Ready(Err(error)) => Poll::Ready(Err(error)),
             Poll::Pending => Poll::Pending,
@@ -100,7 +157,11 @@ impl AsyncWrite for TcpLink {
         cx: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write(cx, buf)
+        match &mut self.stream {
+            Stream::Tcp(stream) => Pin::new(stream).poll_write(cx, buf),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_write(cx, buf),
+        }
     }
 
     fn poll_write_vectored(
@@ -108,15 +169,27 @@ impl AsyncWrite for TcpLink {
         cx: &mut Context<'_>,
         bufs: &[io::IoSlice<'_>],
     ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.stream).poll_write_vectored(cx, bufs)
+        match &mut self.stream {
+            Stream::Tcp(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_write_vectored(cx, bufs),
+        }
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_flush(cx)
+        match &mut self.stream {
+            Stream::Tcp(stream) => Pin::new(stream).poll_flush(cx),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_flush(cx),
+        }
     }
 
     fn poll_close(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.stream).poll_shutdown(cx)
+        match &mut self.stream {
+            Stream::Tcp(stream) => Pin::new(stream).poll_shutdown(cx),
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            Stream::Bridged(stream, _) => Pin::new(stream).poll_shutdown(cx),
+        }
     }
 }
 
@@ -145,6 +218,11 @@ impl Connector for TcpConnector {
         self.policy
             .check_peer(address)
             .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal))?;
+        // Apple peer-to-peer Wi-Fi: only Network.framework reaches it.
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        if crate::peer_to_peer::reaches(address) {
+            return crate::peer_to_peer::connect(address).await;
+        }
         let started = tokio::time::Instant::now();
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
             .await
@@ -209,6 +287,9 @@ pub struct LanListener {
     /// Only link-local IPv6 peers arriving on these interfaces (a direct
     /// link whose address is not known yet), if set.
     scopes: Option<Vec<u32>>,
+    /// Connections over Apple peer-to-peer Wi-Fi, accepted alongside.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    peer_to_peer: Option<crate::peer_to_peer::Accepting>,
 }
 
 impl LanListener {
@@ -237,6 +318,8 @@ impl LanListener {
             policy,
             kind: LinkKind::Lan,
             scopes: None,
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            peer_to_peer: None,
         })
     }
 
@@ -275,6 +358,8 @@ impl LanListener {
             policy,
             kind: LinkKind::Direct,
             scopes: None,
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            peer_to_peer: None,
         })
     }
 
@@ -321,16 +406,62 @@ impl LanListener {
     /// files); the caller decides whether to keep accepting.
     pub async fn accept(&self) -> io::Result<TcpLink> {
         loop {
-            let (stream, source) = self.listener.accept().await?;
-            if self.policy.check_source(source).is_err() || !self.in_scope(source) {
+            #[cfg(any(target_os = "macos", target_os = "ios"))]
+            if let Some(peer_to_peer) = &self.peer_to_peer {
+                tokio::select! {
+                    accepted = self.listener.accept() => {
+                        if let Some(link) = self.admit(accepted?) {
+                            return Ok(link);
+                        }
+                    }
+                    Some(link) = peer_to_peer.next(self.policy) => return Ok(link),
+                }
                 continue;
             }
-            // A connection reset before it was set up (some systems then fail
-            // `TCP_NODELAY` or the address queries) is that connection's
-            // problem, not the listener's: drop it and keep accepting.
-            if let Ok(link) = TcpLink::new(stream, None, self.kind) {
+            if let Some(link) = self.admit(self.listener.accept().await?) {
                 return Ok(link);
             }
+        }
+    }
+
+    /// A TCP connection accepted, if its source may connect.
+    fn admit(&self, (stream, source): (TcpStream, SocketAddr)) -> Option<TcpLink> {
+        if self.policy.check_source(source).is_err() || !self.in_scope(source) {
+            return None;
+        }
+        // A connection reset before it was set up (some systems then fail
+        // `TCP_NODELAY` or the address queries) is that connection's
+        // problem, not the listener's: dropped, and accepting goes on.
+        TcpLink::new(stream, None, self.kind).ok()
+    }
+
+    /// Accepts connections over Apple peer-to-peer Wi-Fi too (AWDL,
+    /// through Network.framework), on a port of their own for the
+    /// peer-to-peer mDNS record (§9, §10.1). LAN links only.
+    ///
+    /// # Errors
+    ///
+    /// The peer-to-peer listener could not start.
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    pub fn accept_peer_to_peer(&mut self) -> io::Result<()> {
+        if self.kind == LinkKind::Lan && self.peer_to_peer.is_none() {
+            self.peer_to_peer = Some(crate::peer_to_peer::Accepting::start(self.policy)?);
+        }
+        Ok(())
+    }
+
+    /// The port peer-to-peer connections come to, if accepted.
+    #[must_use]
+    pub fn peer_to_peer_port(&self) -> Option<u16> {
+        #[cfg(any(target_os = "macos", target_os = "ios"))]
+        {
+            self.peer_to_peer
+                .as_ref()
+                .map(crate::peer_to_peer::Accepting::port)
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+        {
+            None
         }
     }
 }

@@ -262,6 +262,12 @@ pub fn event(event: &Event) -> String {
         Event::RangingRequested(ranging) => {
             format!("{} points at this device", short(&ranging.contact))
         }
+        Event::PeerPointTarget(ranging) => {
+            format!("pointing: ranging with {}", short(&ranging.contact))
+        }
+        Event::PeerRangingRequested(ranging) => {
+            format!("{} points at this device", short(&ranging.contact))
+        }
         Event::RangingStopped { contact, .. } => {
             format!("ranging with {} stopped", short(contact))
         }

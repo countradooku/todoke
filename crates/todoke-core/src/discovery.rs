@@ -1,5 +1,6 @@
 //! How the core advertises and browses: mDNS (through the system's Bonjour
-//! on iOS, where raw multicast needs a restricted entitlement), or
+//! on Apple platforms: iOS needs it, raw multicast taking a restricted
+//! entitlement, and it alone reaches peer-to-peer Wi-Fi), or
 //! (development and tests only) a folder of records two instances on one
 //! machine share.
 
@@ -7,9 +8,9 @@ use core::time::Duration;
 use std::path::PathBuf;
 
 use todoke_crypto::discovery::DiscoveryTable;
-#[cfg(target_os = "ios")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(crate) use todoke_discovery::Bonjour as Mdns;
-#[cfg(not(target_os = "ios"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub(crate) use todoke_discovery::Mdns;
 use todoke_discovery::{Directory, Plan};
 use todoke_proto::discovery::InstanceLabel;
@@ -18,7 +19,7 @@ use todoke_transport::LanPolicy;
 /// The discovery backend.
 pub(crate) enum Backend {
     /// mDNS on the local network (§9): `mdns-sd`, or the system's Bonjour
-    /// on iOS.
+    /// on Apple platforms.
     Mdns(Mdns),
     /// Records as files in a shared folder; development and tests only.
     Folder(Folder),

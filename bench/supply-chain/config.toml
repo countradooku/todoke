@@ -162,6 +162,11 @@ version = "0.11.3"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-17 for Apple peer-to-peer Wi-Fi in todoke-sys-macos (p2p.rs, Network.framework's dispatch queues and data; docs/adr/0020-ios-radios.md), as in the main workspace; no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.ed25519]]
 version = "3.0.0"
 criteria = "safe-to-run"
@@ -536,6 +541,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-13 for the transfer layer (depend
 version = "1.53.3"
 criteria = "safe-to-run"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the LAN benchmark (todoke-transport's TCP and timers), a development dependency only; replace with an audit or imported audit."
+
+[[exemptions.tokio-macros]]
+version = "2.7.2"
+criteria = "safe-to-run"
+notes = "Not yet reviewed. Exempted on 2026-10-17 for todoke-transport's LAN listener on Apple platforms (select! over its TCP and peer-to-peer listeners), as in the main workspace; mozilla and bytecode-alliance trust its publisher (Darksonn) instead of auditing; replace with an audit or imported audit."
 
 [[exemptions.typenum]]
 version = "1.20.1"

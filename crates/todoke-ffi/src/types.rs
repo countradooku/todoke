@@ -490,6 +490,20 @@ pub enum CoreEvent {
         /// The ranging.
         ranging: RangingInfo,
     },
+    /// This device points at a contact with Apple Nearby Interaction
+    /// (`Core::point_start_peer`): run the session whose token is
+    /// `local_token` with `peer_token`.
+    PeerPointTarget {
+        /// The ranging.
+        ranging: PeerRangingInfo,
+    },
+    /// A contact points at this device with Apple Nearby Interaction:
+    /// accept with `Core::accept_peer_ranging` (then range with
+    /// `peer_token`) or `Core::refuse_ranging`.
+    PeerRangingRequested {
+        /// The ranging.
+        ranging: PeerRangingInfo,
+    },
     /// A ranging ended (stopped, its time up, or its session gone): stop
     /// ranging with that session ID.
     RangingStopped {
@@ -498,6 +512,42 @@ pub enum CoreEvent {
         /// The ranging session ID.
         session_id: u32,
     },
+}
+
+/// One Apple Nearby Interaction ranging between this device and a contact
+/// (PROTOCOL §10.4): archived discovery tokens, never logged or kept once
+/// it ends.
+#[data]
+#[derive(Clone, PartialEq, Eq)]
+pub struct PeerRangingInfo {
+    /// The contact.
+    pub contact: String,
+    /// The ranging session ID.
+    pub session_id: u32,
+    /// The contact's token for this ranging.
+    pub peer_token: Vec<u8>,
+    /// This device's token for it; none in a request.
+    pub local_token: Option<Vec<u8>>,
+}
+
+impl core::fmt::Debug for PeerRangingInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("PeerRangingInfo")
+            .field("contact", &self.contact)
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<api::PeerRangingInfo> for PeerRangingInfo {
+    fn from(ranging: api::PeerRangingInfo) -> Self {
+        Self {
+            contact: ranging.contact,
+            session_id: ranging.session_id,
+            peer_token: unhex(&ranging.peer_token).unwrap_or_default(),
+            local_token: ranging.local_token.as_deref().and_then(unhex),
+        }
+    }
 }
 
 /// A controller session the platform prepared for pointing (PROTOCOL
@@ -623,6 +673,12 @@ impl From<api::Event> for CoreEvent {
                 ranging: ranging.into(),
             },
             E::RangingRequested(ranging) => Self::RangingRequested {
+                ranging: ranging.into(),
+            },
+            E::PeerPointTarget(ranging) => Self::PeerPointTarget {
+                ranging: ranging.into(),
+            },
+            E::PeerRangingRequested(ranging) => Self::PeerRangingRequested {
                 ranging: ranging.into(),
             },
             E::RangingStopped {

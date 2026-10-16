@@ -22,7 +22,8 @@
 use core::time::Duration;
 
 use todoke_proto::ranging::{
-    MAX_RANGING_SECONDS, MAX_STARTS, RangingAccept, RangingReady, RangingStart, RangingStop,
+    CONFIG_APPLE_PEER, CONFIG_PROVISIONED_DS_TWR, MAX_RANGING_SECONDS, MAX_STARTS, PeerRanging,
+    RangingAccept, RangingReady, RangingStart, RangingStop,
 };
 
 use super::{Violation, violation};
@@ -70,9 +71,19 @@ struct Running {
     ends_at: Duration,
     /// This side started it.
     controller: bool,
-    /// The controller's address.
-    controller_address: u16,
+    /// The controller's address (`FiRa`); `None` for Apple peer ranging.
+    controller_address: Option<u16>,
     accepted: bool,
+}
+
+/// How a start is taken.
+enum Admitted {
+    /// It runs; `replaced` ended here because of it.
+    Runs { replaced: Option<u32> },
+    /// Dropped: ours stands.
+    Dropped,
+    /// Neither stands (the same ID from both): ours ended.
+    Neither(Option<u32>),
 }
 
 /// The session's pointing.
@@ -100,7 +111,13 @@ pub(crate) enum Step {
         start: Box<RangingStart>,
         replaced: Option<u32>,
     },
+    /// The same with Apple peer ranging.
+    PeerRequested {
+        start: Box<PeerRanging>,
+        replaced: Option<u32>,
+    },
     Accepted(RangingAccept),
+    PeerAccepted(Box<PeerRanging>),
     Stopped(u32),
     /// A record for a ranging that ended here: nothing to do.
     Nothing,
@@ -123,12 +140,18 @@ impl Pointing {
         Ok(Step::PeerReady(ready))
     }
 
-    fn run(&mut self, start: &RangingStart, controller: bool, now: Duration) {
+    fn run(
+        &mut self,
+        session_id: u32,
+        controller_address: Option<u16>,
+        controller: bool,
+        now: Duration,
+    ) {
         self.running = Some(Running {
-            session_id: start.session_id,
+            session_id,
             ends_at: now + Duration::from_secs(MAX_RANGING_SECONDS),
             controller,
-            controller_address: start.controller,
+            controller_address,
             accepted: false,
         });
     }
@@ -140,35 +163,66 @@ impl Pointing {
         Some(running.session_id)
     }
 
-    /// This side starts ranging as the controller.
+    /// This side starts a ranging of configuration `config` as the
+    /// controller.
+    fn take_own(
+        &mut self,
+        session_id: u32,
+        config: u8,
+        controller_address: Option<u16>,
+        now: Duration,
+    ) -> Result<(), RangingError> {
+        let peer = self.peer.ok_or(RangingError::PeerNotReady)?;
+        if peer.configs & config == 0 {
+            return Err(RangingError::PeerNotReady);
+        }
+        if self.running.is_some()
+            || self.own_starts >= MAX_STARTS
+            || self.ended.contains(&session_id)
+        {
+            return Err(RangingError::Busy);
+        }
+        self.own_starts += 1;
+        self.run(session_id, controller_address, true, now);
+        Ok(())
+    }
+
+    /// This side starts `FiRa` ranging as the controller.
     pub(crate) fn start(
         &mut self,
         start: &RangingStart,
         now: Duration,
     ) -> Result<(), RangingError> {
-        let peer = self.peer.ok_or(RangingError::PeerNotReady)?;
-        if peer.configs & start.config == 0 {
-            return Err(RangingError::PeerNotReady);
-        }
-        if self.running.is_some()
-            || self.own_starts >= MAX_STARTS
-            || self.ended.contains(&start.session_id)
-        {
-            return Err(RangingError::Busy);
-        }
-        self.own_starts += 1;
-        self.run(start, true, now);
-        Ok(())
+        self.take_own(start.session_id, start.config, Some(start.controller), now)
     }
 
-    /// The peer starts ranging with this side as the controlee.
-    pub(crate) fn on_start(&mut self, body: &[u8], now: Duration) -> Result<Step, Violation> {
-        let start = RangingStart::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+    /// This side starts Apple peer ranging as the controller; a token
+    /// outside its bounds is refused before anything changes.
+    pub(crate) fn start_peer(
+        &mut self,
+        start: &PeerRanging,
+        now: Duration,
+    ) -> Result<(), RangingError> {
+        if PeerRanging::decode(&start.encode()).is_err() {
+            return Err(RangingError::Address);
+        }
+        self.take_own(start.session_id, CONFIG_APPLE_PEER, None, now)
+    }
+
+    /// The peer starts a ranging of configuration `config`, this side the
+    /// controlee: how it is taken, with every crossing rule.
+    fn admit(
+        &mut self,
+        session_id: u32,
+        config: u8,
+        controller_address: Option<u16>,
+        now: Duration,
+    ) -> Result<Admitted, Violation> {
         let state = || violation(FailureCode::State);
         let own = self.own.ok_or_else(state)?;
-        if own.configs & start.config == 0
+        if own.configs & config == 0
             || self.peer_starts >= MAX_STARTS
-            || self.ended.contains(&start.session_id)
+            || self.ended.contains(&session_id)
         {
             return Err(state());
         }
@@ -178,29 +232,61 @@ impl Pointing {
             if !running.controller {
                 // The peer controlled the running one: it ended there (a
                 // second start for the same ranging is not that).
-                if running.session_id == start.session_id {
+                if running.session_id == session_id {
                     return Err(state());
                 }
                 replaced = self.end();
             } else if running.accepted {
                 return Err(state());
-            } else if start.session_id > running.session_id {
+            } else if session_id > running.session_id {
                 // Both started at once: the larger ID stands.
                 replaced = self.end();
-            } else if start.session_id < running.session_id {
+            } else if session_id < running.session_id {
                 // Ours stands; the peer drops its own.
-                self.ended.push(start.session_id);
-                return Ok(Step::Nothing);
+                self.ended.push(session_id);
+                return Ok(Admitted::Dropped);
             } else {
                 // The same ID from both: neither stands.
-                return Ok(self.end().map_or(Step::Nothing, Step::Stopped));
+                return Ok(Admitted::Neither(self.end()));
             }
         }
-        self.run(&start, false, now);
-        Ok(Step::Requested {
-            start: Box::new(start),
-            replaced,
-        })
+        self.run(session_id, controller_address, false, now);
+        Ok(Admitted::Runs { replaced })
+    }
+
+    /// The peer starts `FiRa` ranging with this side as the controlee.
+    pub(crate) fn on_start(&mut self, body: &[u8], now: Duration) -> Result<Step, Violation> {
+        let start = RangingStart::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+        Ok(
+            match self.admit(
+                start.session_id,
+                CONFIG_PROVISIONED_DS_TWR,
+                Some(start.controller),
+                now,
+            )? {
+                Admitted::Runs { replaced } => Step::Requested {
+                    start: Box::new(start),
+                    replaced,
+                },
+                Admitted::Dropped => Step::Nothing,
+                Admitted::Neither(ended) => ended.map_or(Step::Nothing, Step::Stopped),
+            },
+        )
+    }
+
+    /// The peer starts Apple peer ranging with this side as the controlee.
+    pub(crate) fn on_peer_start(&mut self, body: &[u8], now: Duration) -> Result<Step, Violation> {
+        let start = PeerRanging::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+        Ok(
+            match self.admit(start.session_id, CONFIG_APPLE_PEER, None, now)? {
+                Admitted::Runs { replaced } => Step::PeerRequested {
+                    start: Box::new(start),
+                    replaced,
+                },
+                Admitted::Dropped => Step::Nothing,
+                Admitted::Neither(ended) => ended.map_or(Step::Nothing, Step::Stopped),
+            },
+        )
     }
 
     /// This side, the controlee, accepts the running ranging at its
@@ -214,14 +300,17 @@ impl Pointing {
             .running
             .as_mut()
             .filter(|running| {
-                running.session_id == session_id && !running.controller && !running.accepted
+                running.session_id == session_id
+                    && !running.controller
+                    && !running.accepted
+                    && running.controller_address.is_some()
             })
             .ok_or(RangingError::NotRunning)?;
         let accept = RangingAccept {
             session_id,
             controlee,
         };
-        if controlee == running.controller_address
+        if Some(controlee) == running.controller_address
             || RangingAccept::decode(&accept.encode()).is_err()
         {
             return Err(RangingError::Address);
@@ -230,28 +319,76 @@ impl Pointing {
         Ok(accept)
     }
 
+    /// This side, the controlee, accepts the running Apple peer ranging
+    /// with its token for it.
+    pub(crate) fn accept_peer(
+        &mut self,
+        session_id: u32,
+        token: Vec<u8>,
+    ) -> Result<PeerRanging, RangingError> {
+        let running = self
+            .running
+            .as_mut()
+            .filter(|running| {
+                running.session_id == session_id
+                    && !running.controller
+                    && !running.accepted
+                    && running.controller_address.is_none()
+            })
+            .ok_or(RangingError::NotRunning)?;
+        let accept = PeerRanging { session_id, token };
+        if PeerRanging::decode(&accept.encode()).is_err() {
+            return Err(RangingError::Address);
+        }
+        running.accepted = true;
+        Ok(accept)
+    }
+
+    /// The running ranging the peer may accept: `Ok(None)` for one that
+    /// ended here (its accept is ignored).
+    fn accepting(
+        &mut self,
+        session_id: u32,
+        peer: bool,
+    ) -> Result<Option<&mut Running>, Violation> {
+        let ended = self.ended.contains(&session_id);
+        match self.running.as_mut() {
+            Some(running) if running.session_id == session_id => {
+                if !running.controller
+                    || running.accepted
+                    || running.controller_address.is_none() != peer
+                {
+                    return Err(violation(FailureCode::State));
+                }
+                Ok(Some(running))
+            }
+            _ if ended => Ok(None),
+            _ => Err(violation(FailureCode::State)),
+        }
+    }
+
     /// The peer, the controlee, accepts the ranging this side started.
     pub(crate) fn on_accept(&mut self, body: &[u8]) -> Result<Step, Violation> {
         let accept = RangingAccept::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
-        let Some(running) = self
-            .running
-            .as_mut()
-            .filter(|running| running.session_id == accept.session_id)
-        else {
-            return if self.ended.contains(&accept.session_id) {
-                Ok(Step::Nothing)
-            } else {
-                Err(violation(FailureCode::State))
-            };
+        let Some(running) = self.accepting(accept.session_id, false)? else {
+            return Ok(Step::Nothing);
         };
-        if !running.controller || running.accepted {
-            return Err(violation(FailureCode::State));
-        }
-        if accept.controlee == running.controller_address {
+        if Some(accept.controlee) == running.controller_address {
             return Err(violation(FailureCode::Malformed));
         }
         running.accepted = true;
         Ok(Step::Accepted(accept))
+    }
+
+    /// The peer, the controlee, accepts the Apple peer ranging this side
+    /// started.
+    pub(crate) fn on_peer_accept(&mut self, body: &[u8]) -> Result<Step, Violation> {
+        let accept = PeerRanging::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+        let Some(running) = self.accepting(accept.session_id, true)? else {
+            return Ok(Step::Nothing);
+        };
+        running.accepted = true;
+        Ok(Step::PeerAccepted(Box::new(accept)))
     }
 
     /// This side stops the running ranging.

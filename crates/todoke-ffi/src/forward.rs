@@ -79,6 +79,8 @@ pub(crate) fn notify(notifier: &dyn Notifier, event: &CoreEvent, shown: &mut BTr
         CoreEvent::Paired { .. }
         | CoreEvent::PointTarget { .. }
         | CoreEvent::RangingRequested { .. }
+        | CoreEvent::PeerPointTarget { .. }
+        | CoreEvent::PeerRangingRequested { .. }
         | CoreEvent::RangingStopped { .. } => return,
     };
     let (transfer, text) = ended;

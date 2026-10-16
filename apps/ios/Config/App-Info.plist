@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
 	<!-- §9 through mDNSResponder: only this service type (no multicast entitlement). -->
+	<key>NSNearbyInteractionUsageDescription</key>
+	<string>Point this iPhone at a nearby device to pick it. todoke measures distance and direction only while you point, or while a contact points at this iPhone with todoke open.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_todoke._tcp</string>

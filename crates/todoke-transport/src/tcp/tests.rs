@@ -364,3 +364,54 @@ async fn scoped_direct_listeners_take_only_their_interfaces() -> TestResult {
     assert!(plain.in_scope((Ipv4Addr::LOCALHOST, 40_000).into()));
     Ok(())
 }
+
+/// Apple peer-to-peer Wi-Fi's path, over loopback: the LAN listener also
+/// takes connections Network.framework accepts, bridged, and they carry
+/// bytes both ways as LAN links; the policy still decides who may connect.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[tokio::test(flavor = "multi_thread")]
+async fn peer_to_peer_links_are_lan_links() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    let mut listener = LanListener::bind(0, policy)?;
+    listener.accept_peer_to_peer()?;
+    let port = listener.peer_to_peer_port().ok_or("no peer-to-peer port")?;
+    assert_ne!(port, listener.port()?);
+    let accepting = tokio::spawn(async move {
+        let link = listener.accept().await;
+        (listener, link)
+    });
+    let mut client = crate::peer_to_peer::connect((Ipv4Addr::LOCALHOST, port).into()).await?;
+    let (listener, server) = accepting.await?;
+    let mut server = server?;
+    for link in [&client, &server] {
+        assert_eq!(link.info().kind(), LinkKind::Lan);
+        assert!(
+            link.info()
+                .remote()
+                .is_some_and(|remote| remote.ip().is_loopback())
+        );
+    }
+    write_all(&mut client, b"hello over p2p").await?;
+    let mut got = [0_u8; 14];
+    read_exact(&mut server, &mut got).await?;
+    assert_eq!(&got, b"hello over p2p");
+    write_all(&mut server, b"back").await?;
+    let mut back = [0_u8; 4];
+    read_exact(&mut client, &mut back).await?;
+    assert_eq!(&back, b"back");
+    // Under the real policy, loopback may not connect: dropped unread.
+    drop(listener);
+    let mut strict = LanListener::bind(0, LanPolicy::new())?;
+    strict.accept_peer_to_peer()?;
+    let strict_port = strict.peer_to_peer_port().ok_or("no peer-to-peer port")?;
+    let _refused = crate::peer_to_peer::connect((Ipv4Addr::LOCALHOST, strict_port).into()).await?;
+    let accepted = tokio::time::timeout(Duration::from_millis(500), strict.accept()).await;
+    assert!(accepted.is_err(), "a refused source was accepted");
+    // Plain listeners have no peer-to-peer side; addresses off the
+    // peer-to-peer interfaces are not reached through it.
+    assert_eq!(LanListener::bind(0, policy)?.peer_to_peer_port(), None);
+    assert!(!crate::peer_to_peer::reaches(
+        (Ipv6Addr::LOCALHOST, 1).into()
+    ));
+    Ok(())
+}

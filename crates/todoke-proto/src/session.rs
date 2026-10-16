@@ -615,6 +615,10 @@ impl FrameType {
     pub const RANGING_STOP: Self = Self(0x0025);
     /// `RangingAccept` (§10.4).
     pub const RANGING_ACCEPT: Self = Self(0x0026);
+    /// `PeerRangingStart` (§10.4).
+    pub const PEER_RANGING_START: Self = Self(0x0027);
+    /// `PeerRangingAccept` (§10.4).
+    pub const PEER_RANGING_ACCEPT: Self = Self(0x0028);
     /// `Revoke` (§2).
     pub const REVOKE: Self = Self(0x0040);
 
@@ -635,7 +639,7 @@ impl FrameType {
     pub const fn class(self) -> FrameClass {
         match self.0 {
             0x0001..=0x0004 | 0x0006..=0x0009 => FrameClass::Session,
-            0x0005 | 0x0010..=0x001c | 0x0020..=0x0026 | 0x0040 => FrameClass::Application,
+            0x0005 | 0x0010..=0x001c | 0x0020..=0x0028 | 0x0040 => FrameClass::Application,
             0x8000..=0xbfff => FrameClass::Noncritical,
             0xc000..=0xffff => FrameClass::Experimental,
             _ => FrameClass::UnsupportedCritical,

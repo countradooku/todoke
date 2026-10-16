@@ -9,6 +9,7 @@ struct HomeView: View {
     @Environment(AppModel.self) private var model
     @Binding var pairing: Bool
     @State private var sendingTo: Contact?
+    @State private var pointingShown = false
 
     var body: some View {
         NavigationStack {
@@ -36,9 +37,21 @@ struct HomeView: View {
             }
             .navigationTitle("Your devices")
             .toolbar {
+                if model.pointing.ready, !model.contacts.isEmpty {
+                    ToolbarItem(placement: .secondaryAction) {
+                        Button("Point", systemImage: "dot.radiowaves.forward") { pointingShown = true }
+                            .accessibilityIdentifier("point")
+                    }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Button("Pair a device", systemImage: "qrcode") { pairing = true }
                         .accessibilityIdentifier("pair")
+                }
+            }
+            .sheet(isPresented: $pointingShown) {
+                PointSheet { contact in
+                    pointingShown = false
+                    sendingTo = contact
                 }
             }
             .fileImporter(
