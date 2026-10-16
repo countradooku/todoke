@@ -16,6 +16,7 @@
 import Darwin
 import Foundation
 import NetworkExtension
+import os
 import Todoke
 
 final class AppleLinks: WifiLinks, @unchecked Sendable {
@@ -59,16 +60,17 @@ final class AppleLinks: WifiLinks, @unchecked Sendable {
         let configuration = NEHotspotConfiguration(ssid: request.ssid, passphrase: passphrase, isWEP: false)
         configuration.joinOnce = true
         let applied = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var failure: Error?
+        // Locked: the system may answer after the wait gave up.
+        let failure = OSAllocatedUnfairLock<NSError?>(initialState: nil)
         NEHotspotConfigurationManager.shared.apply(configuration) { error in
-            failure = error
+            failure.withLock { $0 = error as NSError? }
             applied.signal()
         }
         guard applied.wait(timeout: .now() + within) == .success else {
             remove(request.ssid)
             throw LinkError.failed(message: "joining took too long")
         }
-        if let error = failure as NSError?,
+        if let error = failure.withLock({ $0 }),
            !(error.domain == NEHotspotConfigurationErrorDomain
                && error.code == NEHotspotConfigurationError.alreadyAssociated.rawValue) {
             remove(request.ssid)
@@ -117,13 +119,14 @@ final class AppleLinks: WifiLinks, @unchecked Sendable {
     /// configured).
     private func currentSSID() -> String? {
         let done = DispatchSemaphore(value: 0)
-        nonisolated(unsafe) var ssid: String?
+        // Locked: the answer may come after the wait gave up.
+        let ssid = OSAllocatedUnfairLock<String?>(initialState: nil)
         NEHotspotNetwork.fetchCurrent { network in
-            ssid = network?.ssid
+            ssid.withLock { $0 = network?.ssid }
             done.signal()
         }
         _ = done.wait(timeout: .now() + 2)
-        return ssid
+        return ssid.withLock { $0 }
     }
 
     /// The Wi-Fi interface's index and IPv4 address, once it has one.

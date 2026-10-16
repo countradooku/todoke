@@ -32,6 +32,8 @@ final class Pointing {
     private(set) var active = false
 
     @ObservationIgnored private let backend: Backend
+    /// Whether this iPhone measures precise distance (tests choose).
+    @ObservationIgnored private let capable: Bool
     /// Sessions prepared for pointing, by their archived token.
     @ObservationIgnored private var prepared: [Data: Ranger] = [:]
     /// Sessions ranging, by ranging session ID.
@@ -41,10 +43,11 @@ final class Pointing {
     /// The most rangings at once.
     private static let maxTargets = 4
 
-    static var supported: Bool { NISession.deviceCapabilities.supportsPreciseDistanceMeasurement }
+    nonisolated static var supported: Bool { NISession.deviceCapabilities.supportsPreciseDistanceMeasurement }
 
-    init(backend: Backend) {
+    init(backend: Backend, capable: Bool = Pointing.supported) {
         self.backend = backend
+        self.capable = capable
     }
 
     /// The app came on screen, or left it.
@@ -55,7 +58,7 @@ final class Pointing {
                 for await event in events { self?.handle(event) }
             }
         }
-        ready = foreground && Self.supported
+        ready = foreground && capable
         try? await backend.setRangingReady(ready ? 2 : nil)
         if !ready {
             await stop()
@@ -70,7 +73,7 @@ final class Pointing {
         await stop()
         var tokens: [Data] = []
         for _ in 0..<min(max(nearby, 1), Self.maxTargets) {
-            let ranger = Ranger { [weak self] contact, bearing in self?.bearings[contact] = bearing }
+            let ranger = makeRanger()
             guard let token = ranger.token else { continue }
             prepared[token] = ranger
             tokens.append(token)
@@ -110,34 +113,78 @@ final class Pointing {
         }
     }
 
-    /// A contact points at this iPhone: a fresh session answers it.
+    /// A session for one ranging, which reports where its contact is and
+    /// when it ended on its own.
+    private func makeRanger(answering: Bool = false) -> Ranger {
+        let ranger = Ranger(
+            update: { [weak self] contact, bearing in
+                guard !answering else { return }
+                self?.bearings[contact] = bearing
+            },
+            ended: { [weak self] ranger in self?.ended(ranger) })
+        ranger.answering = answering
+        return ranger
+    }
+
+    /// iOS invalidated a session, or its peer left for good: the ranging
+    /// is over here. One answered is stopped in the core too.
+    private func ended(_ ranger: Ranger) {
+        if let (token, _) = prepared.first(where: { $0.value === ranger }) {
+            prepared[token] = nil
+            return
+        }
+        guard let (sessionId, _) = running.first(where: { $0.value === ranger }) else { return }
+        running[sessionId] = nil
+        guard let contact = ranger.contact else { return }
+        bearings[contact] = nil
+        if ranger.answering {
+            Task { try? await backend.refuseRanging(contact: contact, sessionId: sessionId) }
+        }
+    }
+
+    /// A contact points at this iPhone: a fresh session answers it. It is
+    /// kept as running before the core is told, so a stop that comes
+    /// meanwhile finds it.
     private func answer(_ ranging: PeerRangingInfo) async {
-        let ranger = Ranger { _, _ in }
-        guard ready, let token = ranger.token else {
+        let ranger = makeRanger(answering: true)
+        guard ready, running[ranging.sessionId] == nil, let token = ranger.token else {
             ranger.invalidate()
             try? await backend.refuseRanging(contact: ranging.contact, sessionId: ranging.sessionId)
             return
         }
+        ranger.contact = ranging.contact
+        running[ranging.sessionId] = ranger
         do {
             try await backend.acceptPeerRanging(contact: ranging.contact, sessionId: ranging.sessionId, token: token)
-            ranger.contact = ranging.contact
-            running[ranging.sessionId] = ranger
-            ranger.run(peerToken: ranging.peerToken)
         } catch {
+            if running[ranging.sessionId] === ranger { running[ranging.sessionId] = nil }
             ranger.invalidate()
+            return
         }
+        // Stopped (or replaced) while the core was told: nothing to run.
+        guard running[ranging.sessionId] === ranger else {
+            ranger.invalidate()
+            return
+        }
+        ranger.run(peerToken: ranging.peerToken)
     }
 }
 
-/// One Nearby Interaction session, for one ranging.
+/// One Nearby Interaction session, for one ranging. Its delegate calls
+/// come on the main queue (the session's default).
 final class Ranger: NSObject, NISessionDelegate {
     private let session = NISession()
     /// The contact it ranges with, once known.
     var contact: String?
+    /// Whether it answers a contact's pointing (not points itself).
+    var answering = false
+    private var configuration: NINearbyPeerConfiguration?
     private let update: @MainActor (String, Bearing) -> Void
+    private let ended: @MainActor (Ranger) -> Void
 
-    init(update: @escaping @MainActor (String, Bearing) -> Void) {
+    init(update: @escaping @MainActor (String, Bearing) -> Void, ended: @escaping @MainActor (Ranger) -> Void) {
         self.update = update
+        self.ended = ended
         super.init()
         session.delegate = self
     }
@@ -153,11 +200,37 @@ final class Ranger: NSObject, NISessionDelegate {
     func run(peerToken: Data) {
         guard let token = try? NSKeyedUnarchiver.unarchivedObject(ofClass: NIDiscoveryToken.self, from: peerToken)
         else { return }
-        session.run(NINearbyPeerConfiguration(peerToken: token))
+        let configuration = NINearbyPeerConfiguration(peerToken: token)
+        self.configuration = configuration
+        session.run(configuration)
     }
 
     func invalidate() {
+        configuration = nil
         session.invalidate()
+    }
+
+    func session(_ session: NISession, didInvalidateWith error: Error) {
+        configuration = nil
+        Task { @MainActor in ended(self) }
+    }
+
+    /// Back on screen: a suspended session runs again only when asked.
+    func sessionSuspensionEnded(_ session: NISession) {
+        if let configuration { session.run(configuration) }
+    }
+
+    func session(_ session: NISession, didRemove nearbyObjects: [NINearbyObject], reason: NINearbyObject.RemovalReason) {
+        switch reason {
+        case .timeout:
+            // Out of range for now: ranging resumes if it comes back.
+            if let configuration { session.run(configuration) }
+        case .peerEnded:
+            invalidate()
+            Task { @MainActor in ended(self) }
+        @unknown default:
+            break
+        }
     }
 
     func session(_ session: NISession, didUpdate nearbyObjects: [NINearbyObject]) {

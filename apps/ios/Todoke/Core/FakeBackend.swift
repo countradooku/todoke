@@ -189,6 +189,11 @@ final class FakeBackend: Backend, @unchecked Sendable {
     func events() -> AsyncStream<CoreEvent> {
         AsyncStream { continuation in locked { continuations.append(continuation) } }
     }
+
+    /// Sends `event` to every listener, as the core would (unit tests).
+    func emit(_ event: CoreEvent) {
+        locked { continuations }.forEach { $0.yield(event) }
+    }
 }
 
 extension Notification.Name {
