@@ -83,10 +83,11 @@ jobs:
           rustup target add aarch64-apple-ios aarch64-apple-ios-sim
       - name: Build the BoltFFI CLI (pinned, from source)
         run: bash scripts/ci/install-boltffi.sh
-      # Release package: sessions disabled (PROTOCOL §16), macOS slice too.
+      # Release package: sessions disabled (PROTOCOL §16), every slice
+      # boltffi.toml names (Intel simulator and macOS too).
       - name: Pack the shipped package
         run: |
-          rustup target add x86_64-apple-darwin
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios x86_64-apple-darwin
           bash apps/ios/scripts/bindings.sh release
       - name: Build the app for release (unsigned)
         run: |

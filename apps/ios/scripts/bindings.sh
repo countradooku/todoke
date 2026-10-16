@@ -12,6 +12,11 @@ case "$kind" in
     release) out="dist/apple"; args=(pack apple --release) ;;
     *) echo "usage: $0 dev|release [--no-pack]" >&2; exit 2 ;;
 esac
+# In CI, the compiler's output too: boltffi otherwise names only the
+# target that failed.
+if [[ -n "${CI:-}" ]]; then
+    args+=(--verbose)
+fi
 if [[ "${2:-}" != "--no-pack" ]]; then
     (cd "$ffi" && boltffi "${args[@]}")
 fi
