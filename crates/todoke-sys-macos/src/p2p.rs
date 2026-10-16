@@ -24,7 +24,7 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::os::unix::net::UnixStream;
 use std::sync::mpsc::{self, Receiver, SyncSender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 use block2::{Block, RcBlock};
@@ -38,6 +38,12 @@ const CHUNK_U32: u32 = 64 * 1024;
 const BACKLOG: usize = 16;
 
 type Object = *mut c_void;
+/// `nw_parameters_configure_protocol_block_t`, and other one-object blocks.
+type ObjectBlock = Block<dyn Fn(Object)>;
+/// The state-changed handlers' blocks.
+type StateBlock = Block<dyn Fn(u32, Object)>;
+/// `nw_connection_receive_completion_t`.
+type ReceiveBlock = Block<dyn Fn(Object, Object, u8, Object)>;
 
 const CONNECTION_WAITING: u32 = 1;
 const CONNECTION_READY: u32 = 3;
@@ -48,64 +54,142 @@ const LISTENER_FAILED: u32 = 3;
 const LISTENER_CANCELLED: u32 = 4;
 const ENDPOINT_ADDRESS: u32 = 1;
 
-#[link(name = "Network", kind = "framework")]
+/// Network.framework's C API, loaded when first needed (`dlopen`): linking
+/// it would ask every consumer of the static library (the Swift package,
+/// the JNI glue, the daemon) to name the framework. Without it, nothing
+/// here works and every entry point says so.
+struct Api {
+    protocol_disable: &'static ObjectBlock,
+    protocol_default: &'static ObjectBlock,
+    context_default_message: Object,
+    context_final_send: Object,
+    nw_release: unsafe extern "C" fn(Object),
+    nw_retain: unsafe extern "C" fn(Object) -> Object,
+    nw_parameters_create_secure_tcp: unsafe extern "C" fn(&ObjectBlock, &ObjectBlock) -> Object,
+    nw_parameters_set_include_peer_to_peer: unsafe extern "C" fn(Object, bool),
+    nw_endpoint_create_address: unsafe extern "C" fn(*const c_void) -> Object,
+    nw_endpoint_get_type: unsafe extern "C" fn(Object) -> u32,
+    nw_endpoint_get_address: unsafe extern "C" fn(Object) -> *const c_void,
+    nw_listener_create: unsafe extern "C" fn(Object) -> Object,
+    nw_listener_set_queue: unsafe extern "C" fn(Object, *const DispatchQueue),
+    nw_listener_set_state_changed_handler: unsafe extern "C" fn(Object, &StateBlock),
+    nw_listener_set_new_connection_handler: unsafe extern "C" fn(Object, &ObjectBlock),
+    nw_listener_start: unsafe extern "C" fn(Object),
+    nw_listener_cancel: unsafe extern "C" fn(Object),
+    nw_listener_get_port: unsafe extern "C" fn(Object) -> u16,
+    nw_connection_create: unsafe extern "C" fn(Object, Object) -> Object,
+    nw_connection_set_queue: unsafe extern "C" fn(Object, *const DispatchQueue),
+    nw_connection_set_state_changed_handler: unsafe extern "C" fn(Object, &StateBlock),
+    nw_connection_start: unsafe extern "C" fn(Object),
+    nw_connection_cancel: unsafe extern "C" fn(Object),
+    nw_connection_copy_endpoint: unsafe extern "C" fn(Object) -> Object,
+    nw_connection_send:
+        unsafe extern "C" fn(Object, *const DispatchData, Object, bool, &ObjectBlock),
+    // `is_complete` is a C `bool`: one byte, read as `u8`.
+    nw_connection_receive: unsafe extern "C" fn(Object, u32, u32, &ReceiveBlock),
+}
+
+// SAFETY: function pointers and the framework's immutable constants.
+unsafe impl Send for Api {}
+// SAFETY: as above.
+unsafe impl Sync for Api {}
+
+const NETWORK: &CStr = c"/System/Library/Frameworks/Network.framework/Network";
+const RTLD_NOW: i32 = 0x2;
+
 unsafe extern "C" {
-    static _nw_parameters_configure_protocol_disable: &'static Block<dyn Fn(Object)>;
-    static _nw_parameters_configure_protocol_default_configuration: &'static Block<dyn Fn(Object)>;
-    static _nw_content_context_default_message: Object;
-    static _nw_content_context_final_send: Object;
+    fn dlopen(path: *const c_char, mode: i32) -> *mut c_void;
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
 
-    fn nw_release(object: Object);
-    fn nw_retain(object: Object) -> Object;
+/// Network.framework's functions, or why not.
+fn api() -> io::Result<&'static Api> {
+    static API: OnceLock<Option<Api>> = OnceLock::new();
+    API.get_or_init(load).as_ref().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::Unsupported,
+            "Network.framework is unavailable",
+        )
+    })
+}
 
-    fn nw_parameters_create_secure_tcp(
-        configure_tls: &Block<dyn Fn(Object)>,
-        configure_tcp: &Block<dyn Fn(Object)>,
-    ) -> Object;
-    fn nw_parameters_set_include_peer_to_peer(parameters: Object, include: bool);
+#[expect(
+    clippy::missing_transmute_annotations,
+    reason = "each symbol's target type is the field it fills"
+)]
+fn load() -> Option<Api> {
+    // SAFETY: a NUL-terminated path of a system framework; the handle is
+    // kept for the process's life (never closed).
+    let handle = unsafe { dlopen(NETWORK.as_ptr(), RTLD_NOW) };
+    if handle.is_null() {
+        return None;
+    }
+    let symbol = |name: &CStr| {
+        // SAFETY: a live handle and a NUL-terminated name.
+        let found = unsafe { dlsym(handle, name.as_ptr()) };
+        (!found.is_null()).then_some(found)
+    };
+    macro_rules! function {
+        ($name:ident) => {
+            // SAFETY: the framework's exported function of that name, whose
+            // C prototype the field's type matches.
+            unsafe {
+                core::mem::transmute::<*mut c_void, _>(symbol(
+                    &std::ffi::CString::new(stringify!($name)).ok()?,
+                )?)
+            }
+        };
+    }
+    // SAFETY: each is the address of the framework's exported constant of
+    // that name (a block or context pointer), set before any call and
+    // never changed.
+    let (protocol_disable, protocol_default, context_default_message, context_final_send) = unsafe {
+        (
+            *symbol(c"_nw_parameters_configure_protocol_disable")?.cast::<&'static ObjectBlock>(),
+            *symbol(c"_nw_parameters_configure_protocol_default_configuration")?
+                .cast::<&'static ObjectBlock>(),
+            *symbol(c"_nw_content_context_default_message")?.cast::<Object>(),
+            *symbol(c"_nw_content_context_final_send")?.cast::<Object>(),
+        )
+    };
+    Some(Api {
+        protocol_disable,
+        protocol_default,
+        context_default_message,
+        context_final_send,
+        nw_release: function!(nw_release),
+        nw_retain: function!(nw_retain),
+        nw_parameters_create_secure_tcp: function!(nw_parameters_create_secure_tcp),
+        nw_parameters_set_include_peer_to_peer: function!(nw_parameters_set_include_peer_to_peer),
+        nw_endpoint_create_address: function!(nw_endpoint_create_address),
+        nw_endpoint_get_type: function!(nw_endpoint_get_type),
+        nw_endpoint_get_address: function!(nw_endpoint_get_address),
+        nw_listener_create: function!(nw_listener_create),
+        nw_listener_set_queue: function!(nw_listener_set_queue),
+        nw_listener_set_state_changed_handler: function!(nw_listener_set_state_changed_handler),
+        nw_listener_set_new_connection_handler: function!(nw_listener_set_new_connection_handler),
+        nw_listener_start: function!(nw_listener_start),
+        nw_listener_cancel: function!(nw_listener_cancel),
+        nw_listener_get_port: function!(nw_listener_get_port),
+        nw_connection_create: function!(nw_connection_create),
+        nw_connection_set_queue: function!(nw_connection_set_queue),
+        nw_connection_set_state_changed_handler: function!(nw_connection_set_state_changed_handler),
+        nw_connection_start: function!(nw_connection_start),
+        nw_connection_cancel: function!(nw_connection_cancel),
+        nw_connection_copy_endpoint: function!(nw_connection_copy_endpoint),
+        nw_connection_send: function!(nw_connection_send),
+        nw_connection_receive: function!(nw_connection_receive),
+    })
+}
 
-    fn nw_endpoint_create_address(address: *const c_void) -> Object;
-    fn nw_endpoint_get_type(endpoint: Object) -> u32;
-    fn nw_endpoint_get_address(endpoint: Object) -> *const c_void;
-
-    fn nw_listener_create(parameters: Object) -> Object;
-    fn nw_listener_set_queue(listener: Object, queue: *const DispatchQueue);
-    fn nw_listener_set_state_changed_handler(
-        listener: Object,
-        handler: &Block<dyn Fn(u32, Object)>,
-    );
-    fn nw_listener_set_new_connection_handler(listener: Object, handler: &Block<dyn Fn(Object)>);
-    fn nw_listener_start(listener: Object);
-    fn nw_listener_cancel(listener: Object);
-    fn nw_listener_get_port(listener: Object) -> u16;
-
-    fn nw_connection_create(endpoint: Object, parameters: Object) -> Object;
-    fn nw_connection_set_queue(connection: Object, queue: *const DispatchQueue);
-    fn nw_connection_set_state_changed_handler(
-        connection: Object,
-        handler: &Block<dyn Fn(u32, Object)>,
-    );
-    fn nw_connection_start(connection: Object);
-    fn nw_connection_cancel(connection: Object);
-    fn nw_connection_copy_endpoint(connection: Object) -> Object;
-    fn nw_connection_send(
-        connection: Object,
-        content: *const DispatchData,
-        context: Object,
-        is_complete: bool,
-        completion: &Block<dyn Fn(Object)>,
-    );
-    fn nw_connection_receive(
-        connection: Object,
-        minimum: u32,
-        maximum: u32,
-        // `is_complete` is a C `bool`: one byte, read as `u8`.
-        completion: &Block<dyn Fn(Object, Object, u8, Object)>,
-    );
+/// Whether Network.framework could be loaded here.
+#[must_use]
+pub fn available() -> bool {
+    api().is_ok()
 }
 
 /// A retained Network.framework object, released when dropped.
-struct Retained(Object);
+struct Retained(Object, &'static Api);
 
 // SAFETY: Network.framework objects are thread-safe reference-counted
 // objects; this only retains, releases, and passes them to its functions.
@@ -115,41 +199,38 @@ unsafe impl Sync for Retained {}
 
 impl Retained {
     /// Takes ownership of a +1 reference, or `None` for null.
-    fn new(object: Object) -> Option<Self> {
-        (!object.is_null()).then_some(Self(object))
+    fn new(api: &'static Api, object: Object) -> Option<Self> {
+        (!object.is_null()).then_some(Self(object, api))
     }
 
     /// Retains an object borrowed from a callback.
-    fn retain(object: Object) -> Option<Self> {
+    fn retain(api: &'static Api, object: Object) -> Option<Self> {
         if object.is_null() {
             return None;
         }
         // SAFETY: a live object the caller lent; one more reference, owned
         // by the result.
-        Some(Self(unsafe { nw_retain(object) }))
+        Some(Self(unsafe { (api.nw_retain)(object) }, api))
     }
 }
 
 impl Drop for Retained {
     fn drop(&mut self) {
         // SAFETY: the reference this owns.
-        unsafe { nw_release(self.0) };
+        unsafe { (self.1.nw_release)(self.0) };
     }
 }
 
 /// TCP parameters without TLS (the session encrypts), with peer-to-peer
 /// interfaces included or not.
-fn parameters(peer_to_peer: bool) -> io::Result<Retained> {
+fn parameters(api: &'static Api, peer_to_peer: bool) -> io::Result<Retained> {
     // SAFETY: the two blocks are the framework's own constants.
-    let parameters = Retained::new(unsafe {
-        nw_parameters_create_secure_tcp(
-            _nw_parameters_configure_protocol_disable,
-            _nw_parameters_configure_protocol_default_configuration,
-        )
+    let parameters = Retained::new(api, unsafe {
+        (api.nw_parameters_create_secure_tcp)(api.protocol_disable, api.protocol_default)
     })
     .ok_or_else(|| io::Error::other("no TCP parameters"))?;
     // SAFETY: a live parameters object.
-    unsafe { nw_parameters_set_include_peer_to_peer(parameters.0, peer_to_peer) };
+    unsafe { (api.nw_parameters_set_include_peer_to_peer)(parameters.0, peer_to_peer) };
     Ok(parameters)
 }
 
@@ -213,14 +294,15 @@ unsafe fn socket_address(address: *const c_void) -> Option<SocketAddr> {
 
 /// The remote address of a connection.
 fn remote(connection: &Retained) -> Option<SocketAddr> {
+    let api = connection.1;
     // SAFETY: a live connection; the endpoint is a +1 reference, owned
     // here; its address lives as long as it does.
     unsafe {
-        let endpoint = Retained::new(nw_connection_copy_endpoint(connection.0))?;
-        if nw_endpoint_get_type(endpoint.0) != ENDPOINT_ADDRESS {
+        let endpoint = Retained::new(api, (api.nw_connection_copy_endpoint)(connection.0))?;
+        if (api.nw_endpoint_get_type)(endpoint.0) != ENDPOINT_ADDRESS {
             return None;
         }
-        socket_address(nw_endpoint_get_address(endpoint.0))
+        socket_address((api.nw_endpoint_get_address)(endpoint.0))
     }
 }
 
@@ -295,7 +377,7 @@ impl Pump {
         );
         // SAFETY: a live connection; the block is copied by the framework.
         unsafe {
-            nw_connection_receive(self.connection.0, 1, CHUNK_U32, &block);
+            (self.connection.1.nw_connection_receive)(self.connection.0, 1, CHUNK_U32, &block);
         }
     }
 
@@ -333,23 +415,24 @@ impl Pump {
         let content = data
             .as_ref()
             .map_or(core::ptr::null(), |data| &raw const **data);
+        let api = self.connection.1;
         // SAFETY: a live connection; `content` (or null for FIN) lives
         // through the call and is retained by the framework; the contexts
         // are the framework's constants; the block is copied.
         unsafe {
             let message = if bytes.is_some() {
-                _nw_content_context_default_message
+                api.context_default_message
             } else {
-                _nw_content_context_final_send
+                api.context_final_send
             };
-            nw_connection_send(self.connection.0, content, message, bytes.is_none(), &block);
+            (api.nw_connection_send)(self.connection.0, content, message, bytes.is_none(), &block);
         }
         sent.recv().unwrap_or(false)
     }
 
     fn cancel(&self) {
         // SAFETY: a live connection; cancelling twice is harmless.
-        unsafe { nw_connection_cancel(self.connection.0) };
+        unsafe { (self.connection.1.nw_connection_cancel)(self.connection.0) };
         if let Ok(pair) = self.pair.lock() {
             let _ = pair.shutdown(Shutdown::Both);
         }
@@ -359,7 +442,7 @@ impl Pump {
 impl Drop for Pump {
     fn drop(&mut self) {
         // SAFETY: as in `cancel`.
-        unsafe { nw_connection_cancel(self.connection.0) };
+        unsafe { (self.connection.1.nw_connection_cancel)(self.connection.0) };
         let _ = &self.queue;
     }
 }
@@ -383,22 +466,23 @@ fn ready(connection: Retained, timeout: Duration) -> io::Result<Bridged> {
         }
         _ => {}
     });
+    let api = connection.1;
     // SAFETY: a live connection and queue; the handler is copied.
     unsafe {
-        nw_connection_set_queue(connection.0, &raw const *queue);
-        nw_connection_set_state_changed_handler(connection.0, &handler);
-        nw_connection_start(connection.0);
+        (api.nw_connection_set_queue)(connection.0, &raw const *queue);
+        (api.nw_connection_set_state_changed_handler)(connection.0, &handler);
+        (api.nw_connection_start)(connection.0);
     }
     match changed.recv_timeout(timeout) {
         Ok(true) => Pump::start(connection, queue),
         Ok(false) => {
             // SAFETY: a live connection.
-            unsafe { nw_connection_cancel(connection.0) };
+            unsafe { (api.nw_connection_cancel)(connection.0) };
             Err(io::ErrorKind::ConnectionRefused.into())
         }
         Err(_) => {
             // SAFETY: a live connection.
-            unsafe { nw_connection_cancel(connection.0) };
+            unsafe { (api.nw_connection_cancel)(connection.0) };
             Err(io::ErrorKind::TimedOut.into())
         }
     }
@@ -411,15 +495,20 @@ fn ready(connection: Retained, timeout: Duration) -> io::Result<Bridged> {
 ///
 /// The connection failed or timed out.
 pub fn connect(address: SocketAddr, peer_to_peer: bool, timeout: Duration) -> io::Result<Bridged> {
-    let parameters = parameters(peer_to_peer)?;
+    let api = api()?;
+    let parameters = parameters(api, peer_to_peer)?;
     let raw = sockaddr(address);
     // SAFETY: `raw` is a complete sockaddr that outlives the call; the
     // endpoint copies it.
-    let endpoint = Retained::new(unsafe { nw_endpoint_create_address(raw.as_ptr().cast()) })
-        .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
+    let endpoint = Retained::new(api, unsafe {
+        (api.nw_endpoint_create_address)(raw.as_ptr().cast())
+    })
+    .ok_or_else(|| io::Error::from(io::ErrorKind::InvalidInput))?;
     // SAFETY: live endpoint and parameters; the connection is +1, owned.
-    let connection = Retained::new(unsafe { nw_connection_create(endpoint.0, parameters.0) })
-        .ok_or_else(|| io::Error::other("no connection"))?;
+    let connection = Retained::new(api, unsafe {
+        (api.nw_connection_create)(endpoint.0, parameters.0)
+    })
+    .ok_or_else(|| io::Error::other("no connection"))?;
     ready(connection, timeout)
 }
 
@@ -447,16 +536,17 @@ impl Listener {
     ///
     /// The listener failed or did not start in time.
     pub fn start(peer_to_peer: bool) -> io::Result<Self> {
-        let parameters = parameters(peer_to_peer)?;
+        let api = api()?;
+        let parameters = parameters(api, peer_to_peer)?;
         // SAFETY: live parameters; the listener is +1, owned.
-        let listener = Retained::new(unsafe { nw_listener_create(parameters.0) })
+        let listener = Retained::new(api, unsafe { (api.nw_listener_create)(parameters.0) })
             .ok_or_else(|| io::Error::other("no listener"))?;
         let queue = DispatchQueue::new("org.todoke.p2p.listener", None);
         let (accept, accepted) = mpsc::sync_channel::<Bridged>(BACKLOG);
         let accept = Arc::new(accept);
         let incoming = RcBlock::new(move |connection: Object| {
             let accept = Arc::clone(&accept);
-            let Some(connection) = Retained::retain(connection) else {
+            let Some(connection) = Retained::retain(api, connection) else {
                 return;
             };
             // Readied off the listener's queue: it waits on its own.
@@ -476,18 +566,18 @@ impl Listener {
         });
         // SAFETY: a live listener and queue; the handlers are copied.
         unsafe {
-            nw_listener_set_queue(listener.0, &raw const *queue);
-            nw_listener_set_new_connection_handler(listener.0, &incoming);
-            nw_listener_set_state_changed_handler(listener.0, &handler);
-            nw_listener_start(listener.0);
+            (api.nw_listener_set_queue)(listener.0, &raw const *queue);
+            (api.nw_listener_set_new_connection_handler)(listener.0, &incoming);
+            (api.nw_listener_set_state_changed_handler)(listener.0, &handler);
+            (api.nw_listener_start)(listener.0);
         }
         if changed.recv_timeout(Duration::from_secs(5)) != Ok(true) {
             // SAFETY: a live listener.
-            unsafe { nw_listener_cancel(listener.0) };
+            unsafe { (api.nw_listener_cancel)(listener.0) };
             return Err(io::Error::other("the peer-to-peer listener did not start"));
         }
         // SAFETY: a ready listener.
-        let port = unsafe { nw_listener_get_port(listener.0) };
+        let port = unsafe { (api.nw_listener_get_port)(listener.0) };
         Ok(Self {
             inner: listener,
             _queue: queue,
@@ -520,7 +610,7 @@ impl Listener {
 impl Drop for Listener {
     fn drop(&mut self) {
         // SAFETY: a live listener; no connection is accepted after this.
-        unsafe { nw_listener_cancel(self.inner.0) };
+        unsafe { (self.inner.1.nw_listener_cancel)(self.inner.0) };
     }
 }
 

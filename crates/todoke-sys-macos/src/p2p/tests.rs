@@ -99,6 +99,8 @@ fn failures_are_errors() -> io::Result<()> {
 
 #[test]
 fn only_peer_to_peer_interfaces_count() {
+    // Network.framework loads on every Apple system.
+    assert!(available());
     // Loopback (index 1 on Apple systems) is not one.
     assert!(!is_peer_to_peer(1));
     assert!(!is_peer_to_peer(0));
