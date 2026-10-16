@@ -1335,6 +1335,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "todoke-sys-windows"
+version = "0.1.0"
+dependencies = [
+ "windows-sys",
+ "zeroize",
+]
+
+[[package]]
 name = "todoke-transport"
 version = "0.1.0"
 dependencies = [
@@ -1342,6 +1350,7 @@ dependencies = [
  "socket2",
  "todoke-crypto",
  "todoke-proto",
+ "todoke-sys-windows",
  "tokio",
 ]
 

@@ -8266,6 +8266,7 @@ dependencies = [
  "todoke-crypto",
  "todoke-proto",
  "todoke-relay",
+ "todoke-sys-windows",
  "todoke-transfer",
  "tokio",
  "zeroize",

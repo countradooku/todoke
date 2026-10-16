@@ -147,18 +147,19 @@ impl LanListener {
     /// Listens on `port` (0 for any free port) on every IPv6 and IPv4
     /// address, or, if the system has no IPv6, on every IPv4 address.
     ///
-    /// A port in use is an error, never a reason to listen on IPv4 alone:
-    /// an IPv4-only listener leaves the port's IPv6 side free, and some
-    /// systems (macOS) let another socket bind it there, sharing the port.
+    /// The port is never shared: listening on IPv4 alone happens only
+    /// when the system has no IPv6 (never because the port is taken, which
+    /// would leave its IPv6 side to another socket), and on Windows the
+    /// port is held exclusively (`SO_EXCLUSIVEADDRUSE`).
     ///
     /// # Errors
     ///
-    /// The socket error. Must be called within a tokio runtime.
+    /// The socket error (`AddrInUse` for a taken port). Must be called
+    /// within a tokio runtime.
     pub fn bind(port: u16, policy: LanPolicy) -> io::Result<Self> {
-        let socket = match dual_stack(port) {
-            Ok(socket) => socket,
-            Err(error) if error.kind() == io::ErrorKind::AddrInUse => return Err(error),
-            Err(_) => ipv4_only(port)?,
+        let socket = match dual_stack(port)? {
+            Some(socket) => socket,
+            None => ipv4_only(port)?,
         };
         socket.listen(BACKLOG)?;
         socket.set_nonblocking(true)?;
@@ -201,31 +202,48 @@ impl LanListener {
 
 fn ipv4_only(port: u16) -> io::Result<Socket> {
     let socket = Socket::new(Domain::IPV4, Type::STREAM, Some(Protocol::TCP))?;
-    reuse_address(&socket)?;
+    claim_port(&socket)?;
     socket.bind(&SocketAddr::from(([0, 0, 0, 0], port)).into())?;
     Ok(socket)
 }
 
-fn dual_stack(port: u16) -> io::Result<Socket> {
-    let socket = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
-    socket.set_only_v6(false)?;
-    reuse_address(&socket)?;
-    socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into())?;
-    Ok(socket)
+/// A dual-stack socket bound to `port`; `None` if the system has no IPv6
+/// (no IPv6 sockets, no dual stack, or no IPv6 address). Any other error,
+/// a taken port first of all, is returned.
+fn dual_stack(port: u16) -> io::Result<Option<Socket>> {
+    let Ok(socket) = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP)) else {
+        return Ok(None);
+    };
+    if socket.set_only_v6(false).is_err() {
+        return Ok(None);
+    }
+    claim_port(&socket)?;
+    match socket.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)).into()) {
+        Ok(()) => Ok(Some(socket)),
+        Err(error) if error.kind() == io::ErrorKind::AddrNotAvailable => Ok(None),
+        Err(error) => Err(error),
+    }
 }
 
 /// On Unix, lets a restarted listener reuse its port while old connections
-/// linger in `TIME_WAIT`, as tokio's own `bind` does.
+/// linger in `TIME_WAIT`, as tokio's own `bind` does (it lets no one
+/// share a port that is listened on).
 #[cfg(unix)]
-fn reuse_address(socket: &Socket) -> io::Result<()> {
+fn claim_port(socket: &Socket) -> io::Result<()> {
     socket.set_reuse_address(true)
 }
 
-/// Not on Windows, where `SO_REUSEADDR` would let another process bind the
-/// same port.
-#[cfg(not(unix))]
-#[expect(clippy::unnecessary_wraps, reason = "the same signature as on Unix")]
-fn reuse_address(_: &Socket) -> io::Result<()> {
+/// On Windows, holds the port exclusively: no socket binds beside it, and
+/// it binds beside none (never `SO_REUSEADDR`, which would let another
+/// process take the port).
+#[cfg(windows)]
+fn claim_port(socket: &Socket) -> io::Result<()> {
+    todoke_sys_windows::socket::exclusive_address_use(socket)
+}
+
+#[cfg(not(any(unix, windows)))]
+#[expect(clippy::unnecessary_wraps, reason = "the same signature as elsewhere")]
+fn claim_port(_: &Socket) -> io::Result<()> {
     Ok(())
 }
 
