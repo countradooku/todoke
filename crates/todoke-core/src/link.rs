@@ -15,6 +15,8 @@ use core::fmt;
 use core::time::Duration;
 use std::io;
 use std::net::IpAddr;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 pub use todoke_proto::link::{LinkAbilities, LinkKind, LinkSecurity};
 use todoke_proto::link::{PASSPHRASE_LEN, PMK_LEN};
@@ -39,6 +41,8 @@ pub struct HostRequest {
     /// For Wi-Fi Aware: the service-specific information to publish
     /// (`offer_id[..8]`).
     pub service_info: [u8; 8],
+    /// Set once the core no longer wants the link: stop and fail.
+    pub cancel: Arc<AtomicBool>,
 }
 
 /// A link offered by the host, to join (§10.2).
@@ -56,6 +60,9 @@ pub struct JoinRequest {
     pub service_info: [u8; 8],
     /// How long the offer stands: give up after this.
     pub within: Duration,
+    /// Set once the core no longer wants the link (the device stops):
+    /// stop and fail.
+    pub cancel: Arc<AtomicBool>,
 }
 
 impl fmt::Debug for HostRequest {
@@ -259,6 +266,7 @@ mod tests {
             ssid: ssid.clone(),
             secret,
             service_info: [0; 8],
+            cancel: Arc::default(),
         };
         let printed = format!("{request:?}");
         assert!(!printed.contains(&passphrase) && !printed.contains(&ssid));

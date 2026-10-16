@@ -23,8 +23,19 @@ fn device_with_links(
     discovery: &Path,
     links: Option<std::sync::Arc<dyn crate::link::LinkPlatform>>,
 ) -> AnyResult<Core> {
+    device_tweaked(root, name, discovery, links, |_| {})
+}
+
+/// A device whose configuration `tweak` changes last.
+fn device_tweaked(
+    root: &Path,
+    name: &str,
+    discovery: &Path,
+    links: Option<std::sync::Arc<dyn crate::link::LinkPlatform>>,
+    tweak: impl FnOnce(&mut CoreConfig),
+) -> AnyResult<Core> {
     let state = root.join(name).join("state");
-    let config = CoreConfig {
+    let mut config = CoreConfig {
         state_dir: state.clone(),
         downloads_dir: root.join(name).join("downloads"),
         lan: LanSettings {
@@ -44,6 +55,7 @@ fn device_with_links(
             crate::link::DirectLinks::FromRelay
         },
     };
+    tweak(&mut config);
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
     Ok(Core::start_with_links(config, Box::new(key), links)?)
@@ -1257,37 +1269,25 @@ mod direct_link {
         }
     }
 
-    /// Bob sends a large file over the LAN; once Alice accepts, she hosts
-    /// a link, Bob joins it, both sessions close, and Bob connects over the
-    /// link: the transfer resumes there with Alice's consent kept (she is
-    /// asked once) and completes intact. Both links are torn down when the
-    /// devices stop.
-    #[tokio::test]
-    async fn a_transfer_moves_onto_a_direct_link() -> AnyResult<()> {
+    /// A 48 MiB file between Alice (who can host) and Bob (who can join),
+    /// sent by `alice_sends` or Bob: once the receiver accepts, Alice hosts
+    /// a link, Bob joins it, both sessions close, Bob connects over the
+    /// link, and the transfer resumes there with the receiver's consent
+    /// kept (asked once) and completes intact. Both links are torn down
+    /// when the devices stop.
+    async fn moves(alice_sends: bool, over_relay: bool) -> AnyResult<()> {
         let scratch = Scratch::new("direct-link")?;
-        let discovery = scratch.0.join("discovery");
         let torn = Arc::new(AtomicUsize::new(0));
         let (alice_links, bob_links) = (Loopback::new(true, &torn), Loopback::new(false, &torn));
-        let alice = device_with_links(
-            &scratch.0,
-            "alice",
-            &discovery,
-            Some(Arc::clone(&alice_links) as Arc<dyn LinkPlatform>),
-        )?;
-        let bob = device_with_links(
-            &scratch.0,
-            "bob",
-            &discovery,
-            Some(Arc::clone(&bob_links) as Arc<dyn LinkPlatform>),
-        )?;
-        let alice_hex = device_hex(&alice).await?;
-        let mut alice_events = alice.subscribe();
-        let mut bob_events = bob.subscribe();
-        pair(&alice, &bob).await?;
-        wait_for(&mut alice_events, |event| {
-            matches!(event, Event::Paired { .. }).then_some(())
-        })
-        .await?;
+        let (alice, bob) = linked_pair(&scratch.0, &alice_links, &bob_links, over_relay).await?;
+        let (sender, receiver, receiver_name) = if alice_sends {
+            (&alice, &bob, "bob")
+        } else {
+            (&bob, &alice, "alice")
+        };
+        let receiver_hex = device_hex(receiver).await?;
+        let mut receiver_events = receiver.subscribe();
+        let mut sender_events = sender.subscribe();
         // Large enough to be under way when the link comes up.
         let source = scratch.0.join("to-send");
         std::fs::create_dir_all(&source)?;
@@ -1295,22 +1295,22 @@ mod direct_link {
             .map(|n| u8::try_from(n % 251).unwrap_or(0))
             .collect();
         std::fs::write(source.join("big.bin"), &content)?;
-        let Response::Offered { transfer, .. } = bob
+        let Response::Offered { transfer, .. } = sender
             .request(Request::Send {
-                contact: alice_hex[..12].to_owned(),
+                contact: receiver_hex[..12].to_owned(),
                 paths: vec![source.join("big.bin")],
             })
             .await
         else {
             return Err("not offered".into());
         };
-        wait_for(&mut alice_events, |event| match event {
+        wait_for(&mut receiver_events, |event| match event {
             Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
             _ => None,
         })
         .await?;
         assert_eq!(
-            alice
+            receiver
                 .request(Request::Accept {
                     transfer: transfer.clone(),
                     files: None,
@@ -1318,19 +1318,19 @@ mod direct_link {
                 .await,
             Response::Done
         );
-        wait_for(&mut bob_events, |event| match event {
+        wait_for(&mut sender_events, |event| match event {
             Event::Delivered { transfer: done } if *done == transfer => Some(()),
             _ => None,
         })
         .await?;
-        // No second prompt on Alice's side after the move.
+        // No second prompt on the receiver's side after the move.
         let mut prompts = 0;
-        while let Ok(event) = alice_events.try_recv() {
+        while let Ok(event) = receiver_events.try_recv() {
             if matches!(&event, Event::OfferReceived(offer) if offer.transfer == transfer) {
                 prompts += 1;
             }
         }
-        assert_eq!(prompts, 0, "alice was asked again after the move");
+        assert_eq!(prompts, 0, "the receiver was asked again after the move");
         assert_eq!(alice_links.hosted.load(Ordering::SeqCst), 1);
         assert_eq!(bob_links.joined.load(Ordering::SeqCst), 1);
         let Response::Contacts(contacts) = bob.request(Request::Contacts).await else {
@@ -1341,7 +1341,13 @@ mod direct_link {
             Some(crate::api::Route::Direct)
         );
         assert_eq!(
-            std::fs::read(scratch.0.join("alice").join("downloads").join("big.bin"))?,
+            std::fs::read(
+                scratch
+                    .0
+                    .join(receiver_name)
+                    .join("downloads")
+                    .join("big.bin")
+            )?,
             content
         );
         // Stopping the devices ends the sessions on the link: both links
@@ -1351,8 +1357,96 @@ mod direct_link {
         Ok(())
     }
 
-    /// Joining fails: the joiner answers `failed`, the host tears its link
-    /// down at once, and the transfer completes in the session it was in.
+    /// Alice and Bob paired over the LAN, then started again with their
+    /// link platforms: on the LAN as before, or (`over_relay`) on no shared
+    /// network, only a relay between them, under the default policy (move
+    /// off a relay only).
+    async fn linked_pair(
+        root: &Path,
+        alice_links: &Arc<Loopback>,
+        bob_links: &Arc<Loopback>,
+        over_relay: bool,
+    ) -> AnyResult<(Core, Core)> {
+        let discovery = root.join("discovery");
+        {
+            let alice = device(root, "alice", &discovery)?;
+            let bob = device(root, "bob", &discovery)?;
+            let mut alice_events = alice.subscribe();
+            pair(&alice, &bob).await?;
+            wait_for(&mut alice_events, |event| {
+                matches!(event, Event::Paired { .. }).then_some(())
+            })
+            .await?;
+        }
+        let relay = if over_relay {
+            Some(relay_node()?)
+        } else {
+            None
+        };
+        let tweak = |config: &mut CoreConfig| {
+            if let Some(relay) = &relay {
+                config.lan.enabled = false;
+                config.relays = vec![relay.clone()];
+                config.relay_presence_seconds = 10;
+                config.direct_links = crate::link::DirectLinks::FromRelay;
+            }
+        };
+        let alice = device_tweaked(
+            root,
+            "alice",
+            &discovery,
+            Some(Arc::clone(alice_links) as Arc<dyn LinkPlatform>),
+            tweak,
+        )?;
+        let bob = device_tweaked(
+            root,
+            "bob",
+            &discovery,
+            Some(Arc::clone(bob_links) as Arc<dyn LinkPlatform>),
+            tweak,
+        )?;
+        Ok((alice, bob))
+    }
+
+    /// A relay node on loopback, as configuration.
+    fn relay_node() -> AnyResult<crate::config::RelayConfig> {
+        let (identity, _, _) = todoke_relay::Identity::self_signed(vec!["relay.test".into()])?;
+        let node = todoke_relay::Relay::bind(
+            todoke_relay::Config::new(([127, 0, 0, 1], 0).into()),
+            &identity,
+        )?;
+        let address = node.local_addr()?;
+        tokio::spawn(node.run(Arc::new(tokio::sync::Notify::new())));
+        Ok(crate::config::RelayConfig {
+            name: "node".into(),
+            address: address.to_string(),
+            server_name: "relay.test".into(),
+            pin: Some(todoke_relay::format_pin(&identity.pin()?)),
+        })
+    }
+
+    #[tokio::test]
+    async fn a_received_transfer_moves_onto_a_direct_link() -> AnyResult<()> {
+        moves(false, false).await
+    }
+
+    /// The host is the sender: it hosts only once the receiver accepted.
+    #[tokio::test]
+    async fn a_sent_transfer_moves_onto_a_direct_link() -> AnyResult<()> {
+        moves(true, false).await
+    }
+
+    /// The default policy: a session on a relay (no shared network) moves.
+    #[tokio::test]
+    async fn a_relayed_transfer_moves_onto_a_direct_link() -> AnyResult<()> {
+        moves(false, true).await
+    }
+
+    /// Joining fails after the joiner answered `joining` and both sessions
+    /// closed: the host's offer expires unused and its link goes, the
+    /// devices reconnect (here over the LAN), the transfer completes with
+    /// the receiver's consent kept, and no second link is set up with the
+    /// contact (no livelock).
     #[tokio::test]
     async fn a_failed_join_keeps_the_session() -> AnyResult<()> {
         let scratch = Scratch::new("direct-link-failed")?;
@@ -1415,9 +1509,25 @@ mod direct_link {
         })
         .await?;
         assert_eq!(bob_links.joined.load(Ordering::SeqCst), 1);
-        // The host's link went with the failed answer; nothing moved.
-        assert_eq!(alice_links.hosted.load(Ordering::SeqCst), 1);
+        // The host's link went once the offer expired unused (its teardown
+        // runs off the core thread), and with link setup paused for this
+        // contact, the reconnected session hosted nothing again.
+        for _ in 0..50 {
+            if torn.load(Ordering::SeqCst) == 1 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
         assert_eq!(torn.load(Ordering::SeqCst), 1);
+        assert_eq!(alice_links.hosted.load(Ordering::SeqCst), 1);
+        // The consent kept across the failed move: asked once.
+        let mut prompts = 0;
+        while let Ok(event) = alice_events.try_recv() {
+            if matches!(&event, Event::OfferReceived(offer) if offer.transfer == transfer) {
+                prompts += 1;
+            }
+        }
+        assert_eq!(prompts, 0, "alice was asked again");
         let Response::Contacts(contacts) = bob.request(Request::Contacts).await else {
             return Err("contacts".into());
         };

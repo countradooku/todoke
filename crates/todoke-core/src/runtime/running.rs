@@ -289,7 +289,12 @@ pub(super) struct State {
     /// Consent the user gave for an incoming transfer, kept (in memory,
     /// until when) across a move onto a direct link: the new session's
     /// fresh Accept repeats it without asking again (§7.3, §10.2).
-    pub(super) retained: RefCell<BTreeMap<TransferId, (Vec<u32>, Duration)>>,
+    pub(super) retained: RefCell<BTreeMap<TransferId, super::link::Retained>>,
+    /// Contacts with whom link setup is paused after a failed or refused
+    /// attempt, until when.
+    pub(super) link_backoff: RefCell<BTreeMap<Ed25519PublicKey, Duration>>,
+    /// Whether this device hosts a link now (§13: one at a time).
+    pub(super) hosting: Cell<bool>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
     /// What protects the storage key.
@@ -396,6 +401,8 @@ impl State {
             links: std::cell::OnceCell::new(),
             moving: RefCell::new(BTreeMap::new()),
             retained: RefCell::new(BTreeMap::new()),
+            link_backoff: RefCell::new(BTreeMap::new()),
+            hosting: Cell::new(false),
             history: RefCell::new(history),
             key_protection,
         }))
@@ -465,6 +472,7 @@ impl State {
             backend.drain(&mut directory, &table, mono);
             directory.expire(&table, mono);
         }
+        self.prune_links();
         self.reconnect(mono);
         self.relay_tick(now);
     }
@@ -1321,6 +1329,24 @@ impl State {
         };
         if self.sessions.borrow().contains_key(&peer) {
             return self.to_session(transfer, SessionCommand::Cancel).await;
+        }
+        // An incoming transfer between sessions (moving onto a direct
+        // link, say): the consent kept for it goes, and so does the
+        // transfer; a later offer of it asks again.
+        let incoming = self
+            .transfers
+            .borrow()
+            .get(&id)
+            .is_some_and(|record| record.way == Way::Incoming);
+        if incoming {
+            self.forget_retained(&id);
+            session::end(
+                self,
+                &id,
+                TransferState::Cancelled,
+                "the transfer was cancelled",
+            );
+            return Response::Done;
         }
         let mut queues = self.queues.borrow_mut();
         let Some(queue) = queues.get_mut(&peer) else {

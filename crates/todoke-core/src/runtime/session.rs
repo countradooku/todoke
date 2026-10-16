@@ -20,6 +20,9 @@ use crate::api::{EntryInfo, ErrorCode, Event, OfferInfo, Response, TransferState
 const POLL: Duration = Duration::from_millis(100);
 /// A session with nothing to do closes after this long.
 const IDLE: Duration = Duration::from_secs(30);
+/// How long a joiner leaving for a direct link waits for the host to close
+/// the session (§10.2).
+const DRAIN: Duration = Duration::from_secs(5);
 
 /// What the rest of the core asks a session to do.
 pub(super) enum SessionCommand {
@@ -61,7 +64,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
         todoke_transport::LinkKind::Direct => crate::api::Route::Direct,
         todoke_transport::LinkKind::Lan => crate::api::Route::Lan,
     };
-    let mut link = super::link::SessionLink::new(&state, kind);
+    let mut link = super::link::SessionLink::new(&state, peer, kind);
     let mut departing = None;
     state.routes.borrow_mut().insert(peer, route);
     let identity = &state.identity;
@@ -96,6 +99,9 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
         // Moving onto a direct link: the answer went out with this pump.
         if departing.is_some() {
             engine.close(None);
+            if matches!(departing, Some(super::link::Move::Join { .. })) {
+                drain(established.session()).await;
+            }
             break;
         }
         let now = established.session().now();
@@ -111,7 +117,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
                 link.ready(&mut engine);
             }
             idle_since = now;
-            if let Some(event) = link.event(&state, peer, &mut engine, event, now)
+            if let Some(event) = link.event(&mut engine, event, now)
                 && !accept_retained(&state, peer, &mut engine, &event, now)
             {
                 report(&state, peer, event);
@@ -122,9 +128,12 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
             idle_since = now;
         }
         if pumped.is_err() {
+            // The answer may have come with the session's end (the peer
+            // closed it as it left): the move still stands.
+            departing = link.take_leaving();
             break;
         }
-        departing = link.step(&state, peer, &mut engine, now).await;
+        departing = link.step(&mut engine, now).await;
         let busy = busy(&state, &peer);
         if !busy
             && waiting.is_empty()
@@ -139,6 +148,21 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
     drop(established);
     if let Some(to) = departing {
         tokio::task::spawn_local(Rc::clone(&state).move_to(peer, to));
+    }
+}
+
+/// The joiner, after its answer: reads and drops what the host still sends
+/// until the host closes the session (or a few seconds pass). Closing at
+/// once with records unread would reset the connection, and a reset can
+/// discard the answer before the host reads it.
+async fn drain<L: Link>(
+    session: &mut todoke_crypto::session::Session<L, todoke_transport::TokioTimer>,
+) {
+    let until = session.now() + DRAIN;
+    while session.now() < until {
+        if session.recv_until(until).await.is_err() {
+            break;
+        }
     }
 }
 
@@ -170,7 +194,7 @@ fn accept_retained(
     let TransferEvent::OfferReceived(view) = event else {
         return false;
     };
-    let Some(selection) = state.take_retained(&view.transfer_id) else {
+    let Some(selection) = state.take_retained(&view.transfer_id, &peer, &view.manifest_hash) else {
         return false;
     };
     if view
