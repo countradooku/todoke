@@ -207,6 +207,11 @@ version = "0.11.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
 
+[[exemptions.dispatch2]]
+version = "0.3.1"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-17 for Apple peer-to-peer Wi-Fi in todoke-sys-macos (p2p.rs, Network.framework's dispatch queues and data; docs/adr/0020-ios-radios.md), as in the main workspace; no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.displaydoc]]
 version = "0.2.7"
 criteria = "safe-to-deploy"

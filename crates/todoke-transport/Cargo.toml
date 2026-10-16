@@ -58,9 +58,11 @@ getrandom = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 todoke-sys-windows.workspace = true
 
-# TCP over Apple peer-to-peer Wi-Fi (AWDL) through Network.framework.
+# TCP over Apple peer-to-peer Wi-Fi (AWDL) through Network.framework; the
+# LAN listener waits on both its listeners at once (`select!`).
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 todoke-sys-macos.workspace = true
+tokio = { workspace = true, features = ["macros"] }
 
 [dev-dependencies]
 proptest.workspace = true
