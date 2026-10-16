@@ -297,6 +297,71 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     Ok(())
 }
 
+/// Back from the background with its port taken meanwhile, the listener
+/// reopens on another port, which discovery then advertises.
+#[tokio::test]
+async fn the_listener_reopens_elsewhere_if_its_port_was_taken() -> AnyResult<()> {
+    let scratch = Scratch::new("reopen")?;
+    let discovery = scratch.0.join("discovery");
+    let core = device(&scratch.0, "solo", &discovery)?;
+    let port = || async {
+        match core.request(Request::Status).await {
+            Response::Status(status) => Ok(status.port),
+            _ => Err("status"),
+        }
+    };
+    let before = port().await?.ok_or("no listener")?;
+    let background = |background| core.request(Request::SetBackground { background });
+    assert_eq!(background(true).await, Response::Done);
+    // The core loop lets go of the listener on its next turn.
+    let squatter = {
+        let mut taken = None;
+        for _ in 0..50 {
+            taken = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, before))
+                .or_else(|_| std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, before)))
+                .ok();
+            if taken.is_some() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        taken.ok_or("the old port never closed")?
+    };
+    assert_eq!(background(false).await, Response::Done);
+    let after = port().await?.ok_or("no listener after the background")?;
+    assert_ne!(after, before);
+    assert!(
+        std::net::TcpStream::connect_timeout(
+            &(std::net::Ipv4Addr::LOCALHOST, after).into(),
+            Duration::from_secs(1),
+        )
+        .is_ok()
+    );
+    // A code offer's stranger record names the new port.
+    assert!(matches!(
+        core.request(Request::PairShowCode).await,
+        Response::Code { .. }
+    ));
+    let advertised = || -> AnyResult<bool> {
+        Ok(std::fs::read_dir(&discovery)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "rec"))
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .any(|record| record.starts_with(&format!("{after} "))))
+    };
+    let mut found = false;
+    for _ in 0..30 {
+        if advertised()? {
+            found = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(found, "the new port is not advertised");
+    drop(squatter);
+    Ok(())
+}
+
 /// How many strangers `core` sees.
 async fn strangers_seen(core: &Core) -> usize {
     match core.request(Request::Strangers).await {

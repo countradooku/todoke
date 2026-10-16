@@ -112,6 +112,20 @@ final class RealCoreTests: XCTestCase {
         XCTAssertEqual(try again.status().device, device)
     }
 
+    /// In the background (PROTOCOL §10.3) pairing ends and waits for the
+    /// app (the listener's closing is tested in Rust); back, it works.
+    func testTheBackgroundEndsPairing() throws {
+        let core = try core(settings(try home("background")))
+        _ = try core.pairShowQr()
+        XCTAssertTrue(try core.status().pairing)
+        try core.setBackground(background: true)
+        XCTAssertFalse(try core.status().pairing)
+        XCTAssertThrowsError(try core.pairShowQr())
+        try core.setBackground(background: false)
+        _ = try core.pairShowQr()
+        try core.stopPairing()
+    }
+
     /// A key that needs the user's presence never falls back to a key file:
     /// in a test there is no one to ask, and a simulator without a passcode
     /// may refuse such a key outright; either way, no file.
