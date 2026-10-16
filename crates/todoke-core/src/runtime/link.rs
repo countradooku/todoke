@@ -24,7 +24,7 @@
 //! the devices reconnect however they can.
 
 use core::time::Duration;
-use std::net::{IpAddr, SocketAddr, SocketAddrV6};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -354,17 +354,22 @@ impl SessionLink {
         };
         let lease = Held(Some(lease));
         drop(cancel);
-        let Some((local, bind)) = lease
-            .0
-            .as_ref()
-            .map(|lease| (scoped(lease.local, 0, lease.interface), lease.bind.clone()))
-            .filter(|(local, _)| usable(&self.state, local.ip()))
-        else {
+        let Some(lease_ref) = lease.0.as_ref() else {
             return;
         };
-        let Ok(listener) =
-            LanListener::bind_direct(local, self.state.lan_policy(), bind.as_deref())
-        else {
+        let (bind, policy) = (lease_ref.bind.as_deref(), self.state.lan_policy());
+        // An address known only once the joiner sets the link up (Wi-Fi
+        // Aware): only link-local peers on the link's interfaces.
+        let listener = if lease_ref.local == IpAddr::V6(Ipv6Addr::UNSPECIFIED) {
+            LanListener::bind_direct_scoped(lease_ref.scopes.clone(), policy, bind)
+        } else {
+            let local = scoped(lease_ref.local, 0, lease_ref.interface);
+            if !usable(&self.state, local.ip()) {
+                return;
+            }
+            LanListener::bind_direct(local, policy, bind)
+        };
+        let Ok(listener) = listener else {
             return;
         };
         let Ok(port) = listener.port() else {

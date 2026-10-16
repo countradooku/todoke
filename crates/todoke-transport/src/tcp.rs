@@ -206,6 +206,9 @@ pub struct LanListener {
     listener: TcpListener,
     policy: LanPolicy,
     kind: LinkKind,
+    /// Only link-local IPv6 peers arriving on these interfaces (a direct
+    /// link whose address is not known yet), if set.
+    scopes: Option<Vec<u32>>,
 }
 
 impl LanListener {
@@ -233,6 +236,7 @@ impl LanListener {
             listener,
             policy,
             kind: LinkKind::Lan,
+            scopes: None,
         })
     }
 
@@ -270,7 +274,32 @@ impl LanListener {
             listener,
             policy,
             kind: LinkKind::Direct,
+            scopes: None,
         })
+    }
+
+    /// Listens for a direct link (§10.2) whose own address is not known
+    /// before the joiner sets it up (a Wi-Fi Aware data path): on every
+    /// IPv6 address, on a free port, accepting only link-local peers that
+    /// arrive on one of `scopes`, the link's possible interfaces.
+    /// `bind`, if given, binds the socket to the link first.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] for no interfaces; the socket
+    /// error. Must be called within a tokio runtime.
+    pub fn bind_direct_scoped(
+        scopes: Vec<u32>,
+        policy: LanPolicy,
+        bind: Option<&BindSocket>,
+    ) -> io::Result<Self> {
+        if scopes.is_empty() || scopes.contains(&0) {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut listener =
+            Self::bind_direct(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)), policy, bind)?;
+        listener.scopes = Some(scopes);
+        Ok(listener)
     }
 
     /// The port it listens on, for the mDNS SRV record.
@@ -293,7 +322,7 @@ impl LanListener {
     pub async fn accept(&self) -> io::Result<TcpLink> {
         loop {
             let (stream, source) = self.listener.accept().await?;
-            if self.policy.check_source(source).is_err() {
+            if self.policy.check_source(source).is_err() || !self.in_scope(source) {
                 continue;
             }
             // A connection reset before it was set up (some systems then fail
@@ -302,6 +331,21 @@ impl LanListener {
             if let Ok(link) = TcpLink::new(stream, None, self.kind) {
                 return Ok(link);
             }
+        }
+    }
+}
+
+impl LanListener {
+    /// Whether `source` arrived where this listener accepts.
+    fn in_scope(&self, source: SocketAddr) -> bool {
+        let Some(scopes) = &self.scopes else {
+            return true;
+        };
+        match source {
+            SocketAddr::V6(v6) => {
+                v6.ip().is_unicast_link_local() && scopes.contains(&v6.scope_id())
+            }
+            SocketAddr::V4(_) => false,
         }
     }
 }

@@ -56,7 +56,15 @@ impl AppLinks {
             None if joining => return Err(invalid("the app gave no host address on the link")),
             _ => None,
         };
-        let core = todoke_core::link::LinkLease::new(local, host, lease.interface, release);
+        // Unspecified only for a host that names the link's interfaces.
+        let unspecified = local == IpAddr::V6(std::net::Ipv6Addr::UNSPECIFIED);
+        if unspecified && (joining || lease.scopes.is_empty() || lease.scopes.contains(&0)) {
+            return Err(invalid("the app gave no address or interfaces on the link"));
+        }
+        let mut core = todoke_core::link::LinkLease::new(local, host, lease.interface, release);
+        if unspecified {
+            core = core.with_scopes(lease.scopes.clone());
+        }
         if !lease.bind_sockets {
             return Ok(core);
         }

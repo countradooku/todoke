@@ -200,7 +200,10 @@ impl core::fmt::Debug for LinkRequest {
 pub struct LinkLease {
     /// The app's handle for the link, for `bind_socket` and `release`.
     pub id: u64,
-    /// This device's address on the link (IPv4 or IPv6 text).
+    /// This device's address on the link (IPv4 or IPv6 text). A host whose
+    /// address comes only once the joiner sets the link up (a Wi-Fi Aware
+    /// publisher) gives `::` and the link's possible interfaces in
+    /// `scopes`.
     pub local: String,
     /// The host's address on the link, for a joiner; none for the host.
     pub host: Option<String>,
@@ -209,6 +212,10 @@ pub struct LinkLease {
     /// Sockets must be bound to the link before use (`bind_socket`): the
     /// link is a network of its own (Android).
     pub bind_sockets: bool,
+    /// With `local` `::`: the indexes of the interfaces the link may come
+    /// up on (Android's `aware_data*`); only link-local peers arriving on
+    /// them are accepted. Empty otherwise.
+    pub scopes: Vec<u32>,
 }
 
 /// Why a link failed.

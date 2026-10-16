@@ -69,6 +69,7 @@ fn lease(host: Option<&str>) -> LinkLease {
         host: host.map(str::to_owned),
         interface: 3,
         bind_sockets: false,
+        scopes: Vec::new(),
     }
 }
 
@@ -140,7 +141,12 @@ fn wifi_aware_carries_the_service_information() -> Result<(), Box<dyn std::error
 fn unusable_leases_are_released() -> Result<(), Box<dyn std::error::Error>> {
     let mut bad_local = lease(Some("192.168.49.1"));
     bad_local.local = "not an address".to_owned();
+    // A joiner never listens unscoped; a host only with real interfaces.
+    let mut unscoped = lease(Some("192.168.49.1"));
+    unscoped.local = "::".to_owned();
+    unscoped.scopes = vec![5];
     for (lease, cancelled) in [
+        (unscoped, false),
         (lease(None), false),
         (lease(Some("192.168.49")), false),
         (bad_local, false),
@@ -218,4 +224,37 @@ fn kinds_and_securities_round_trip() {
             security
         );
     }
+}
+
+/// A Wi-Fi Aware publisher learns its address only once the joiner sets
+/// the data path up: it names the link's interfaces instead, never none.
+#[test]
+fn an_aware_host_names_its_interfaces() -> Result<(), Box<dyn std::error::Error>> {
+    let request = || HostRequest {
+        kind: proto::LinkKind::WifiAware,
+        security: proto::LinkSecurity::AwareSk128,
+        ssid: String::new(),
+        secret: Zeroizing::new(vec![9; 32]),
+        service_info: [1; 8],
+        cancel: Arc::new(AtomicBool::new(false)),
+    };
+    let mut aware = lease(None);
+    aware.local = "::".to_owned();
+    aware.bind_sockets = true;
+    for scopes in [vec![], vec![0], vec![4, 0]] {
+        aware.scopes = scopes;
+        let (app, released) = fake(aware.clone());
+        assert!(AppLinks::new(app).host(&request()).is_err());
+        assert_eq!(released.recv_timeout(RELEASED_WITHIN)?, 7);
+    }
+    aware.scopes = vec![4, 5];
+    let (app, _released) = fake(aware);
+    let hosted = AppLinks::new(Arc::clone(&app) as Arc<dyn WifiLinks>).host(&request())?;
+    assert!(hosted.local.is_unspecified());
+    assert_eq!(hosted.scopes, [4, 5]);
+    assert!(hosted.bind.is_some());
+    let asked = app.asked.lock().map_err(|_| "poisoned")?.clone();
+    assert_eq!(asked[0].service_info, [1; 8]);
+    assert_eq!(asked[0].secret, [9; 32]);
+    Ok(())
 }

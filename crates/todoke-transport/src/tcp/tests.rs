@@ -317,3 +317,50 @@ async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
     assert!(bound.iter().all(|handle| *handle >= 0));
     Ok(())
 }
+
+/// A direct link whose address is not known yet (a Wi-Fi Aware data
+/// path): the listener takes only link-local IPv6 peers on its interfaces,
+/// so a peer anywhere else (loopback here, allowed by the policy) is
+/// dropped unread; it needs at least one real interface.
+#[tokio::test]
+async fn scoped_direct_listeners_take_only_their_interfaces() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    for scopes in [vec![], vec![0], vec![3, 0]] {
+        assert_eq!(
+            LanListener::bind_direct_scoped(scopes, policy, None)
+                .map(|_| ())
+                .map_err(|error| error.kind()),
+            Err(io::ErrorKind::InvalidInput)
+        );
+    }
+    let listener = LanListener::bind_direct_scoped(vec![7, 9], policy, None)?;
+    let link_local = |scope| {
+        SocketAddr::V6(std::net::SocketAddrV6::new(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+            40_000,
+            0,
+            scope,
+        ))
+    };
+    assert!(listener.in_scope(link_local(7)));
+    assert!(listener.in_scope(link_local(9)));
+    assert!(!listener.in_scope(link_local(8)));
+    assert!(!listener.in_scope(link_local(0)));
+    assert!(!listener.in_scope((Ipv6Addr::LOCALHOST, 40_000).into()));
+    assert!(!listener.in_scope((Ipv4Addr::new(192, 168, 49, 2), 40_000).into()));
+    let unique_local = SocketAddr::V6(std::net::SocketAddrV6::new(
+        Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1),
+        40_000,
+        0,
+        7,
+    ));
+    assert!(!listener.in_scope(unique_local));
+    let port = listener.port()?;
+    let _client = TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await?;
+    let accepted = tokio::time::timeout(Duration::from_millis(300), listener.accept()).await;
+    assert!(accepted.is_err(), "a peer off the link was accepted");
+    // Plain listeners take any source the policy allows.
+    let plain = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy, None)?;
+    assert!(plain.in_scope((Ipv4Addr::LOCALHOST, 40_000).into()));
+    Ok(())
+}
