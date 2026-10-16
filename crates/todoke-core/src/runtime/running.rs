@@ -272,7 +272,7 @@ pub(super) struct State {
     finished: RefCell<Idle>,
     /// Addresses each contact was last reached at (its own listener's).
     pub(super) last_known: RefCell<BTreeMap<Ed25519PublicKey, Vec<SocketAddr>>>,
-    retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
+    pub(super) retry: RefCell<BTreeMap<Ed25519PublicKey, (Duration, Duration)>>,
     pub(super) pairing: Cell<Option<Pairing>>,
     strangers_until: Cell<Duration>,
     /// Hidden from contacts: no paired advertisement, no relay presence.
@@ -295,6 +295,12 @@ pub(super) struct State {
     pub(super) link_backoff: RefCell<BTreeMap<Ed25519PublicKey, Duration>>,
     /// Whether this device hosts a link now (§13: one at a time).
     pub(super) hosting: Cell<bool>,
+    /// This device can be pointed at now: what its sessions tell peers.
+    pub(super) ranging_ready: Cell<Option<todoke_proto::ranging::RangingReady>>,
+    /// This device pointing now (§10.4).
+    pub(super) pointer: RefCell<Option<super::pointing::Pointer>>,
+    /// The last pointing's epoch (each `PointStart` takes the next).
+    pub(super) point_epoch: Cell<u64>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
     /// What protects the storage key.
@@ -403,6 +409,9 @@ impl State {
             retained: RefCell::new(BTreeMap::new()),
             link_backoff: RefCell::new(BTreeMap::new()),
             hosting: Cell::new(false),
+            ranging_ready: Cell::new(None),
+            pointer: RefCell::new(None),
+            point_epoch: Cell::new(0),
             history: RefCell::new(history),
             key_protection,
         }))
@@ -473,6 +482,10 @@ impl State {
             directory.expire(&table, mono);
         }
         self.prune_links();
+        // While pointing, contacts that come into reach get a session too.
+        if self.pointing().is_some() {
+            self.connect_nearby();
+        }
         self.reconnect(mono);
         self.relay_tick(now);
     }
@@ -542,7 +555,7 @@ impl State {
     }
 
     /// Connects to `peer` and runs a session with it.
-    async fn connect(
+    pub(super) async fn connect(
         self: &Rc<Self>,
         peer: Ed25519PublicKey,
         candidates: Vec<Candidate>,
@@ -820,6 +833,14 @@ impl State {
                 Response::Done
             }
             Request::SetBackground { background } => self.set_background(background),
+            Request::SetRangingReady { ready } => self.set_ranging_ready(ready),
+            Request::PointStart { controllers } => self.point_start(controllers),
+            Request::PointStop => self.point_stop(),
+            Request::RangingAnswer {
+                contact,
+                session_id,
+                controlee,
+            } => self.ranging_answer(&contact, session_id, controlee).await,
             Request::History => Response::History(self.history.borrow().list(wall())),
             Request::ClearHistory => {
                 if self.history.borrow_mut().clear() {
@@ -1408,7 +1429,7 @@ impl State {
 
     /// The contact `prefix` names, if this device may still exchange files
     /// with it (not blocked or revoked).
-    async fn resolve_contact(&self, prefix: &str) -> Result<Ed25519PublicKey, Response> {
+    pub(super) async fn resolve_contact(&self, prefix: &str) -> Result<Ed25519PublicKey, Response> {
         let prefix = prefix.to_ascii_lowercase();
         if prefix.len() < MIN_PREFIX {
             return Err(Response::error(
@@ -1563,6 +1584,13 @@ pub(super) async fn run(
                             state
                                 .send_with(&contact, move || send::walk_open(files))
                                 .await
+                        }
+                        Command::SetLinks(links) => {
+                            if state.links.set(links).is_ok() {
+                                Response::Done
+                            } else {
+                                Response::error(ErrorCode::State, "the link platform is set already")
+                            }
                         }
                     };
                     let _ = reply.send(response);

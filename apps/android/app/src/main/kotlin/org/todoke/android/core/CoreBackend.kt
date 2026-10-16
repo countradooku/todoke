@@ -24,6 +24,7 @@ import org.todoke.ffi.Offer
 import org.todoke.ffi.Status
 import org.todoke.ffi.Stranger
 import org.todoke.ffi.Transfer
+import org.todoke.ffi.UwbController
 import org.todoke.ffi.events
 
 class CoreBackend(
@@ -51,11 +52,28 @@ class CoreBackend(
         core.pairShowQr().use { offer ->
             val width = offer.width().toInt()
             val modules = offer.modules()
-            QrCode(width, BooleanArray(width * width) { modules[it] != 0.toByte() }, offer.expiresAt().toLong())
+            // The tag lives on its own (the QR offer is released here); it
+            // serves only while the offer shows (NfcPairing).
+            val tag = runCatching { offer.nfcTag() }.getOrNull()
+            QrCode(
+                width,
+                BooleanArray(width * width) { modules[it] != 0.toByte() },
+                offer.expiresAt().toLong(),
+                tag?.let { native ->
+                    object : NfcTag {
+                        override fun respond(apdu: ByteArray) = native.respond(apdu)
+
+                        override fun close() = native.close()
+                    }
+                },
+            )
         }
     }
 
     override suspend fun scanQr(text: String): String = call { core -> core.pairScanQr(text).use { it.device() } }
+
+    override suspend fun scanNfc(message: ByteArray): String =
+        call { core -> core.pairScanNfc(message).use { it.device() } }
 
     override suspend fun showCode(): PairingCode = call { core ->
         core.pairShowCode().use { PairingCode(it.code(), it.expiresAt().toLong()) }
@@ -101,6 +119,21 @@ class CoreBackend(
     override suspend fun decline(transfer: String) = call { core -> core.transfer(transfer).use { it.decline() } }
 
     override suspend fun cancel(transfer: String) = call { core -> core.transfer(transfer).use { it.cancel() } }
+
+    override suspend fun setRangingReady(ready: Boolean) = call { core ->
+        // Bit 0: provisioned-STS unicast DS-TWR (PROTOCOL §10.4).
+        if (ready) core.setRangingReady(1u) else core.clearRangingReady()
+    }
+
+    override suspend fun pointStart(controllers: List<UwbController>) = call { it.pointStart(controllers) }
+
+    override suspend fun pointStop() = call { it.pointStop() }
+
+    override suspend fun acceptRanging(contact: String, sessionId: UInt, controlee: UShort) =
+        call { it.acceptRanging(contact, sessionId, controlee) }
+
+    override suspend fun refuseRanging(contact: String, sessionId: UInt) =
+        call { it.refuseRanging(contact, sessionId) }
 
     override fun events(): Flow<CoreEvent> = core.events()
 }

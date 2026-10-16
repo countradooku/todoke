@@ -49,10 +49,17 @@ fn offers_have_the_exact_layout() -> TestResult {
     assert_eq!(LinkOffer::decode(&body)?, hotspot);
     let direct = offer(
         LinkKind::WifiDirect,
-        LinkSecurity::Wpa3Transition,
+        LinkSecurity::Wpa2,
         DIRECT_SSID,
         PASSPHRASE,
     )?;
+    // Wi-Fi Direct groups are WPA2-PSK only.
+    for security in [LinkSecurity::Wpa3, LinkSecurity::Wpa3Transition] {
+        assert_eq!(
+            offer(LinkKind::WifiDirect, security, DIRECT_SSID, PASSPHRASE),
+            Err(DecodeError::UnknownEnum)
+        );
+    }
     assert_eq!(direct.encode().len(), 116);
     assert_eq!(LinkOffer::decode(&direct.encode())?, direct);
     let aware = offer(
@@ -309,4 +316,26 @@ fn answers_have_three_results() -> TestResult {
         Err(DecodeError::ZeroIdentifier)
     );
     Ok(())
+}
+
+/// A Wi-Fi Direct group is WPA2 whatever else the joiner can join; a
+/// joiner that cannot join WPA2 gets no group.
+#[test]
+fn wifi_direct_groups_are_wpa2() {
+    let host = LinkAbilities::new(&[LinkKind::WifiDirect], &[], &[]);
+    let all = [
+        LinkSecurity::Wpa3,
+        LinkSecurity::Wpa3Transition,
+        LinkSecurity::Wpa2,
+    ];
+    let joiner = LinkAbilities::new(&[], &[LinkKind::WifiDirect], &all);
+    let choice = choose(host, joiner, true).map(|choice| choice.security);
+    assert_eq!(choice, Some(LinkSecurity::Wpa2));
+    let sae_only = LinkAbilities::new(&[], &[LinkKind::WifiDirect], &[LinkSecurity::Wpa3]);
+    assert_eq!(choose(host, sae_only, true), None);
+    // Hotspots keep WPA3.
+    let hotspot = LinkAbilities::new(&[LinkKind::Hotspot], &[], &[]);
+    let joiner = LinkAbilities::new(&[], &[LinkKind::Hotspot], &all);
+    let choice = choose(hotspot, joiner, true).map(|choice| choice.security);
+    assert_eq!(choice, Some(LinkSecurity::Wpa3));
 }

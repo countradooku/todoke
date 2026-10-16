@@ -478,6 +478,112 @@ pub enum CoreEvent {
         /// How many.
         events: u64,
     },
+    /// This device points at a contact (`Core::point_start`): range with it
+    /// as the controller.
+    PointTarget {
+        /// The ranging.
+        ranging: RangingInfo,
+    },
+    /// A contact points at this device: answer with `Core::accept_ranging`
+    /// (then range with it as the controlee) or `Core::refuse_ranging`.
+    RangingRequested {
+        /// The ranging.
+        ranging: RangingInfo,
+    },
+    /// A ranging ended (stopped, its time up, or its session gone): stop
+    /// ranging with that session ID.
+    RangingStopped {
+        /// The contact.
+        contact: String,
+        /// The ranging session ID.
+        session_id: u32,
+    },
+}
+
+/// A controller session the platform prepared for pointing (PROTOCOL
+/// §10.4): its address serves one ranging.
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UwbController {
+    /// Its UWB short address.
+    pub address: u16,
+    /// The channel: 5 or 9.
+    pub channel: u8,
+    /// The preamble index: 9 to 12 or 25 to 32.
+    pub preamble: u8,
+}
+
+/// One ultra-wideband ranging between this device and a contact
+/// (PROTOCOL §10.4): `FiRa` provisioned-STS unicast DS-TWR. It only hints at
+/// which contact the user points at: it authenticates nothing.
+#[data]
+#[derive(Clone, PartialEq, Eq)]
+pub struct RangingInfo {
+    /// The contact.
+    pub contact: String,
+    /// The ranging session ID.
+    pub session_id: u32,
+    /// The controller's UWB short address.
+    pub controller: u16,
+    /// The controlee's UWB short address; none in a request (answer with
+    /// a fresh one: `Core::accept_ranging`).
+    pub controlee: Option<u16>,
+    /// The channel: 5 or 9.
+    pub channel: u8,
+    /// The preamble index.
+    pub preamble: u8,
+    /// The configuration (1: provisioned-STS unicast DS-TWR).
+    pub config: u8,
+    /// The 16-byte STS key: hand it to the UWB stack only, never log or
+    /// keep it.
+    pub sts_key: Vec<u8>,
+}
+
+impl core::fmt::Debug for RangingInfo {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("RangingInfo")
+            .field("contact", &self.contact)
+            .field("session_id", &self.session_id)
+            .field("controller", &self.controller)
+            .field("controlee", &self.controlee)
+            .field("channel", &self.channel)
+            .field("preamble", &self.preamble)
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
+}
+
+impl From<api::Ranging> for RangingInfo {
+    fn from(ranging: api::Ranging) -> Self {
+        let key = zeroize::Zeroizing::new(ranging.sts_key);
+        Self {
+            contact: ranging.contact,
+            session_id: ranging.session_id,
+            controller: ranging.controller,
+            controlee: ranging.controlee,
+            channel: ranging.channel,
+            preamble: ranging.preamble,
+            config: ranging.config,
+            sts_key: unhex(&key).unwrap_or_default(),
+        }
+    }
+}
+
+/// Lowercase hexadecimal text as bytes.
+fn unhex(text: &str) -> Option<Vec<u8>> {
+    let digit = |byte: u8| {
+        char::from(byte)
+            .to_digit(16)
+            .and_then(|d| u8::try_from(d).ok())
+    };
+    let text = text.as_bytes();
+    let (pairs, []) = text.as_chunks::<2>() else {
+        return None;
+    };
+    pairs
+        .iter()
+        .map(|pair| Some(digit(pair[0])? << 4 | digit(pair[1])?))
+        .collect()
 }
 
 impl From<api::Event> for CoreEvent {
@@ -513,6 +619,19 @@ impl From<api::Event> for CoreEvent {
                 message: api::escape(&message),
             },
             E::Missed { events } => Self::Missed { events },
+            E::PointTarget(ranging) => Self::PointTarget {
+                ranging: ranging.into(),
+            },
+            E::RangingRequested(ranging) => Self::RangingRequested {
+                ranging: ranging.into(),
+            },
+            E::RangingStopped {
+                contact,
+                session_id,
+            } => Self::RangingStopped {
+                contact,
+                session_id,
+            },
         }
     }
 }
@@ -688,5 +807,45 @@ mod tests {
             let core: api::KeyProtection = protection.into();
             assert_eq!(KeyProtection::from(core), protection);
         }
+    }
+
+    /// The STS key crosses as bytes, never in a printout; a key that is
+    /// not hexadecimal crosses as none (the UWB stack then refuses).
+    #[test]
+    fn rangings_cross_with_their_key_unprinted() -> Result<(), &'static str> {
+        let ranging = |sts_key: &str| api::Ranging {
+            contact: "ab".into(),
+            session_id: 9,
+            controller: 1,
+            controlee: Some(2),
+            channel: 9,
+            preamble: 10,
+            config: 1,
+            sts_key: sts_key.to_owned(),
+        };
+        let key = "00112233445566778899aabbccddeeff";
+        let CoreEvent::RangingRequested { ranging: info } =
+            CoreEvent::from(api::Event::RangingRequested(ranging(key)))
+        else {
+            return Err("a ranging became something else");
+        };
+        assert_eq!(
+            info.sts_key,
+            [
+                0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff
+            ]
+        );
+        assert_eq!(
+            (info.controller, info.controlee, info.session_id),
+            (1, Some(2), 9)
+        );
+        let printed = format!("{info:?}");
+        assert!(!printed.contains("sts_key") && !printed.contains("17"));
+        for bad in ["0", "zz", "0g"] {
+            assert_eq!(RangingInfo::from(ranging(bad)).sts_key, Vec::<u8>::new());
+        }
+        assert_eq!(unhex("0aFf"), Some(vec![0x0a, 0xff]));
+        Ok(())
     }
 }

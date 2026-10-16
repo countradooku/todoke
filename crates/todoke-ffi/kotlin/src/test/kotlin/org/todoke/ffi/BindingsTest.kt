@@ -376,21 +376,76 @@ class BindingsTest {
         assertEquals(1, keys.keys.size)
     }
 
-    /** Radio links are refused for now, and the one offered is closed. */
+    /** The app gives the core its links once; a second time is refused. */
     @Test
-    fun radioLinksAreRefusedAndClosed() = runBlocking(Dispatchers.IO) {
-        val closed = AtomicBoolean(false)
-        val link = object : RadioLink {
-            override fun kind() = LinkKind.WIFI_P2P
+    fun linksAreGivenOnce() = runBlocking(Dispatchers.IO) {
+        val links = object : WifiLinks {
+            override fun abilities() = LinkAbilities(emptyList(), emptyList(), emptyList())
 
-            override fun send(bytes: ByteArray): Unit = throw LinkError.Closed
+            override fun host(request: LinkRequest): LinkLease = throw LinkError.Closed
 
-            override fun close() = closed.set(true)
+            override fun join(request: LinkRequest): LinkLease = throw LinkError.Closed
+
+            override fun bindSocket(lease: ULong, socket: Long): Unit = throw LinkError.Closed
+
+            override fun release(lease: ULong) = Unit
         }
-        Core(settings(home("link"))).use { core ->
-            assertFailsWith<TodokeError.Disabled> { core.attachLink(link) }
+        Core(settings(home("links"))).use { core ->
+            core.setLinks(links)
+            assertFailsWith<TodokeError.State> { core.setLinks(links) }
         }
-        assertTrue(closed.get())
+    }
+
+    /** Pointing checks its parameters as the records will (PROTOCOL §10.4). */
+    @Test
+    fun pointingParametersAreChecked() = runBlocking(Dispatchers.IO) {
+        Core(settings(home("point"))).use { core ->
+            core.setRangingReady(1u)
+            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(0u) }
+            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(2u) }
+            core.clearRangingReady()
+            assertFailsWith<TodokeError.Invalid> { core.pointStart(emptyList()) }
+            assertFailsWith<TodokeError.Invalid> { core.pointStart(listOf(UwbController(7u, 6u, 10u))) }
+            core.pointStart(listOf(UwbController(7u, 9u, 10u), UwbController(8u, 5u, 9u)))
+            assertFailsWith<TodokeError> { core.refuseRanging("ab".repeat(32), 1u) }
+            core.pointStop()
+        }
+    }
+
+    /** B pairs with A by tapping: A's emulated tag serves its QR offer. */
+    @Test
+    fun pairingByNfc() = runBlocking(Dispatchers.IO) {
+        Guarded(Core(settings(home("nfc-a")))).use { a ->
+            Guarded(Core(settings(home("nfc-b")))).use { b ->
+                assertFailsWith<TodokeError.Pairing> { b.call { it.pairScanNfc(ByteArray(8)) } }
+                val message = a.call { it.pairShowQr() }.use { qr ->
+                    qr.nfcTag().use { tag -> readTag(tag) }
+                }
+                val contact = b.call { it.pairScanNfc(message) }
+                assertEquals(a.call { it.status() }.device, contact.device())
+                contact.close()
+            }
+        }
+    }
+
+    /** What a reader does with a Type 4 tag: select, read the length, read. */
+    private fun readTag(tag: NfcTag): ByteArray {
+        fun answer(vararg apdu: Int): ByteArray {
+            val out = tag.respond(ByteArray(apdu.size) { apdu[it].toByte() })
+            assertEquals(listOf(0x90.toByte(), 0), out.takeLast(2))
+            return out.copyOf(out.size - 2)
+        }
+        answer(0, 0xa4, 4, 0, 7, 0xd2, 0x76, 0, 0, 0x85, 1, 1)
+        answer(0, 0xa4, 0, 0x0c, 2, 0xe1, 0x04)
+        val head = answer(0, 0xb0, 0, 0, 2)
+        val length = (head[0].toInt() and 0xff shl 8) or (head[1].toInt() and 0xff)
+        val message = java.io.ByteArrayOutputStream()
+        while (message.size() < length) {
+            val at = message.size() + 2
+            val wanted = minOf(length - message.size(), 255)
+            message.write(answer(0, 0xb0, at shr 8, at and 0xff, wanted))
+        }
+        return message.toByteArray()
     }
 
     /** A library built without development sessions starts no core. */

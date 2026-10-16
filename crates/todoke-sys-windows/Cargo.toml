@@ -15,6 +15,14 @@ publish.workspace = true
 # The desktop app's pieces (login item, Explorer verbs, Share target); the
 # daemon and the CLI need only the key store.
 desktop = ["dep:windows", "dep:windows-registry"]
+# Hosting Wi-Fi Direct groups for direct links (the daemon): the WinRT
+# advertisement publisher.
+host = [
+    "dep:windows",
+    "windows/Devices_WiFiDirect",
+    "windows/Foundation",
+    "windows/Security_Credentials",
+]
 
 [lints.rust]
 unsafe_code = "deny"

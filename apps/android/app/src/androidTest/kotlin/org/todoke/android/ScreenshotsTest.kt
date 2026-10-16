@@ -23,7 +23,6 @@ import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.captureToImage
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import java.io.File
 import org.junit.Rule
@@ -141,16 +140,10 @@ class ScreenshotsTest {
         shoot("2-receive")
     }
 
-    // Composable capture needs window capture (Android 8).
-    @SdkSuppress(minSdkVersion = 26)
     @Test fun pairQr() = shoot("6-pair-qr", pairing = 0, take = ::composable)
 
-    // Composable capture needs window capture (Android 8).
-    @SdkSuppress(minSdkVersion = 26)
     @Test fun pairScan() = shoot("7-pair-scan", pairing = 1, take = ::composable)
 
-    // Composable capture needs window capture (Android 8).
-    @SdkSuppress(minSdkVersion = 26)
     @Test fun pairCode() = shoot(
         "8-pair-code",
         pairing = 2,

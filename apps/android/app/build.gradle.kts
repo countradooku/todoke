@@ -10,8 +10,8 @@ android {
 
     defaultConfig {
         applicationId = "org.todoke.android"
-        // Android 7 (P16's minimum).
-        minSdk = 24
+        // Android 13: nearby Wi-Fi devices without location, and every radio API todoke uses (ADR 0019).
+        minSdk = 33
         targetSdk = 37
         versionCode = 1
         versionName = "0.1.0"
@@ -103,6 +103,9 @@ dependencies {
     implementation(libs.profileinstaller)
     baselineProfile(project(":baselineprofile"))
     implementation(libs.coroutines.android)
+    // Pointing with ultra-wideband: androidx.core.uwb depends on Google
+    // Play services, so the fdroid flavor has no pointing.
+    "playImplementation"(libs.uwb)
     debugImplementation(libs.compose.ui.tooling)
     debugImplementation(libs.compose.ui.test.manifest)
 

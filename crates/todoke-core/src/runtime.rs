@@ -67,6 +67,9 @@ enum Command {
         contact: String,
         files: Vec<crate::send::OpenFile>,
     },
+    /// What sets up direct links, given once after start: in this process
+    /// only (the app's platform code).
+    SetLinks(std::sync::Arc<dyn crate::link::LinkPlatform>),
 }
 
 type Envelope = (Command, oneshot::Sender<Response>);
@@ -193,6 +196,15 @@ impl Core {
         self.command(Command::SendFiles { contact, files }).await
     }
 
+    /// Gives the core what sets up direct links (§10.2), once, after start
+    /// (`Core::start_with_links` does it at start).
+    pub async fn set_links(
+        &self,
+        links: std::sync::Arc<dyn crate::link::LinkPlatform>,
+    ) -> Response {
+        self.command(Command::SetLinks(links)).await
+    }
+
     async fn command(&self, command: Command) -> Response {
         let (reply, response) = oneshot::channel();
         if self.requests.send((command, reply)).await.is_err() {
@@ -213,6 +225,8 @@ impl Core {
 
 #[cfg(feature = "unaudited-dev")]
 mod link;
+#[cfg(feature = "unaudited-dev")]
+mod pointing;
 #[cfg(feature = "unaudited-dev")]
 mod relay;
 #[cfg(feature = "unaudited-dev")]

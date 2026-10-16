@@ -83,10 +83,18 @@ impl fmt::Debug for JoinRequest {
     }
 }
 
+/// Binds a socket to a link before it listens or connects, given its raw
+/// handle: the same type as the transport's (every target has it here, the
+/// browser too, where no transport exists).
+pub type BindSocket = dyn Fn(i64) -> io::Result<()> + Send + Sync;
+
 /// A link that is up, until dropped: dropping it tears the link down.
 pub struct LinkLease {
     /// This device's address on the link: the host listens on it, the
-    /// joiner connects from it.
+    /// joiner connects from it. A host whose address comes only once the
+    /// joiner sets the link up (a Wi-Fi Aware data path) gives the IPv6
+    /// unspecified address and the link's possible interfaces in
+    /// [`LinkLease::scopes`].
     pub local: IpAddr,
     /// The host's address on the link (the group owner, the hotspot's
     /// gateway, the Wi-Fi Aware peer), for the joiner to connect to; `None`
@@ -95,6 +103,12 @@ pub struct LinkLease {
     /// The link's interface index (the scope of link-local IPv6
     /// addresses); 0 if unknown.
     pub interface: u32,
+    /// Binds a socket to the link before it listens or connects, where the
+    /// link is a network of its own (Android).
+    pub bind: Option<Arc<BindSocket>>,
+    /// With an unspecified `local`: the interfaces the link may come up
+    /// on; the host accepts only link-local peers arriving on them.
+    pub scopes: Vec<u32>,
     _teardown: Box<dyn Send>,
 }
 
@@ -111,8 +125,25 @@ impl LinkLease {
             local,
             host,
             interface,
+            bind: None,
+            scopes: Vec::new(),
             _teardown: Box::new(teardown),
         }
+    }
+
+    /// For a host whose address comes once the link is up: accepting only
+    /// link-local peers on `scopes`.
+    #[must_use]
+    pub fn with_scopes(mut self, scopes: Vec<u32>) -> Self {
+        self.scopes = scopes;
+        self
+    }
+
+    /// With sockets bound to the link by `bind`.
+    #[must_use]
+    pub fn with_bind(mut self, bind: Arc<BindSocket>) -> Self {
+        self.bind = Some(bind);
+        self
     }
 }
 
@@ -122,6 +153,7 @@ impl fmt::Debug for LinkLease {
             .field("local", &self.local)
             .field("host", &self.host)
             .field("interface", &self.interface)
+            .field("scopes", &self.scopes)
             .finish_non_exhaustive()
     }
 }

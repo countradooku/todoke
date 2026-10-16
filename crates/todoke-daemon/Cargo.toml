@@ -34,7 +34,7 @@ rustix.workspace = true
 todoke-sys-macos.workspace = true
 
 [target.'cfg(windows)'.dependencies]
-todoke-sys-windows.workspace = true
+todoke-sys-windows = { workspace = true, features = ["host"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 todoke-sys-linux.workspace = true

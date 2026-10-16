@@ -8,5 +8,6 @@ mod decisions;
 mod e2e;
 mod lifecycle;
 mod link;
+mod ranging;
 mod storage_scope;
 mod support;

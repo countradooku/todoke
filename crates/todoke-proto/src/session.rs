@@ -607,6 +607,14 @@ impl FrameType {
     pub const LINK_OFFER: Self = Self(0x0021);
     /// `LinkAnswer` (§10.2).
     pub const LINK_ANSWER: Self = Self(0x0022);
+    /// `RangingReady` (§10.4).
+    pub const RANGING_READY: Self = Self(0x0023);
+    /// `RangingStart` (§10.4).
+    pub const RANGING_START: Self = Self(0x0024);
+    /// `RangingStop` (§10.4).
+    pub const RANGING_STOP: Self = Self(0x0025);
+    /// `RangingAccept` (§10.4).
+    pub const RANGING_ACCEPT: Self = Self(0x0026);
     /// `Revoke` (§2).
     pub const REVOKE: Self = Self(0x0040);
 
@@ -627,7 +635,7 @@ impl FrameType {
     pub const fn class(self) -> FrameClass {
         match self.0 {
             0x0001..=0x0004 | 0x0006..=0x0009 => FrameClass::Session,
-            0x0005 | 0x0010..=0x001c | 0x0020..=0x0022 | 0x0040 => FrameClass::Application,
+            0x0005 | 0x0010..=0x001c | 0x0020..=0x0026 | 0x0040 => FrameClass::Application,
             0x8000..=0xbfff => FrameClass::Noncritical,
             0xc000..=0xffff => FrameClass::Experimental,
             _ => FrameClass::UnsupportedCritical,

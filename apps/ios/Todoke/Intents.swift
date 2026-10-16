@@ -42,11 +42,7 @@ struct SendFilesIntent: AppIntent {
 
     func perform() async throws -> some IntentResult {
         let question = IntentDialog("Send \(files.count) files to \(contact.name)?")
-        if #available(iOS 18.0, *) {
-            try await requestConfirmation(actionName: .send, dialog: question)
-        } else {
-            try await requestConfirmation(result: .result(dialog: question), confirmationActionName: .send)
-        }
+        try await requestConfirmation(actionName: .send, dialog: question)
         try ShareQueue.enqueue(contact: contact.id, files: files.map { ($0.filename, $0.data) })
         return .result()
     }

@@ -1591,3 +1591,189 @@ mod direct_link {
         Ok(())
     }
 }
+
+/// Pointing parameters are checked as the records will be (§10.4).
+#[tokio::test]
+async fn pointing_parameters_are_checked() -> AnyResult<()> {
+    use crate::api::{RangingAbility, UwbController};
+    let controller = |address, channel, preamble| UwbController {
+        address,
+        channel,
+        preamble,
+    };
+    let scratch = Scratch::new("pointing-checks")?;
+    let device = device(&scratch.0, "alice", &scratch.0.join("discovery"))?;
+    for controllers in [
+        vec![],
+        vec![controller(0x1111, 7, 10)],
+        vec![controller(0x1111, 9, 13)],
+        vec![controller(0xffff, 9, 10)],
+        vec![controller(0x1111, 9, 10), controller(0x1111, 5, 9)],
+        vec![controller(0x1111, 9, 10); 9],
+    ] {
+        assert!(matches!(
+            device.request(Request::PointStart { controllers }).await,
+            Response::Error {
+                code: ErrorCode::Invalid,
+                ..
+            }
+        ));
+    }
+    assert!(matches!(
+        device
+            .request(Request::SetRangingReady {
+                ready: Some(RangingAbility { configs: 2 }),
+            })
+            .await,
+        Response::Error {
+            code: ErrorCode::Invalid,
+            ..
+        }
+    ));
+    Ok(())
+}
+
+/// Pointing (§10.4): a contact that can be pointed at gets the ranging
+/// parameters and answers with an address of its own; the pointing device
+/// then reports it as its target with the same parameters. Stopping
+/// reaches the contact; pointing again uses the next controller; a refusal
+/// reaches the pointing device; a contact that cannot be pointed at gets
+/// nothing; invalid parameters and answers are refused.
+#[tokio::test]
+#[expect(clippy::too_many_lines, reason = "one pointing exchange, in order")]
+async fn pointing_at_a_nearby_contact() -> AnyResult<()> {
+    use crate::api::{RangingAbility, UwbController};
+    let controller = |address, channel, preamble| UwbController {
+        address,
+        channel,
+        preamble,
+    };
+    let scratch = Scratch::new("pointing")?;
+    let discovery = scratch.0.join("discovery");
+    let alice = device(&scratch.0, "alice", &discovery)?;
+    let bob = device(&scratch.0, "bob", &discovery)?;
+    let (alice_hex, bob_hex) = (device_hex(&alice).await?, device_hex(&bob).await?);
+    let mut alice_events = alice.subscribe();
+    let mut bob_events = bob.subscribe();
+    pair(&alice, &bob).await?;
+    wait_for(&mut alice_events, |event| {
+        matches!(event, Event::Paired { .. }).then_some(())
+    })
+    .await?;
+    assert_eq!(
+        bob.request(Request::SetRangingReady {
+            ready: Some(RangingAbility { configs: 1 }),
+        })
+        .await,
+        Response::Done
+    );
+    let pool = vec![controller(0x1111, 9, 10), controller(0x1112, 9, 10)];
+    assert_eq!(
+        alice
+            .request(Request::PointStart { controllers: pool })
+            .await,
+        Response::Done
+    );
+    let requested = wait_for(&mut bob_events, |event| match event {
+        Event::RangingRequested(ranging) => Some(ranging.clone()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(requested.contact, alice_hex);
+    assert_eq!((requested.controller, requested.controlee), (0x1111, None));
+    let answer = |session_id, controlee| Request::RangingAnswer {
+        contact: alice_hex.clone(),
+        session_id,
+        controlee,
+    };
+    // Not the controller's address, and not another ranging.
+    assert!(matches!(
+        bob.request(answer(requested.session_id, Some(0x1111)))
+            .await,
+        Response::Error {
+            code: ErrorCode::Invalid,
+            ..
+        }
+    ));
+    assert!(matches!(
+        bob.request(answer(requested.session_id ^ 1, Some(0x2222)))
+            .await,
+        Response::Error {
+            code: ErrorCode::State,
+            ..
+        }
+    ));
+    assert_eq!(
+        bob.request(answer(requested.session_id, Some(0x2222)))
+            .await,
+        Response::Done
+    );
+    let target = wait_for(&mut alice_events, |event| match event {
+        Event::PointTarget(target) => Some(target.clone()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(target.contact, bob_hex);
+    assert_eq!(
+        (target.controller, target.controlee),
+        (0x1111, Some(0x2222))
+    );
+    assert_eq!(target.session_id, requested.session_id);
+    assert_eq!(target.sts_key, requested.sts_key);
+    assert_eq!(target.sts_key.len(), 32);
+    assert_eq!((target.channel, target.preamble, target.config), (9, 10, 1));
+    assert_eq!(alice.request(Request::PointStop).await, Response::Done);
+    let stopped = wait_for(&mut bob_events, |event| match event {
+        Event::RangingStopped { session_id, .. } => Some(*session_id),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(stopped, target.session_id);
+    // Pointing again: a new ranging with this pointing's controller, which
+    // Bob refuses; Alice hears it end.
+    assert_eq!(
+        alice
+            .request(Request::PointStart {
+                controllers: vec![controller(0x1113, 5, 9)],
+            })
+            .await,
+        Response::Done
+    );
+    let again = wait_for(&mut bob_events, |event| match event {
+        Event::RangingRequested(ranging) => Some(ranging.clone()),
+        _ => None,
+    })
+    .await?;
+    assert_eq!(
+        (again.controller, again.channel, again.preamble),
+        (0x1113, 5, 9)
+    );
+    assert_ne!(again.sts_key, target.sts_key);
+    assert_eq!(
+        bob.request(answer(again.session_id, None)).await,
+        Response::Done
+    );
+    wait_for(&mut alice_events, |event| match event {
+        Event::RangingStopped { session_id, .. } if *session_id == again.session_id => Some(()),
+        _ => None,
+    })
+    .await?;
+    // Bob points at Alice, who never said she can be pointed at: nothing.
+    assert_eq!(
+        bob.request(Request::PointStart {
+            controllers: vec![controller(0x3333, 5, 9)],
+        })
+        .await,
+        Response::Done
+    );
+    let none = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if let Ok(Event::RangingRequested(_)) = alice_events.recv().await {
+                return;
+            }
+        }
+    })
+    .await;
+    assert!(none.is_err(), "a request to a contact that cannot range");
+    Ok(())
+}

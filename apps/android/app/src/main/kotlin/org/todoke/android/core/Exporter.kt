@@ -13,7 +13,6 @@ package org.todoke.android.core
 
 import android.content.ContentResolver
 import android.net.Uri
-import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.system.ErrnoException
@@ -139,8 +138,7 @@ class Exporter(private val received: File) {
     }
 
     private suspend fun quiet(backend: Backend): Boolean {
-        val busy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) RECEIVING else RECEIVING_BY_COPY
-        return backend.transfers().none { it.way == Way.INCOMING && it.state in busy }
+        return backend.transfers().none { it.way == Way.INCOMING && it.state in RECEIVING }
     }
 
     /** Copies `entry` there, then removes it here; false (and nothing
@@ -168,10 +166,6 @@ class Exporter(private val received: File) {
         const val TEMP_PREFIX = ".todoke-"
 
         private val RECEIVING = setOf(TransferState.ACCEPTED, TransferState.TRANSFERRING)
-
-        /** Before Android 11 an interrupted transfer may resume and publish
-         * by copying: wait for it to end. */
-        private val RECEIVING_BY_COPY = RECEIVING + TransferState.INTERRUPTED
 
         fun mime(name: String): String =
             name.substringAfterLast('.', "").lowercase().takeIf { it.isNotEmpty() }

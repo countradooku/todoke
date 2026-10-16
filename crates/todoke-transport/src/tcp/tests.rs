@@ -269,13 +269,24 @@ async fn nobody_binds_beside_a_listener() -> TestResult {
 #[tokio::test]
 async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
     let policy = LanPolicy::new().with_loopback();
-    let host = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy)?;
+    let bound = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let record = {
+        let bound = std::sync::Arc::clone(&bound);
+        move |handle: i64| {
+            if let Ok(mut bound) = bound.lock() {
+                bound.push(handle);
+            }
+            Ok(())
+        }
+    };
+    let host = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy, Some(&record))?;
     let port = host.port()?;
     let accepting = tokio::spawn(async move { host.accept().await });
     let joiner = TcpConnector::new(policy)
         .connect_direct(
             Ipv4Addr::LOCALHOST.into(),
             (Ipv4Addr::LOCALHOST, port).into(),
+            Some(&record),
         )
         .await?;
     let accepted = accepting.await??;
@@ -292,11 +303,64 @@ async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
         .connect_direct(
             Ipv4Addr::LOCALHOST.into(),
             (Ipv4Addr::LOCALHOST, port).into(),
+            Some(&record),
         )
         .await;
     assert_eq!(
         refused.map(|_| ()).map_err(|error| error.kind()),
         Err(io::ErrorKind::PermissionDenied)
     );
+    // The listener's and the joiner's sockets were bound to the link, each
+    // once and before use; the refused one never reached it.
+    let bound = bound.lock().map(|bound| bound.clone()).unwrap_or_default();
+    assert_eq!(bound.len(), 2, "{bound:?}");
+    assert!(bound.iter().all(|handle| *handle >= 0));
+    Ok(())
+}
+
+/// A direct link whose address is not known yet (a Wi-Fi Aware data
+/// path): the listener takes only link-local IPv6 peers on its interfaces,
+/// so a peer anywhere else (loopback here, allowed by the policy) is
+/// dropped unread; it needs at least one real interface.
+#[tokio::test]
+async fn scoped_direct_listeners_take_only_their_interfaces() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    for scopes in [vec![], vec![0], vec![3, 0]] {
+        assert_eq!(
+            LanListener::bind_direct_scoped(scopes, policy, None)
+                .map(|_| ())
+                .map_err(|error| error.kind()),
+            Err(io::ErrorKind::InvalidInput)
+        );
+    }
+    let listener = LanListener::bind_direct_scoped(vec![7, 9], policy, None)?;
+    let link_local = |scope| {
+        SocketAddr::V6(std::net::SocketAddrV6::new(
+            Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 1),
+            40_000,
+            0,
+            scope,
+        ))
+    };
+    assert!(listener.in_scope(link_local(7)));
+    assert!(listener.in_scope(link_local(9)));
+    assert!(!listener.in_scope(link_local(8)));
+    assert!(!listener.in_scope(link_local(0)));
+    assert!(!listener.in_scope((Ipv6Addr::LOCALHOST, 40_000).into()));
+    assert!(!listener.in_scope((Ipv4Addr::new(192, 168, 49, 2), 40_000).into()));
+    let unique_local = SocketAddr::V6(std::net::SocketAddrV6::new(
+        Ipv6Addr::new(0xfd00, 0, 0, 0, 0, 0, 0, 1),
+        40_000,
+        0,
+        7,
+    ));
+    assert!(!listener.in_scope(unique_local));
+    let port = listener.port()?;
+    let _client = TcpStream::connect((Ipv6Addr::LOCALHOST, port)).await?;
+    let accepted = tokio::time::timeout(Duration::from_millis(300), listener.accept()).await;
+    assert!(accepted.is_err(), "a peer off the link was accepted");
+    // Plain listeners take any source the policy allows.
+    let plain = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy, None)?;
+    assert!(plain.in_scope((Ipv4Addr::LOCALHOST, 40_000).into()));
     Ok(())
 }

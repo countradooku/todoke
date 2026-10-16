@@ -23,6 +23,23 @@ use crate::link::{Link, LinkInfo, LinkKind};
 use crate::policy::LanPolicy;
 use crate::race::{Candidate, Connector};
 
+/// Binds a socket to a direct link before it listens or connects, given
+/// its raw handle (a file descriptor, or a Windows socket): what a platform
+/// needs where a link is a network of its own (Android's
+/// `Network.bindSocket`).
+pub type BindSocket = dyn Fn(i64) -> io::Result<()> + Send + Sync;
+
+/// A socket's raw handle, for [`BindSocket`].
+#[cfg(unix)]
+fn raw_handle(socket: &impl std::os::fd::AsRawFd) -> i64 {
+    i64::from(socket.as_raw_fd())
+}
+
+#[cfg(windows)]
+fn raw_handle(socket: &impl std::os::windows::io::AsRawSocket) -> i64 {
+    i64::try_from(socket.as_raw_socket()).unwrap_or(-1)
+}
+
 /// How long one TCP connection attempt may take.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -141,13 +158,19 @@ impl TcpConnector {
     /// device's address on a direct link (§10.2): the socket is bound to
     /// that address first, so the connection leaves through that link.
     /// `host` is the address the link reported for the host; the policy
-    /// still checks it.
+    /// still checks it. `bind`, if given, binds the socket to the link
+    /// first.
     ///
     /// # Errors
     ///
     /// The policy's refusal (`PermissionDenied`), a socket error, or
     /// `TimedOut`.
-    pub async fn connect_direct(&self, local: IpAddr, host: SocketAddr) -> io::Result<TcpLink> {
+    pub async fn connect_direct(
+        &self,
+        local: IpAddr,
+        host: SocketAddr,
+        bind: Option<&BindSocket>,
+    ) -> io::Result<TcpLink> {
         self.policy
             .check_peer(host)
             .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal))?;
@@ -165,6 +188,9 @@ impl TcpConnector {
             }
             (from, _) => from,
         };
+        if let Some(bind) = bind {
+            bind(raw_handle(&socket))?;
+        }
         socket.bind(from)?;
         let started = tokio::time::Instant::now();
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, socket.connect(host))
@@ -180,6 +206,9 @@ pub struct LanListener {
     listener: TcpListener,
     policy: LanPolicy,
     kind: LinkKind,
+    /// Only link-local IPv6 peers arriving on these interfaces (a direct
+    /// link whose address is not known yet), if set.
+    scopes: Option<Vec<u32>>,
 }
 
 impl LanListener {
@@ -207,23 +236,32 @@ impl LanListener {
             listener,
             policy,
             kind: LinkKind::Lan,
+            scopes: None,
         })
     }
 
     /// Listens on `local`, this device's address on a direct link (§10.2),
     /// on a free port: only connections that arrive on that link's address
-    /// are accepted, as [`LinkKind::Direct`] links.
+    /// are accepted, as [`LinkKind::Direct`] links. `bind`, if given, binds
+    /// the socket to the link first.
     ///
     /// # Errors
     ///
     /// The socket error. Must be called within a tokio runtime.
-    pub fn bind_direct(local: SocketAddr, policy: LanPolicy) -> io::Result<Self> {
+    pub fn bind_direct(
+        local: SocketAddr,
+        policy: LanPolicy,
+        bind: Option<&BindSocket>,
+    ) -> io::Result<Self> {
         let domain = Domain::for_address(local);
         let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
         if local.is_ipv6() {
             socket.set_only_v6(true)?;
         }
         claim_port(&socket)?;
+        if let Some(bind) = bind {
+            bind(raw_handle(&socket))?;
+        }
         // The address as given (a link-local IPv6 one keeps its scope), on
         // a free port.
         let mut at = local;
@@ -236,7 +274,32 @@ impl LanListener {
             listener,
             policy,
             kind: LinkKind::Direct,
+            scopes: None,
         })
+    }
+
+    /// Listens for a direct link (§10.2) whose own address is not known
+    /// before the joiner sets it up (a Wi-Fi Aware data path): on every
+    /// IPv6 address, on a free port, accepting only link-local peers that
+    /// arrive on one of `scopes`, the link's possible interfaces.
+    /// `bind`, if given, binds the socket to the link first.
+    ///
+    /// # Errors
+    ///
+    /// [`io::ErrorKind::InvalidInput`] for no interfaces; the socket
+    /// error. Must be called within a tokio runtime.
+    pub fn bind_direct_scoped(
+        scopes: Vec<u32>,
+        policy: LanPolicy,
+        bind: Option<&BindSocket>,
+    ) -> io::Result<Self> {
+        if scopes.is_empty() || scopes.contains(&0) {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let mut listener =
+            Self::bind_direct(SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)), policy, bind)?;
+        listener.scopes = Some(scopes);
+        Ok(listener)
     }
 
     /// The port it listens on, for the mDNS SRV record.
@@ -259,7 +322,7 @@ impl LanListener {
     pub async fn accept(&self) -> io::Result<TcpLink> {
         loop {
             let (stream, source) = self.listener.accept().await?;
-            if self.policy.check_source(source).is_err() {
+            if self.policy.check_source(source).is_err() || !self.in_scope(source) {
                 continue;
             }
             // A connection reset before it was set up (some systems then fail
@@ -268,6 +331,21 @@ impl LanListener {
             if let Ok(link) = TcpLink::new(stream, None, self.kind) {
                 return Ok(link);
             }
+        }
+    }
+}
+
+impl LanListener {
+    /// Whether `source` arrived where this listener accepts.
+    fn in_scope(&self, source: SocketAddr) -> bool {
+        let Some(scopes) = &self.scopes else {
+            return true;
+        };
+        match source {
+            SocketAddr::V6(v6) => {
+                v6.ip().is_unicast_link_local() && scopes.contains(&v6.scope_id())
+            }
+            SocketAddr::V4(_) => false,
         }
     }
 }

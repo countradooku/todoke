@@ -308,15 +308,15 @@ jobs:
           rustup show
           rustup target add "$CHECK_TARGET"
       # blake3's build script compiles C for the target. Use the runner's default
-      # NDK (ANDROID_NDK_HOME, see actions/runner-images Ubuntu 24.04) at API 24,
-      # the planned Android minSdk.
+      # NDK (ANDROID_NDK_HOME, see actions/runner-images Ubuntu 24.04) at API 33,
+      # the Android minSdk.
       - name: Point the C toolchain at the Android NDK
         if: ${{ matrix.target == 'aarch64-linux-android' }}
         run: |
           bin="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
-          test -x "$bin/aarch64-linux-android24-clang"
+          test -x "$bin/aarch64-linux-android33-clang"
           test -x "$bin/llvm-ar"
-          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android24-clang" >> "$GITHUB_ENV"
+          echo "CC_aarch64_linux_android=$bin/aarch64-linux-android33-clang" >> "$GITHUB_ENV"
           echo "AR_aarch64_linux_android=$bin/llvm-ar" >> "$GITHUB_ENV"
       # This is a compile check. Device linking and execution need platform SDKs.
       - name: Check every workspace target

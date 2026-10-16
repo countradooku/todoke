@@ -34,6 +34,12 @@ pub(super) enum SessionCommand {
     Decline(TransferId),
     /// The user cancelled.
     Cancel(TransferId),
+    /// The app's answer to a ranging request (§10.4): accept at this
+    /// controlee address, or refuse.
+    Ranging {
+        session_id: u32,
+        controlee: Option<u16>,
+    },
     /// A decision with somewhere to report its outcome.
     Reply(Box<SessionCommand>, oneshot::Sender<Response>),
 }
@@ -65,6 +71,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
         todoke_transport::LinkKind::Lan => crate::api::Route::Lan,
     };
     let mut link = super::link::SessionLink::new(&state, peer, kind);
+    let mut pointing = super::pointing::SessionPointing::new(peer, kind);
     let mut departing = None;
     state.routes.borrow_mut().insert(peer, route);
     let identity = &state.identity;
@@ -108,23 +115,21 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
         while let Some(event) = engine.pop_event() {
             if matches!(event, TransferEvent::Ready { .. }) {
                 ready = true;
-                for offer in waiting.drain(..) {
-                    offer_or_report(&state, &mut engine, offer, now);
-                }
-                for new in prepared.drain(..) {
-                    offer_new(&state, &mut engine, &new, now);
-                }
+                offer_queued(&state, &mut engine, &mut waiting, &mut prepared, now);
                 link.ready(&mut engine);
             }
             idle_since = now;
             if let Some(event) = link.event(&mut engine, event, now)
+                && let Some(event) = pointing.event(&state, &mut engine, event)
                 && !accept_retained(&state, peer, &mut engine, &event, now)
             {
                 report(&state, peer, event);
             }
         }
         while let Ok(command) = inbox.try_recv() {
-            apply(&state, &mut engine, &mut prepared, ready, command, now);
+            if let Some(command) = pointing.command(&state, &mut engine, command) {
+                apply(&state, &mut engine, &mut prepared, ready, command, now);
+            }
             idle_since = now;
         }
         if pumped.is_err() {
@@ -134,6 +139,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
             break;
         }
         departing = link.step(&mut engine, now).await;
+        pointing.step(&state, &mut engine, now);
         let busy = busy(&state, &peer);
         if !busy
             && waiting.is_empty()
@@ -144,6 +150,7 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
             break;
         }
     }
+    pointing.end(&state);
     finish(&state, peer, engine, &mut inbox, prepared, waiting);
     drop(established);
     if let Some(to) = departing {
@@ -169,6 +176,10 @@ async fn drain<L: Link>(
 /// Whether a transfer with `peer` is still being offered, decided, or
 /// moved (the session does not idle out then).
 fn busy(state: &State, peer: &Ed25519PublicKey) -> bool {
+    // Pointing keeps the sessions to nearby contacts open.
+    if state.pointing().is_some() {
+        return true;
+    }
     state.transfers.borrow().values().any(|record| {
         record.peer == *peer
             && matches!(
@@ -263,6 +274,23 @@ fn finish(
     );
 }
 
+/// Offers what waited for the session to be ready: resumed offers first,
+/// then new ones.
+fn offer_queued(
+    state: &State,
+    engine: &mut Engine<'_>,
+    waiting: &mut Vec<OutgoingOffer>,
+    prepared: &mut Vec<crate::send::Prepared>,
+    now: Duration,
+) {
+    for offer in waiting.drain(..) {
+        offer_or_report(state, engine, offer, now);
+    }
+    for new in prepared.drain(..) {
+        offer_new(state, engine, &new, now);
+    }
+}
+
 fn offer_or_report(state: &State, engine: &mut Engine<'_>, offer: OutgoingOffer, now: Duration) {
     let id = *offer.transfer_id();
     if engine.offer(offer, now).is_err() {
@@ -346,7 +374,8 @@ fn apply(
         }
         SessionCommand::Decline(id) => engine.reject(&id, RejectReason::Declined),
         SessionCommand::Cancel(id) => engine.cancel(&id, CancelReason::User, now),
-        SessionCommand::Reply(..) => Ok(()),
+        // Taken by the session's pointing.
+        SessionCommand::Reply(..) | SessionCommand::Ranging { .. } => Ok(()),
     };
     if let Some(reply) = reply {
         let _ = reply.send(match outcome {

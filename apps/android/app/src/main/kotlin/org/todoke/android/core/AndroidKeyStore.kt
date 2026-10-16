@@ -14,7 +14,6 @@ package org.todoke.android.core
 
 import android.content.Context
 import android.content.pm.PackageManager
-import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
@@ -63,11 +62,10 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
     private fun keystore(): JavaKeyStore = JavaKeyStore.getInstance(PROVIDER).apply { load(null) }
 
     private fun strongBoxAvailable(): Boolean =
-        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-            context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
+        context.packageManager.hasSystemFeature(PackageManager.FEATURE_STRONGBOX_KEYSTORE)
 
     /** StrongBox only when the profile's key is known to be there (the
-     * generator falls back to the TEE, and Android before 12 cannot say). */
+     * generator falls back to the TEE). */
     override fun protection(): KeyProtection =
         if (profile?.let { runCatching { inStrongBox(it) }.getOrNull() } == true) KeyProtection.STRONG_BOX else KeyProtection.TEE
 
@@ -163,19 +161,14 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
             .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
             .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
             .setRandomizedEncryptionRequired(true)
-        if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) spec.setIsStrongBoxBacked(true)
+        if (strongBox) spec.setIsStrongBoxBacked(true)
         if (gated) {
             spec.setUserAuthenticationRequired(true)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                spec.setUserAuthenticationParameters(
-                    UNLOCK_SECONDS,
-                    KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
-                )
-            } else {
-                @Suppress("DEPRECATION")
-                spec.setUserAuthenticationValidityDurationSeconds(UNLOCK_SECONDS)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) spec.setInvalidatedByBiometricEnrollment(false)
+            spec.setUserAuthenticationParameters(
+                UNLOCK_SECONDS,
+                KeyProperties.AUTH_BIOMETRIC_STRONG or KeyProperties.AUTH_DEVICE_CREDENTIAL,
+            )
+            spec.setInvalidatedByBiometricEnrollment(false)
         }
         return KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, PROVIDER).run {
             init(spec.build())
@@ -187,11 +180,7 @@ class AndroidKeyStore(private val context: Context, private val gated: Boolean) 
     fun inStrongBox(profile: String): Boolean? {
         val key = keystore().getKey(alias(profile), null) as? SecretKey ?: return null
         val info = SecretKeyFactory.getInstance(key.algorithm, PROVIDER).getKeySpec(key, KeyInfo::class.java) as KeyInfo
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            info.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
-        } else {
-            null
-        }
+        return info.securityLevel == KeyProperties.SECURITY_LEVEL_STRONGBOX
     }
 
     private companion object {

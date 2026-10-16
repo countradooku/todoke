@@ -32,7 +32,9 @@
 pub mod discovery;
 pub mod identity;
 pub mod link;
+pub mod nfc;
 pub mod pairing;
+pub mod ranging;
 pub mod relay;
 pub mod session;
 pub mod time;

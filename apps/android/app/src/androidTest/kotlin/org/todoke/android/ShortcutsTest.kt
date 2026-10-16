@@ -5,7 +5,6 @@ package org.todoke.android
 
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import androidx.test.filters.SdkSuppress
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -15,8 +14,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.todoke.android.core.Shortcuts
 
-// Sharing shortcuts need the shortcut service (Android 7.1).
-@SdkSuppress(minSdkVersion = 25)
 @RunWith(AndroidJUnit4::class)
 class ShortcutsTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext

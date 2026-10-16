@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The NFC Forum Type 4 Tag NDEF application (PROTOCOL §3.1.1), served
+     only while the device is unlocked and a QR offer shows. -->
+<host-apdu-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:description="@string/nfc_tag_description"
+    android:requireDeviceUnlock="true">
+    <aid-group
+        android:category="other"
+        android:description="@string/nfc_tag_description">
+        <aid-filter android:name="D2760000850101" />
+    </aid-group>
+</host-apdu-service>

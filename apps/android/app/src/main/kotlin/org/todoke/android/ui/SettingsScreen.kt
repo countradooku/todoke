@@ -1,6 +1,7 @@
 // Settings: who can see this device (contacts, everyone for five minutes
-// through a pairing code, or hidden), where received files go, how the
-// storage key is protected, and about.
+// through a pairing code, or hidden), where received files go, nearby
+// radios (direct Wi-Fi links, pointing), how the storage key is protected,
+// and about.
 
 package org.todoke.android.ui
 
@@ -80,6 +81,8 @@ fun SettingsScreen(state: UiState, modifier: Modifier, onHidden: (Boolean) -> Un
         Text(stringResource(R.string.receiving), style = MaterialTheme.typography.titleMedium)
         Text(exportTree?.let { stringResource(R.string.export_folder_set) } ?: stringResource(R.string.export_folder_none))
         OutlinedButton(onClick = { folder.launch(null) }) { Text(stringResource(R.string.choose_folder)) }
+        HorizontalDivider()
+        NearbySettings()
         HorizontalDivider()
         Text(stringResource(R.string.security), style = MaterialTheme.typography.titleMedium)
         val protection = when (state.status?.keyProtection) {

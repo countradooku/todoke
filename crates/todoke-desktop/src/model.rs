@@ -300,6 +300,10 @@ impl Model {
                 vec![Fetch::History, Fetch::Transfers]
             }
             Event::Missed { .. } => EVERYTHING.to_vec(),
+            // Pointing is for phones with UWB.
+            Event::PointTarget(_) | Event::RangingRequested(_) | Event::RangingStopped { .. } => {
+                Vec::new()
+            }
         }
     }
 

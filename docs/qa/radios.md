@@ -33,22 +33,47 @@ is. **Nothing below has been measured yet**: this file is the gate.
 | Android (Pixel) | Linux (MediaTek) | Wi-Fi Direct group | WPA2 | | | | | | | |
 | Android (Samsung) | Windows 11 (Intel) | Wi-Fi Direct group | WPA2 | | | | | | | |
 | Android (Samsung) | Windows 11 (Qualcomm) | Wi-Fi Direct group | WPA2 | | | | | | | |
-| Android 16 | Linux | LocalOnlyHotspot | WPA3 transition | | | | | | | Only if Android 16 lets the app set the SSID and passphrase |
-| Android 16 | Windows 11 | LocalOnlyHotspot | WPA3 transition | | | | | | | As above |
-| Android | Android | Wi-Fi Aware | NCS-SK-128 | | | | | | | P19 |
-| Android | iPhone | Wi-Fi Direct group | WPA2 | | | | | | | P20 |
+| Android (Pixel) | Android (Samsung) | Wi-Fi Aware | NCS-SK-256 or -128 | | | | | | | No shared Wi-Fi; both Android 13+ with Aware |
+| Android (Samsung) | Android (Pixel) | Wi-Fi Direct group | WPA2 | | | | | | | A device without Aware |
+| Android 16 QPR2 | Linux | LocalOnlyHotspot | WPA3 transition | | | | | | | Only builds with the flagged API |
+| Android 16 QPR2 | Windows 11 | LocalOnlyHotspot | WPA3 transition | | | | | | | As above |
+| Android | iPhone | Wi-Fi Direct group | WPA2 | | | | | | | P20 (iPhone joins as a network) |
+| Android 16 QPR2 | iPhone | LocalOnlyHotspot | WPA3 | | | | | | | P20 |
+| Android | iPhone | Wi-Fi Aware | NCS-SK-128 | | | | | | | P20, iOS 26 |
+| Windows 11 | Android | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | ADR 0019 |
+| Windows 11 | Linux | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | |
+| Windows 11 | Windows 11 | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | |
 | iPhone | Mac | AWDL | (system) | | | | | | | P20 |
 
-Desktops host nothing yet (ADR 0018), so PC to iPhone and PC to PC have no
-rows.
+Linux hosts nothing (ADR 0018), so Linux to Linux and Linux to iPhone have
+no rows.
+
+## Tap and point
+
+| Check | Devices | Result | Notes |
+| --- | --- | --- | --- |
+| Tap-to-pair: one shows its QR code, the other on the scan screen taps it | Two Android phones | | Pairs once; reading again after leaving the QR screen gets nothing |
+| Tap-to-pair with the phone locked | Two Android phones | | The tag must not answer (unlock required) |
+| Tap-to-pair while another HCE app claims the NDEF application | Two Android phones | | todoke is the preferred service while its QR shows |
+| Point to share: two contacts nearby, point at one | Three Android phones with UWB (play) | | The one pointed at comes first, within 20° |
+| Pointing stops: close the sheet, leave the app, 120 s | Two Android phones with UWB | | Both stop ranging |
+| Pointed at in the background | Two Android phones with UWB | | Refused: nothing ranges |
 
 ## Checks the lab settles
 
 Each one may change what a platform offers; record the answer and the date.
 
-- **Windows Wi-Fi Direct legacy access point:** on a client, `ipconfig
-  /all` and the routing table. If it offers no default gateway and no DNS
-  server, Windows may host Wi-Fi Direct groups (ADR 0018, residual risks).
+- **Windows Wi-Fi Direct legacy access point** (it hosts since ADR 0019):
+  on a client, `ipconfig /all` and the routing table (what its DHCP
+  offers); that the SSID is exactly the offer's; that Windows asks no one
+  before a legacy client joins; that nothing is routed (`route print`,
+  ICS off).
+- **Android Wi-Fi Aware hosting:** that `aware_data0` exists before any
+  data path (`adb shell ip link`), and that a publisher's data path comes
+  up on one of the interfaces the host named.
+- **Android 16 QPR2 LocalOnlyHotspot:** whether
+  `startLocalOnlyHotspotWithConfiguration` is present and keeps the name
+  and passphrase given.
 - **What Android hosts offer joiners:** a default route and DNS (expected:
   the host's own address for both). Confirm that the Linux joiner takes
   neither (`ip route`, `resolvectl status`) and what Windows takes.

@@ -13,6 +13,9 @@ fuzz_target!(|data: &[u8]| {
         && let Ok(control) = Control::decode(kind, body)
     {
         let encoded = control.encode().ok();
-        assert_eq!(encoded.as_deref().and_then(|bytes| bytes.get(2..)), Some(data));
+        assert_eq!(
+            encoded.as_deref().and_then(|bytes| bytes.get(2..)),
+            Some(data)
+        );
     }
 });

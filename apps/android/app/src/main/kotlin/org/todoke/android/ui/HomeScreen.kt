@@ -1,5 +1,6 @@
 // Home: the paired devices (with whether each is nearby and how it is
-// reached) and the way to send them files, plus pairing a new device.
+// reached) and the way to send them files, plus pairing a new device and,
+// where ultra-wideband works, pointing at a nearby one to send it files.
 
 package org.todoke.android.ui
 
@@ -21,7 +22,12 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.flow.MutableStateFlow
+import org.todoke.android.TodokeApplication
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,6 +47,9 @@ import org.todoke.ffi.Route
 @Composable
 fun HomeScreen(state: UiState, modifier: Modifier, onPair: () -> Unit, onSend: (String, List<Picked>) -> Unit) {
     val context = LocalContext.current
+    val pointing = (context.applicationContext as? TodokeApplication)?.pointing
+    val pointable by (pointing?.ready ?: remember { MutableStateFlow(false) }).collectAsStateWithLifecycle()
+    var pointingShown by rememberSaveable { mutableStateOf(false) }
     var target by rememberSaveable { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         val contact = target ?: return@rememberLauncherForActivityResult
@@ -53,6 +62,9 @@ fun HomeScreen(state: UiState, modifier: Modifier, onPair: () -> Unit, onSend: (
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(stringResource(R.string.devices), style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            if (pointing != null && pointable && state.contacts.isNotEmpty()) {
+                TextButton(onClick = { pointingShown = true }) { Text(stringResource(R.string.point)) }
+            }
             FilledTonalButton(onClick = onPair) { Text(stringResource(R.string.pair_device)) }
         }
         if (state.contacts.isEmpty()) {
@@ -66,6 +78,18 @@ fun HomeScreen(state: UiState, modifier: Modifier, onPair: () -> Unit, onSend: (
                 })
             }
         }
+    }
+    if (pointing != null && pointingShown) {
+        PointSheet(
+            pointing,
+            state.contacts,
+            onChoose = { contact ->
+                pointingShown = false
+                target = contact
+                picker.launch(arrayOf("*/*"))
+            },
+            onDismiss = { pointingShown = false },
+        )
     }
 }
 

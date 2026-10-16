@@ -1940,6 +1940,7 @@ dependencies = [
  "rustix",
  "todoke-core",
  "todoke-fs",
+ "todoke-proto",
  "todoke-sys-macos",
  "tokio",
  "zeroize",
