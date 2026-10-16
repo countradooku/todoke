@@ -1,0 +1,100 @@
+name: iOS app
+
+# The iOS app (apps/ios, P17; docs/adr/0017-ios.md): the unit tests (two
+# real cores in the app's sandbox, pairing over Bonjour) and the UI tests
+# (every flow against the scripted core, with the system accessibility
+# audit at the default and the largest text size) on a simulator, with the
+# development package; and a release build against the shipped package,
+# checked to carry no test hook. Nothing is signed or published.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  tests:
+    name: Unit and UI tests (simulator)
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the iOS targets
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      - name: Pack the development package
+        run: bash apps/ios/scripts/bindings.sh dev
+      - name: Pick a simulator
+        run: |
+          device=$(xcrun simctl list devices available -j \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin)["devices"]; print(next(x["udid"] for r,ds in sorted(d.items(), reverse=True) if "iOS" in r for x in ds if x["name"].startswith("iPhone")))')
+          echo "SIMULATOR=$device" >> "$GITHUB_ENV"
+      - name: Run the unit and UI tests
+        run: |
+          xcodebuild test -project apps/ios/Todoke.xcodeproj -scheme TodokeApp \
+            -destination "id=$SIMULATOR" -derivedDataPath apps/ios/build/dd \
+            -resultBundlePath "$RUNNER_TEMP/ios-tests.xcresult" \
+            -only-testing:TodokeTests -only-testing:TodokeUITests/FlowsTests
+      - name: Keep the results
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: todoke-ios-tests
+          path: ${{ runner.temp }}/ios-tests.xcresult
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Release build (shipped package)
+    runs-on: macos-26
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain and the iOS targets
+        run: |
+          rustup show
+          rustup target add aarch64-apple-ios aarch64-apple-ios-sim
+      - name: Build the BoltFFI CLI (pinned, from source)
+        run: bash scripts/ci/install-boltffi.sh
+      # Release package: sessions disabled (PROTOCOL §16), macOS slice too.
+      - name: Pack the shipped package
+        run: |
+          rustup target add x86_64-apple-darwin
+          bash apps/ios/scripts/bindings.sh release
+      - name: Build the app for release (unsigned)
+        run: |
+          xcodebuild build -project apps/ios/Todoke.xcodeproj -scheme TodokeApp -configuration Release \
+            -sdk iphoneos -derivedDataPath apps/ios/build/release CODE_SIGNING_ALLOWED=NO
+      # The scripted core and its launch argument exist only in debug
+      # builds; the privacy manifest ships.
+      - name: Check the release app
+        run: |
+          app=apps/ios/build/release/Build/Products/Release-iphoneos/todoke.app
+          test -f "$app/PrivacyInfo.xcprivacy" || { echo "no privacy manifest" >&2; exit 1; }
+          if strings "$app/todoke" | grep -q "ui-test-scenario"; then
+            echo "the release app carries the test hook" >&2
+            exit 1
+          fi
+          ls -l "$app/PlugIns"
