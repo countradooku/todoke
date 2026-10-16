@@ -297,8 +297,9 @@ async fn two_devices_pair_by_code_and_transfer_a_folder() -> AnyResult<()> {
     Ok(())
 }
 
-/// Back from the background with its port taken meanwhile, the listener
-/// reopens on another port, which discovery then advertises.
+/// Back from the background with its old port taken meanwhile by another
+/// listener (with the same options, so the clash is real everywhere), the
+/// listener reopens on a fresh port, which discovery then advertises.
 #[tokio::test]
 async fn the_listener_reopens_elsewhere_if_its_port_was_taken() -> AnyResult<()> {
     let scratch = Scratch::new("reopen")?;
@@ -313,13 +314,17 @@ async fn the_listener_reopens_elsewhere_if_its_port_was_taken() -> AnyResult<()>
     let before = port().await?.ok_or("no listener")?;
     let background = |background| core.request(Request::SetBackground { background });
     assert_eq!(background(true).await, Response::Done);
-    // The core loop lets go of the listener on its next turn.
+    // The core loop lets go of the listener on its next turn. The port is
+    // taken with the listener's own socket options (dual stack, address
+    // reuse), so the clash is the same on every platform.
     let squatter = {
         let mut taken = None;
         for _ in 0..50 {
-            taken = std::net::TcpListener::bind((std::net::Ipv6Addr::UNSPECIFIED, before))
-                .or_else(|_| std::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, before)))
-                .ok();
+            taken = todoke_transport::LanListener::bind(
+                before,
+                todoke_transport::LanPolicy::new().with_loopback(),
+            )
+            .ok();
             if taken.is_some() {
                 break;
             }
@@ -567,7 +572,8 @@ async fn hiding_withdraws_the_advertisement(bob: &Core, discovery: &Path) -> Any
 
 /// Puts `bob` in the background (§10.3) or back: in it, its listener is
 /// closed (nothing connects), it advertises nothing, and pairing is
-/// refused; back, the listener reopens on `port` and it advertises again.
+/// refused; back, the listener reopens (on a port other than `port`) and it
+/// advertises again.
 /// Returns the listener's port before going to the background.
 async fn background(
     bob: &Core,
@@ -613,8 +619,10 @@ async fn background(
             }
         ));
     } else {
-        assert_eq!(status().await?.port, port);
-        assert!(reachable(port.ok_or("no port")?));
+        // A fresh port, as at start.
+        let now = status().await?.port.ok_or("no listener")?;
+        assert_ne!(Some(now), port);
+        assert!(reachable(now));
         assert_eq!(records()?, 2);
         assert!(matches!(
             bob.request(Request::PairShowQr).await,

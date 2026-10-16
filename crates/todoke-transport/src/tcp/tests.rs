@@ -222,3 +222,27 @@ async fn vectored_writes_carry_every_slice() -> TestResult {
     assert_eq!(out, expected);
     Ok(())
 }
+
+/// A port another listener holds is refused, never shared: when another
+/// socket holds its IPv6 side only, binding it does not fall back to the
+/// free IPv4 side (where connections would reach us or it by address
+/// family).
+#[tokio::test]
+async fn a_taken_port_is_refused_not_shared() -> TestResult {
+    let other = Socket::new(Domain::IPV6, Type::STREAM, Some(Protocol::TCP))?;
+    other.set_only_v6(true)?;
+    other.bind(&SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)).into())?;
+    other.listen(1)?;
+    let port = other
+        .local_addr()?
+        .as_socket()
+        .ok_or("no socket address")?
+        .port();
+    let ours = LanListener::bind(port, LanPolicy::new().with_loopback());
+    assert_eq!(
+        ours.map(|listener| listener.port().ok())
+            .map_err(|error| error.kind()),
+        Err(io::ErrorKind::AddrInUse)
+    );
+    Ok(())
+}

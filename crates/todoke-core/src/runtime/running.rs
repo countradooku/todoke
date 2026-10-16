@@ -688,8 +688,8 @@ impl State {
     /// listeners there). In the background the listener is closed, nothing
     /// is advertised, relay presence stops, and pairing ends; open sessions
     /// and the reconnections that sends waiting for a contact need go on.
-    /// Back in the foreground the listener reopens on its port, or on a new
-    /// one (discovery then restarts with it) if that port was taken.
+    /// Back in the foreground the listener reopens as at start (by default
+    /// on a fresh port), and discovery restarts with its port.
     fn set_background(self: &Rc<Self>, background: bool) -> Response {
         if background {
             self.background.set(true);
@@ -698,10 +698,11 @@ impl State {
             drop(self.listener.borrow_mut().take());
         } else {
             if self.config.lan.enabled && self.listener.borrow().is_none() {
+                // As at start: the configured port (by default a fresh
+                // one), never the old one again by default, which another
+                // program may have taken meanwhile.
                 let was = self.lan_port.get();
-                let listener = LanListener::bind(was, self.policy)
-                    .or_else(|_| LanListener::bind(self.config.lan.port, self.policy));
-                let Ok(listener) = listener else {
+                let Ok(listener) = LanListener::bind(self.config.lan.port, self.policy) else {
                     return Response::error(ErrorCode::Internal, "the listener could not reopen");
                 };
                 let port = listener.port().ok();

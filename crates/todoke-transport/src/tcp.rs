@@ -147,11 +147,19 @@ impl LanListener {
     /// Listens on `port` (0 for any free port) on every IPv6 and IPv4
     /// address, or, if the system has no IPv6, on every IPv4 address.
     ///
+    /// A port in use is an error, never a reason to listen on IPv4 alone:
+    /// an IPv4-only listener leaves the port's IPv6 side free, and some
+    /// systems (macOS) let another socket bind it there, sharing the port.
+    ///
     /// # Errors
     ///
     /// The socket error. Must be called within a tokio runtime.
     pub fn bind(port: u16, policy: LanPolicy) -> io::Result<Self> {
-        let socket = dual_stack(port).or_else(|_| ipv4_only(port))?;
+        let socket = match dual_stack(port) {
+            Ok(socket) => socket,
+            Err(error) if error.kind() == io::ErrorKind::AddrInUse => return Err(error),
+            Err(_) => ipv4_only(port)?,
+        };
         socket.listen(BACKLOG)?;
         socket.set_nonblocking(true)?;
         let listener = TcpListener::from_std(socket.into())?;
