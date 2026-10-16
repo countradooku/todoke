@@ -608,3 +608,200 @@ impl State {
         moved
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::running::TransferRecord;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// A state on loopback (no LAN listener, no discovery); nothing is sent.
+    fn state(scratch: &std::path::Path) -> Result<Rc<State>, Box<dyn std::error::Error>> {
+        let mut config =
+            crate::config::CoreConfig::new(scratch.join("state"), scratch.join("downloads"));
+        config.lan.enabled = false;
+        config.lan.allow_loopback = true;
+        let key = crate::storage_key::KeyFile::new(scratch.join("storage.key"));
+        let (events, _) = tokio::sync::broadcast::channel(4);
+        Ok(State::open(config, &key, events)?)
+    }
+
+    /// The Ed25519 base point: a valid public key for a contact.
+    fn contact() -> Result<Ed25519PublicKey, Box<dyn std::error::Error>> {
+        let mut bytes = [0x66; 32];
+        bytes[0] = 0x58;
+        Ok(Ed25519PublicKey::from_bytes(&bytes)?)
+    }
+
+    /// Another valid key: this device's own.
+    fn other(state: &State) -> Ed25519PublicKey {
+        *state.identity.binding().device_public()
+    }
+
+    fn record(
+        peer: Ed25519PublicKey,
+        way: Way,
+        state: TransferState,
+        selection: Option<Vec<u32>>,
+    ) -> TransferRecord {
+        TransferRecord {
+            peer,
+            way,
+            state,
+            detail: None,
+            done: 0,
+            total: 1,
+            files: 1,
+            names: Vec::new(),
+            manifest_hash: Some([7; 32]),
+            receipt: None,
+            selection,
+        }
+    }
+
+    /// Kept consent is used once, only for the same contact and manifest,
+    /// and only until it expires.
+    #[tokio::test(flavor = "current_thread")]
+    async fn kept_consent_is_bound_and_used_once() -> TestResult {
+        let scratch = crate::profile::tests::Scratch::new("retained")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let state = state(&scratch.0)?;
+                let (alice, mallory) = (contact()?, other(&state));
+                let keep = |id: u8, until: Duration| {
+                    state.retained.borrow_mut().insert(
+                        [id; 16],
+                        Retained {
+                            peer: alice,
+                            manifest_hash: [7; 32],
+                            selection: vec![1, 3],
+                            until,
+                        },
+                    );
+                };
+                let later = state.mono() + Duration::from_secs(60);
+                keep(1, later);
+                assert_eq!(state.take_retained(&[1; 16], &mallory, &[7; 32]), None);
+                keep(1, later);
+                assert_eq!(state.take_retained(&[1; 16], &alice, &[8; 32]), None);
+                keep(1, later);
+                assert_eq!(
+                    state.take_retained(&[1; 16], &alice, &[7; 32]),
+                    Some(vec![1, 3])
+                );
+                assert_eq!(state.take_retained(&[1; 16], &alice, &[7; 32]), None);
+                keep(2, state.mono());
+                assert_eq!(state.take_retained(&[2; 16], &alice, &[7; 32]), None);
+                // Cancelling drops it.
+                keep(3, later);
+                state.forget_retained(&[3; 16]);
+                assert_eq!(state.take_retained(&[3; 16], &alice, &[7; 32]), None);
+                Ok(())
+            })
+            .await
+    }
+
+    /// Link setup waits for the receiver's decision: an incoming transfer
+    /// still awaiting it, or an outgoing one not yet accepted, does not
+    /// qualify; accepted ones (with this user's selection) do.
+    #[tokio::test(flavor = "current_thread")]
+    async fn only_accepted_transfers_qualify() -> TestResult {
+        let scratch = crate::profile::tests::Scratch::new("qualifies")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let state = state(&scratch.0)?;
+                let peer = contact()?;
+                let cases = [
+                    (Way::Incoming, TransferState::AwaitingDecision, None, false),
+                    (Way::Outgoing, TransferState::Offered, None, false),
+                    (Way::Incoming, TransferState::Accepted, None, false),
+                    (Way::Incoming, TransferState::Accepted, Some(vec![1]), true),
+                    (
+                        Way::Incoming,
+                        TransferState::Transferring,
+                        Some(vec![1]),
+                        true,
+                    ),
+                    (Way::Outgoing, TransferState::Accepted, None, true),
+                    (Way::Outgoing, TransferState::Received, None, false),
+                ];
+                for (way, transfer_state, selection, expected) in cases {
+                    state.transfers.borrow_mut().clear();
+                    state.remember(
+                        [1; 16],
+                        record(peer, way, transfer_state, selection.clone()),
+                    );
+                    assert_eq!(
+                        qualifies(&state, &peer),
+                        expected,
+                        "{way:?} {transfer_state:?} {selection:?}"
+                    );
+                    assert!(!qualifies(&state, &other(&state)), "another contact's");
+                }
+                // Never an unspecified address, which would listen
+                // everywhere.
+                assert!(!usable(&state, IpAddr::from([0, 0, 0, 0])));
+                assert!(!usable(&state, IpAddr::from([224, 0, 0, 1])));
+                assert!(usable(&state, IpAddr::from([192, 168, 49, 1])));
+                Ok(())
+            })
+            .await
+    }
+
+    /// The host accepts one connection for the offer: a stranger who
+    /// connects first takes it (and fails the handshake), the listener
+    /// closes, the move fails, and link setup with the contact pauses.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_host_accepts_one_connection() -> TestResult {
+        let scratch = crate::profile::tests::Scratch::new("one-accept")?;
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async move {
+                let state = state(&scratch.0)?;
+                let peer = contact()?;
+                let listener = LanListener::bind_direct(
+                    SocketAddr::from(([127, 0, 0, 1], 0)),
+                    state.lan_policy(),
+                )?;
+                let port = listener.port()?;
+                let slot = HostSlot::take(&state).ok_or("no slot")?;
+                assert!(HostSlot::take(&state).is_none(), "one hosted link");
+                let until = state.mono() + Duration::from_secs(5);
+                state.moving.borrow_mut().insert(peer, until);
+                let lease = Held(Some(LinkLease::new(
+                    IpAddr::from([127, 0, 0, 1]),
+                    None,
+                    0,
+                    (),
+                )));
+                let moving = tokio::task::spawn_local(Rc::clone(&state).move_to(
+                    peer,
+                    Move::Host {
+                        lease,
+                        listener,
+                        until,
+                        slot,
+                    },
+                ));
+                // A stranger connects first and says nothing useful.
+                let mut stranger = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
+                tokio::io::AsyncWriteExt::write_all(&mut stranger, &[0; 64]).await?;
+                drop(stranger);
+                tokio::time::timeout(Duration::from_secs(30), moving).await??;
+                assert!(state.backing_off(&peer));
+                assert!(!state.is_moving(&peer));
+                assert!(!state.hosting.get(), "the slot is released");
+                assert!(
+                    tokio::net::TcpStream::connect(("127.0.0.1", port))
+                        .await
+                        .is_err(),
+                    "the listener is closed"
+                );
+                Ok(())
+            })
+            .await
+    }
+}
