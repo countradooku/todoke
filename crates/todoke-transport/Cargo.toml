@@ -58,6 +58,10 @@ getrandom = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 todoke-sys-windows.workspace = true
 
+# TCP over Apple peer-to-peer Wi-Fi (AWDL) through Network.framework.
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+todoke-sys-macos.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 

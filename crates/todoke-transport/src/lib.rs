@@ -36,6 +36,8 @@ pub mod capabilities;
 pub mod link;
 #[cfg(not(target_family = "wasm"))]
 pub mod manager;
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+mod peer_to_peer;
 pub mod policy;
 #[cfg(not(target_family = "wasm"))]
 pub mod race;

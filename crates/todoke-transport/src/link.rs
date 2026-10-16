@@ -73,6 +73,14 @@ impl LinkInfo {
         self
     }
 
+    /// With the remote socket address only (a bridged link: the local end
+    /// is the platform's).
+    #[must_use]
+    pub const fn with_remote(mut self, remote: SocketAddr) -> Self {
+        self.remote = Some(remote);
+        self
+    }
+
     /// With an estimated round-trip latency (for TCP, the connection setup
     /// time: one round trip).
     #[must_use]
