@@ -34,6 +34,8 @@ final class CoreService {
     /// The core runs in its background mode.
     private var inBackground = false
     private let notifier = Notifications()
+    /// Direct Wi-Fi links (§10.2), set up only while the app is in use.
+    private let links = AppleLinks()
 
     /// The key needs the user: decided when the profile is created (when
     /// the device has a passcode then), and fixed with it (the key's access
@@ -80,11 +82,13 @@ final class CoreService {
             hidden: AppGroup.hidden, historyDays: 30, keyStorage: .platform)
         let gated = gated
         let notifier = notifier
+        let links = links
         let result: Result<Core, Error> = await Task.detached(priority: .userInitiated) {
             Result {
                 try Paths.prepare()
                 let core = gated ? try Core(withPresence: settings) : try Core(settings: settings)
                 core.setNotifier(notifier: notifier)
+                try core.setLinks(links: links)
                 return core
             }
         }.value
@@ -98,6 +102,7 @@ final class CoreService {
         case .success(let core):
             backend = CoreBackend(core: core)
             state = .ready
+            links.setAllowed(true)
         case .failure(TodokeError.disabled(let message)):
             state = .disabled(message)
         case .failure(TodokeError.locked):
@@ -115,6 +120,7 @@ final class CoreService {
         if UserDefaults.standard.string(forKey: "ui-test-scenario") != nil { return }
         #endif
         generation += 1
+        links.setAllowed(false)
         backend = nil
         inBackground = false
         switch state {
@@ -132,6 +138,9 @@ final class CoreService {
             return
         }
         inBackground = true
+        // A joined network goes 15 seconds after the app leaves the screen:
+        // no new link in the background.
+        links.setAllowed(false)
         Task {
             do {
                 try await backend.setBackground(true)
@@ -148,6 +157,7 @@ final class CoreService {
             inBackground = false
             do {
                 try await backend.setBackground(false)
+                links.setAllowed(true)
                 return
             } catch {
                 stop()

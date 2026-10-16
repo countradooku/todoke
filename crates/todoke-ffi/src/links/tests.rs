@@ -145,9 +145,12 @@ fn unusable_leases_are_released() -> Result<(), Box<dyn std::error::Error>> {
     let mut unscoped = lease(Some("192.168.49.1"));
     unscoped.local = "::".to_owned();
     unscoped.scopes = vec![5];
+    // No host address and no interface to find one on.
+    let mut nameless = lease(None);
+    nameless.interface = 0;
     for (lease, cancelled) in [
         (unscoped, false),
-        (lease(None), false),
+        (nameless, false),
         (lease(Some("192.168.49")), false),
         (bad_local, false),
         (lease(Some("192.168.49.1")), true),
@@ -256,5 +259,24 @@ fn an_aware_host_names_its_interfaces() -> Result<(), Box<dyn std::error::Error>
     let asked = app.asked.lock().map_err(|_| "poisoned")?.clone();
     assert_eq!(asked[0].service_info, [1; 8]);
     assert_eq!(asked[0].secret, [9; 32]);
+    Ok(())
+}
+
+/// Apple platforms name no router for a joined network: a join without a
+/// host address takes the joined interface's default gateway.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+#[test]
+fn a_join_without_a_host_takes_the_interfaces_gateway() -> Result<(), Box<dyn std::error::Error>> {
+    let Some((index, gateway)) = (1..64)
+        .find_map(|index| todoke_sys_macos::route::gateway(index).map(|gateway| (index, gateway)))
+    else {
+        // No default route on this machine: nothing to check.
+        return Ok(());
+    };
+    let mut joined = lease(None);
+    joined.interface = index;
+    let (app, _released) = fake(joined);
+    let lease = AppLinks::new(app).join(&join(proto::LinkKind::Hotspot))?;
+    assert_eq!(lease.host, Some(IpAddr::V4(gateway)));
     Ok(())
 }
