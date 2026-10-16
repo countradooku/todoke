@@ -37,13 +37,18 @@ is. **Nothing below has been measured yet**: this file is the gate.
 | Android (Samsung) | Android (Pixel) | Wi-Fi Direct group | WPA2 | | | | | | | A device without Aware |
 | Android 16 QPR2 | Linux | LocalOnlyHotspot | WPA3 transition | | | | | | | Only builds with the flagged API |
 | Android 16 QPR2 | Windows 11 | LocalOnlyHotspot | WPA3 transition | | | | | | | As above |
-| Android | iPhone | Wi-Fi Direct group | WPA2 | | | | | | | P20 (iPhone joins as a network) |
-| Android 16 QPR2 | iPhone | LocalOnlyHotspot | WPA3 | | | | | | | P20 |
-| Android | iPhone | Wi-Fi Aware | NCS-SK-128 | | | | | | | P20, iOS 26 |
+| Android | iPhone | Wi-Fi Direct group | WPA2 | | | | | | | iPhone joins with NEHotspotConfiguration (ADR 0020) |
+| Android 16 QPR2 | iPhone | LocalOnlyHotspot | WPA3 transition | | | | | | | |
+| Windows 11 | iPhone | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | |
 | Windows 11 | Android | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | ADR 0019 |
 | Windows 11 | Linux | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | |
 | Windows 11 | Windows 11 | Wi-Fi Direct group (legacy AP) | WPA2 | | | | | | | |
-| iPhone | Mac | AWDL | (system) | | | | | | | P20 |
+| iPhone | iPhone | AWDL | (system) | | | | | | | No shared network: discovery and TCP over peer-to-peer Wi-Fi (ADR 0020) |
+| iPhone | Mac | AWDL | (system) | | | | | | | As above; the Mac's daemon or app running |
+| Mac | Mac | AWDL | (system) | | | | | | | |
+
+Apple Wi-Fi Aware (iPhone to Android) is not built (ADR 0020), so it has
+no row.
 
 Linux hosts nothing (ADR 0018), so Linux to Linux and Linux to iPhone have
 no rows.
@@ -58,6 +63,8 @@ no rows.
 | Point to share: two contacts nearby, point at one | Three Android phones with UWB (play) | | The one pointed at comes first, within 20° |
 | Pointing stops: close the sheet, leave the app, 120 s | Two Android phones with UWB | | Both stop ranging |
 | Pointed at in the background | Two Android phones with UWB | | Refused: nothing ranges |
+| Point to share: two contacts nearby, point at one | Three iPhones (Nearby Interaction) | | The one pointed at comes first, within 20° |
+| An iPhone transfer over a joined network, then the app in the background | iPhone and Android | | The network goes after 15 s; the transfer resumes over the relay, asked once |
 
 ## Checks the lab settles
 
