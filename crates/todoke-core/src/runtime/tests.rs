@@ -14,6 +14,15 @@ use crate::storage_key::KeyFile;
 type AnyResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
+    device_with_links(root, name, discovery, None)
+}
+
+fn device_with_links(
+    root: &Path,
+    name: &str,
+    discovery: &Path,
+    links: Option<std::sync::Arc<dyn crate::link::LinkPlatform>>,
+) -> AnyResult<Core> {
     let state = root.join(name).join("state");
     let config = CoreConfig {
         state_dir: state.clone(),
@@ -29,10 +38,15 @@ fn device(root: &Path, name: &str, discovery: &Path) -> AnyResult<Core> {
         hidden: false,
         history_days: 30,
         key_storage: crate::config::KeyStorage::File,
+        direct_links: if links.is_some() {
+            crate::link::DirectLinks::Always
+        } else {
+            crate::link::DirectLinks::FromRelay
+        },
     };
     std::fs::create_dir_all(root.join(name))?;
     let key = KeyFile::new(root.join(name).join("storage.key"));
-    Ok(Core::start(config, Box::new(key))?)
+    Ok(Core::start_with_links(config, Box::new(key), links)?)
 }
 
 /// Waits for an event matching `pick`.
@@ -1130,4 +1144,291 @@ async fn a_tunnel_carries_only_what_it_was_opened_for() -> AnyResult<()> {
     assert!(answered(Forged::QrHello, RelayQr).await?);
     assert!(!answered(Forged::QrHello, RelayContact(contact)).await?);
     Ok(())
+}
+
+mod direct_link {
+    //! A session moving onto a direct link (§10.2), with a platform that
+    //! "brings links up" on loopback.
+
+    use std::net::{IpAddr, Ipv4Addr};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use super::*;
+    use crate::link::{
+        HostRequest, JoinRequest, LinkAbilities, LinkKind, LinkLease, LinkPlatform, LinkSecurity,
+    };
+
+    struct Teardown(Arc<AtomicUsize>);
+
+    impl Drop for Teardown {
+        fn drop(&mut self) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    /// Hosts a hotspot (`host`) or joins one; counts what it was asked.
+    struct Loopback {
+        host: bool,
+        /// Joining fails (the network cannot be joined).
+        fail_join: bool,
+        hosted: AtomicUsize,
+        joined: AtomicUsize,
+        torn: Arc<AtomicUsize>,
+    }
+
+    impl Loopback {
+        fn new(host: bool, torn: &Arc<AtomicUsize>) -> Arc<Self> {
+            Self::failing(host, false, torn)
+        }
+
+        fn failing(host: bool, fail_join: bool, torn: &Arc<AtomicUsize>) -> Arc<Self> {
+            Arc::new(Self {
+                host,
+                fail_join,
+                hosted: AtomicUsize::new(0),
+                joined: AtomicUsize::new(0),
+                torn: Arc::clone(torn),
+            })
+        }
+    }
+
+    const LOOPBACK: IpAddr = IpAddr::V4(Ipv4Addr::LOCALHOST);
+
+    /// The credentials have the hotspot shapes of §10.2.
+    fn shaped(kind: LinkKind, security: LinkSecurity, ssid: &str, secret: &[u8]) -> bool {
+        kind == LinkKind::Hotspot
+            && security == LinkSecurity::Wpa3
+            && ssid.starts_with("todoke-")
+            && ssid.len() == 23
+            && secret.len() == 63
+    }
+
+    impl LinkPlatform for Loopback {
+        fn abilities(&self) -> LinkAbilities {
+            if self.host {
+                LinkAbilities::new(&[LinkKind::Hotspot], &[], &[])
+            } else {
+                LinkAbilities::new(
+                    &[],
+                    &[LinkKind::Hotspot],
+                    &[LinkSecurity::Wpa3, LinkSecurity::Wpa2],
+                )
+            }
+        }
+
+        fn host(&self, request: &HostRequest) -> std::io::Result<LinkLease> {
+            if !shaped(
+                request.kind,
+                request.security,
+                &request.ssid,
+                &request.secret,
+            ) {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            self.hosted.fetch_add(1, Ordering::SeqCst);
+            Ok(LinkLease::new(
+                LOOPBACK,
+                None,
+                0,
+                Teardown(Arc::clone(&self.torn)),
+            ))
+        }
+
+        fn join(&self, request: &JoinRequest) -> std::io::Result<LinkLease> {
+            if !shaped(
+                request.kind,
+                request.security,
+                &request.ssid,
+                &request.secret,
+            ) {
+                return Err(std::io::ErrorKind::InvalidInput.into());
+            }
+            self.joined.fetch_add(1, Ordering::SeqCst);
+            if self.fail_join {
+                return Err(std::io::ErrorKind::TimedOut.into());
+            }
+            Ok(LinkLease::new(
+                LOOPBACK,
+                Some(LOOPBACK),
+                0,
+                Teardown(Arc::clone(&self.torn)),
+            ))
+        }
+    }
+
+    /// Bob sends a large file over the LAN; once Alice accepts, she hosts
+    /// a link, Bob joins it, both sessions close, and Bob connects over the
+    /// link: the transfer resumes there with Alice's consent kept (she is
+    /// asked once) and completes intact. Both links are torn down when the
+    /// devices stop.
+    #[tokio::test]
+    async fn a_transfer_moves_onto_a_direct_link() -> AnyResult<()> {
+        let scratch = Scratch::new("direct-link")?;
+        let discovery = scratch.0.join("discovery");
+        let torn = Arc::new(AtomicUsize::new(0));
+        let (alice_links, bob_links) = (Loopback::new(true, &torn), Loopback::new(false, &torn));
+        let alice = device_with_links(
+            &scratch.0,
+            "alice",
+            &discovery,
+            Some(Arc::clone(&alice_links) as Arc<dyn LinkPlatform>),
+        )?;
+        let bob = device_with_links(
+            &scratch.0,
+            "bob",
+            &discovery,
+            Some(Arc::clone(&bob_links) as Arc<dyn LinkPlatform>),
+        )?;
+        let alice_hex = device_hex(&alice).await?;
+        let mut alice_events = alice.subscribe();
+        let mut bob_events = bob.subscribe();
+        pair(&alice, &bob).await?;
+        wait_for(&mut alice_events, |event| {
+            matches!(event, Event::Paired { .. }).then_some(())
+        })
+        .await?;
+        // Large enough to be under way when the link comes up.
+        let source = scratch.0.join("to-send");
+        std::fs::create_dir_all(&source)?;
+        let content: Vec<u8> = (0..48 * 1024 * 1024_u32)
+            .map(|n| u8::try_from(n % 251).unwrap_or(0))
+            .collect();
+        std::fs::write(source.join("big.bin"), &content)?;
+        let Response::Offered { transfer, .. } = bob
+            .request(Request::Send {
+                contact: alice_hex[..12].to_owned(),
+                paths: vec![source.join("big.bin")],
+            })
+            .await
+        else {
+            return Err("not offered".into());
+        };
+        wait_for(&mut alice_events, |event| match event {
+            Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
+            _ => None,
+        })
+        .await?;
+        assert_eq!(
+            alice
+                .request(Request::Accept {
+                    transfer: transfer.clone(),
+                    files: None,
+                })
+                .await,
+            Response::Done
+        );
+        wait_for(&mut bob_events, |event| match event {
+            Event::Delivered { transfer: done } if *done == transfer => Some(()),
+            _ => None,
+        })
+        .await?;
+        // No second prompt on Alice's side after the move.
+        let mut prompts = 0;
+        while let Ok(event) = alice_events.try_recv() {
+            if matches!(&event, Event::OfferReceived(offer) if offer.transfer == transfer) {
+                prompts += 1;
+            }
+        }
+        assert_eq!(prompts, 0, "alice was asked again after the move");
+        assert_eq!(alice_links.hosted.load(Ordering::SeqCst), 1);
+        assert_eq!(bob_links.joined.load(Ordering::SeqCst), 1);
+        let Response::Contacts(contacts) = bob.request(Request::Contacts).await else {
+            return Err("contacts".into());
+        };
+        assert_eq!(
+            contacts.first().and_then(|contact| contact.route),
+            Some(crate::api::Route::Direct)
+        );
+        assert_eq!(
+            std::fs::read(scratch.0.join("alice").join("downloads").join("big.bin"))?,
+            content
+        );
+        // Stopping the devices ends the sessions on the link: both links
+        // are torn down.
+        drop((alice, bob));
+        assert_eq!(torn.load(Ordering::SeqCst), 2);
+        Ok(())
+    }
+
+    /// Joining fails: the joiner answers `failed`, the host tears its link
+    /// down at once, and the transfer completes in the session it was in.
+    #[tokio::test]
+    async fn a_failed_join_keeps_the_session() -> AnyResult<()> {
+        let scratch = Scratch::new("direct-link-failed")?;
+        let discovery = scratch.0.join("discovery");
+        let torn = Arc::new(AtomicUsize::new(0));
+        let alice_links = Loopback::new(true, &torn);
+        let bob_links = Loopback::failing(false, true, &torn);
+        let alice = device_with_links(
+            &scratch.0,
+            "alice",
+            &discovery,
+            Some(Arc::clone(&alice_links) as Arc<dyn LinkPlatform>),
+        )?;
+        let bob = device_with_links(
+            &scratch.0,
+            "bob",
+            &discovery,
+            Some(Arc::clone(&bob_links) as Arc<dyn LinkPlatform>),
+        )?;
+        let alice_hex = device_hex(&alice).await?;
+        let mut alice_events = alice.subscribe();
+        let mut bob_events = bob.subscribe();
+        pair(&alice, &bob).await?;
+        wait_for(&mut alice_events, |event| {
+            matches!(event, Event::Paired { .. }).then_some(())
+        })
+        .await?;
+        let source = scratch.0.join("to-send");
+        std::fs::create_dir_all(&source)?;
+        let content: Vec<u8> = (0..16 * 1024 * 1024_u32)
+            .map(|n| u8::try_from(n % 241).unwrap_or(0))
+            .collect();
+        std::fs::write(source.join("big.bin"), &content)?;
+        let Response::Offered { transfer, .. } = bob
+            .request(Request::Send {
+                contact: alice_hex[..12].to_owned(),
+                paths: vec![source.join("big.bin")],
+            })
+            .await
+        else {
+            return Err("not offered".into());
+        };
+        wait_for(&mut alice_events, |event| match event {
+            Event::OfferReceived(offer) if offer.transfer == transfer => Some(()),
+            _ => None,
+        })
+        .await?;
+        assert_eq!(
+            alice
+                .request(Request::Accept {
+                    transfer: transfer.clone(),
+                    files: None,
+                })
+                .await,
+            Response::Done
+        );
+        wait_for(&mut bob_events, |event| match event {
+            Event::Delivered { transfer: done } if *done == transfer => Some(()),
+            _ => None,
+        })
+        .await?;
+        assert_eq!(bob_links.joined.load(Ordering::SeqCst), 1);
+        // The host's link went with the failed answer; nothing moved.
+        assert_eq!(alice_links.hosted.load(Ordering::SeqCst), 1);
+        assert_eq!(torn.load(Ordering::SeqCst), 1);
+        let Response::Contacts(contacts) = bob.request(Request::Contacts).await else {
+            return Err("contacts".into());
+        };
+        assert_eq!(
+            contacts.first().and_then(|contact| contact.route),
+            Some(crate::api::Route::Lan)
+        );
+        assert_eq!(
+            std::fs::read(scratch.0.join("alice").join("downloads").join("big.bin"))?,
+            content
+        );
+        Ok(())
+    }
 }

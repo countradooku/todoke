@@ -18,6 +18,7 @@ pub mod config;
 mod discovery;
 #[cfg(not(target_family = "wasm"))]
 pub mod history;
+pub mod link;
 pub mod profile;
 #[cfg(not(target_family = "wasm"))]
 pub mod runtime;

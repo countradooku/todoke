@@ -115,9 +115,23 @@ impl Core {
         config: CoreConfig,
         key_source: Box<dyn StorageKeySource + Send>,
     ) -> Result<Self, StartError> {
+        Self::start_with_links(config, key_source, None)
+    }
+
+    /// As [`Self::start`], with a platform that can set up direct Wi-Fi
+    /// links (§10.2) when `config.direct_links` allows it.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::start`].
+    pub fn start_with_links(
+        config: CoreConfig,
+        key_source: Box<dyn StorageKeySource + Send>,
+        links: Option<std::sync::Arc<dyn crate::link::LinkPlatform>>,
+    ) -> Result<Self, StartError> {
         #[cfg(not(feature = "unaudited-dev"))]
         {
-            let _ = (config, key_source);
+            let _ = (config, key_source, links);
             Err(StartError::Disabled)
         }
         #[cfg(feature = "unaudited-dev")]
@@ -141,6 +155,9 @@ impl Core {
                     local.block_on(&runtime, async move {
                         match running::State::open(config, &*key_source, sender) {
                             Ok(state) => {
+                                if let Some(links) = links {
+                                    let _ = state.links.set(links);
+                                }
                                 let _ = ready.send(Ok(()));
                                 running::run(state, receiver, stopped).await;
                             }
@@ -194,6 +211,8 @@ impl Core {
     }
 }
 
+#[cfg(feature = "unaudited-dev")]
+mod link;
 #[cfg(feature = "unaudited-dev")]
 mod relay;
 #[cfg(feature = "unaudited-dev")]

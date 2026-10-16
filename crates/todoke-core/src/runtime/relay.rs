@@ -266,7 +266,9 @@ impl State {
                 let waiting = queues
                     .get(peer)
                     .is_some_and(|queue| !queue.offers.is_empty() || !queue.prepared.is_empty());
-                if waiting && directory.contact(peer, mono).is_none() {
+                if self.is_moving(peer) {
+                    // Its session is moving onto a direct link.
+                } else if waiting && directory.contact(peer, mono).is_none() {
                     urgent.push((*peer, token, WAIT, None));
                 } else if !self.hidden.get()
                     && !self.background.get()

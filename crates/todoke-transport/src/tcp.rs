@@ -12,7 +12,7 @@ use core::pin::Pin;
 use core::task::{Context, Poll};
 use core::time::Duration;
 use std::io;
-use std::net::{Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 
 use futures_io::{AsyncRead, AsyncWrite};
 use socket2::{Domain, Protocol, Socket, Type};
@@ -37,10 +37,10 @@ pub struct TcpLink {
 }
 
 impl TcpLink {
-    fn new(stream: TcpStream, latency: Option<Duration>) -> io::Result<Self> {
+    fn new(stream: TcpStream, latency: Option<Duration>, kind: LinkKind) -> io::Result<Self> {
         stream.set_nodelay(true)?;
         let mut info =
-            LinkInfo::new(LinkKind::Lan).with_addresses(stream.local_addr()?, stream.peer_addr()?);
+            LinkInfo::new(kind).with_addresses(stream.local_addr()?, stream.peer_addr()?);
         if let Some(latency) = latency {
             info = info.with_latency(latency);
         }
@@ -132,7 +132,45 @@ impl Connector for TcpConnector {
         let stream = tokio::time::timeout(CONNECT_TIMEOUT, TcpStream::connect(address))
             .await
             .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
-        TcpLink::new(stream, Some(started.elapsed()))
+        TcpLink::new(stream, Some(started.elapsed()), LinkKind::Lan)
+    }
+}
+
+impl TcpConnector {
+    /// Opens a [`LinkKind::Direct`] link to `host` from `local`, this
+    /// device's address on a direct link (§10.2): the socket is bound to
+    /// that address first, so the connection leaves through that link.
+    /// `host` is the address the link reported for the host; the policy
+    /// still checks it.
+    ///
+    /// # Errors
+    ///
+    /// The policy's refusal (`PermissionDenied`), a socket error, or
+    /// `TimedOut`.
+    pub async fn connect_direct(&self, local: IpAddr, host: SocketAddr) -> io::Result<TcpLink> {
+        self.policy
+            .check_peer(host)
+            .map_err(|refusal| io::Error::new(io::ErrorKind::PermissionDenied, refusal))?;
+        let from = SocketAddr::new(local, 0);
+        let socket = match host {
+            SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
+            SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
+        };
+        let from = match (from, host) {
+            // A link-local IPv6 source carries the host's scope (its
+            // interface).
+            (SocketAddr::V6(mut v6), SocketAddr::V6(to)) => {
+                v6.set_scope_id(to.scope_id());
+                SocketAddr::V6(v6)
+            }
+            (from, _) => from,
+        };
+        socket.bind(from)?;
+        let started = tokio::time::Instant::now();
+        let stream = tokio::time::timeout(CONNECT_TIMEOUT, socket.connect(host))
+            .await
+            .map_err(|_| io::Error::from(io::ErrorKind::TimedOut))??;
+        TcpLink::new(stream, Some(started.elapsed()), LinkKind::Direct)
     }
 }
 
@@ -141,6 +179,7 @@ impl Connector for TcpConnector {
 pub struct LanListener {
     listener: TcpListener,
     policy: LanPolicy,
+    kind: LinkKind,
 }
 
 impl LanListener {
@@ -164,7 +203,40 @@ impl LanListener {
         socket.listen(BACKLOG)?;
         socket.set_nonblocking(true)?;
         let listener = TcpListener::from_std(socket.into())?;
-        Ok(Self { listener, policy })
+        Ok(Self {
+            listener,
+            policy,
+            kind: LinkKind::Lan,
+        })
+    }
+
+    /// Listens on `local`, this device's address on a direct link (§10.2),
+    /// on a free port: only connections that arrive on that link's address
+    /// are accepted, as [`LinkKind::Direct`] links.
+    ///
+    /// # Errors
+    ///
+    /// The socket error. Must be called within a tokio runtime.
+    pub fn bind_direct(local: SocketAddr, policy: LanPolicy) -> io::Result<Self> {
+        let domain = Domain::for_address(local);
+        let socket = Socket::new(domain, Type::STREAM, Some(Protocol::TCP))?;
+        if local.is_ipv6() {
+            socket.set_only_v6(true)?;
+        }
+        claim_port(&socket)?;
+        // The address as given (a link-local IPv6 one keeps its scope), on
+        // a free port.
+        let mut at = local;
+        at.set_port(0);
+        socket.bind(&at.into())?;
+        socket.listen(BACKLOG)?;
+        socket.set_nonblocking(true)?;
+        let listener = TcpListener::from_std(socket.into())?;
+        Ok(Self {
+            listener,
+            policy,
+            kind: LinkKind::Direct,
+        })
     }
 
     /// The port it listens on, for the mDNS SRV record.
@@ -193,7 +265,7 @@ impl LanListener {
             // A connection reset before it was set up (some systems then fail
             // `TCP_NODELAY` or the address queries) is that connection's
             // problem, not the listener's: drop it and keep accepting.
-            if let Ok(link) = TcpLink::new(stream, None) {
+            if let Ok(link) = TcpLink::new(stream, None, self.kind) {
                 return Ok(link);
             }
         }

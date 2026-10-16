@@ -168,6 +168,8 @@ pub enum Route {
     Lan,
     /// Through a relay (§10): end-to-end encrypted, forwarded by it.
     Relay,
+    /// Over a direct Wi-Fi link the two devices set up (§10.2).
+    Direct,
 }
 
 /// An offer this device received.

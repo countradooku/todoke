@@ -261,3 +261,42 @@ async fn nobody_binds_beside_a_listener() -> TestResult {
     assert!(other.is_err(), "{other:?}");
     Ok(())
 }
+
+/// A direct link (§10.2): the host listens on its address on the link
+/// only, the joiner connects from its own, and both ends are `Direct`
+/// links (preferred over the LAN), the joiner's leaving from the given
+/// address. The policy still decides where the joiner may connect.
+#[tokio::test]
+async fn direct_links_listen_and_connect_on_the_link_address() -> TestResult {
+    let policy = LanPolicy::new().with_loopback();
+    let host = LanListener::bind_direct((Ipv4Addr::LOCALHOST, 0).into(), policy)?;
+    let port = host.port()?;
+    let accepting = tokio::spawn(async move { host.accept().await });
+    let joiner = TcpConnector::new(policy)
+        .connect_direct(
+            Ipv4Addr::LOCALHOST.into(),
+            (Ipv4Addr::LOCALHOST, port).into(),
+        )
+        .await?;
+    let accepted = accepting.await??;
+    assert_eq!(joiner.info().kind(), LinkKind::Direct);
+    assert_eq!(accepted.info().kind(), LinkKind::Direct);
+    assert_eq!(
+        joiner.info().local().map(|address| address.ip()),
+        Some(Ipv4Addr::LOCALHOST.into())
+    );
+    assert!(LinkKind::Direct.rank() > LinkKind::Lan.rank());
+    // Without loopback in the policy, the same host address is refused
+    // before any packet.
+    let refused = TcpConnector::new(LanPolicy::new())
+        .connect_direct(
+            Ipv4Addr::LOCALHOST.into(),
+            (Ipv4Addr::LOCALHOST, port).into(),
+        )
+        .await;
+    assert_eq!(
+        refused.map(|_| ()).map_err(|error| error.kind()),
+        Err(io::ErrorKind::PermissionDenied)
+    );
+    Ok(())
+}
