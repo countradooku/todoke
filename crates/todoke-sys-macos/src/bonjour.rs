@@ -13,9 +13,12 @@
 //! waits on the shared connection's socket and processes replies, and the
 //! callbacks, called only from inside that processing on that thread, reach
 //! the thread's state through the context pointer. Commands come in and
-//! findings go out through channels. Nothing here checks what it finds:
-//! callers pass it through `todoke_discovery`'s checks like any mDNS
-//! answer. Nothing logs.
+//! findings go out through channels. Everything stays in `local.` and on
+//! multicast: an answer naming a host outside `.local.` is dropped before
+//! any lookup (a unicast query for a name a stranger chose would leave the
+//! network). Beyond the shapes that bound its own work (§9 labels, one
+//! `v1=` TXT string), nothing here checks what it finds: callers pass it
+//! through `todoke_discovery`'s checks like any mDNS answer. Nothing logs.
 
 #![allow(
     unsafe_code,
@@ -31,6 +34,8 @@ use std::thread::JoinHandle;
 
 /// The service type (PROTOCOL §9).
 const SERVICE: &CStr = c"_todoke._tcp";
+/// The only domain browsed and registered in: never a wide-area one.
+const DOMAIN: &CStr = c"local.";
 /// How long the thread waits on the socket before looking at commands.
 const POLL_MS: c_int = 200;
 /// Findings queued for the caller; more are dropped.
@@ -39,6 +44,10 @@ const QUEUE: usize = 256;
 const TTL: u32 = 120;
 /// Instances resolved at once; more are ignored until some go away.
 const RESOLVING: usize = 64;
+/// How long an instance may stay unresolved before its slot is freed.
+const UNRESOLVED_MAX: std::time::Duration = std::time::Duration::from_secs(30);
+/// Interfaces tracked per instance.
+const INTERFACES: usize = 8;
 
 type DnsServiceRef = *mut c_void;
 type DnsRecordRef = *mut c_void;
@@ -50,6 +59,7 @@ const FLAG_MORE_COMING: Flags = 0x1;
 const FLAG_ADD: Flags = 0x2;
 const FLAG_NO_AUTO_RENAME: Flags = 0x8;
 const FLAG_UNIQUE: Flags = 0x20;
+const FLAG_FORCE_MULTICAST: Flags = 0x400;
 const FLAG_SHARE_CONNECTION: Flags = 0x4000;
 const INTERFACE_ANY: u32 = 0;
 const INTERFACE_LOCAL_ONLY: u32 = u32::MAX;
@@ -61,6 +71,9 @@ const CLASS_IN: u16 = 1;
 const AF_INET: u8 = 2;
 const AF_INET6: u8 = 30;
 const POLLIN: i16 = 0x1;
+const POLLERR: i16 = 0x8;
+const POLLHUP: i16 = 0x10;
+const POLLNVAL: i16 = 0x20;
 
 type RegisterReply = extern "C" fn(
     DnsServiceRef,
@@ -287,6 +300,14 @@ impl Bonjour {
     pub fn try_next(&self) -> Option<Found> {
         self.found.try_recv().ok()
     }
+
+    /// Whether the thread stopped (mDNSResponder's connection broke, say):
+    /// nothing is advertised or found any more, and a new `Bonjour` is
+    /// needed.
+    #[must_use]
+    pub fn stopped(&self) -> bool {
+        self.thread.as_ref().is_none_or(JoinHandle::is_finished)
+    }
 }
 
 impl Drop for Bonjour {
@@ -305,12 +326,17 @@ struct Advertised {
     instance: Instance,
     port: u16,
     addresses: Vec<Address>,
-    service: DnsServiceRef,
+    /// One registration per interface with an address.
+    services: Vec<DnsServiceRef>,
     records: Vec<DnsRecordRef>,
 }
 
 /// An instance being resolved, then its host name's addresses gathered.
 struct Pending {
+    /// The interfaces it was seen on; it goes when none is left.
+    interfaces: Vec<u32>,
+    /// When it was first seen.
+    since: std::time::Instant,
     resolve: DnsServiceRef,
     lookup: Option<DnsServiceRef>,
     port: u16,
@@ -341,37 +367,44 @@ fn run(
         let _ = ready.send(Err(io::Error::other("mDNSResponder is unavailable")));
         return;
     }
-    let mut state = Box::new(State {
+    let interface = if local_only {
+        INTERFACE_LOCAL_ONLY
+    } else {
+        INTERFACE_ANY
+    };
+    // Owned through this pointer until the end: the callbacks reach it
+    // through it, and so does this loop, between callbacks only (never
+    // through a reference held across `DNSServiceProcessResult`).
+    let context: *mut State = Box::into_raw(Box::new(State {
         connection,
-        interface: if local_only {
-            INTERFACE_LOCAL_ONLY
-        } else {
-            INTERFACE_ANY
-        },
+        interface,
         outbox: outbox.clone(),
         advertised: Vec::new(),
         pending: BTreeMap::new(),
-    });
-    let context: *mut State = &raw mut *state;
+    }));
     let mut browse = connection;
     // SAFETY: `browse` starts as the shared connection, as
     // kDNSServiceFlagsShareConnection requires; the strings are
-    // NUL-terminated literals; `context` is the boxed state, which outlives
-    // every ref (they are released below, before it is dropped).
+    // NUL-terminated literals; `context` is the state, which outlives
+    // every ref (they are released below, before it is freed).
     let browsing = unsafe {
         DNSServiceBrowse(
             &raw mut browse,
             FLAG_SHARE_CONNECTION,
-            state.interface,
+            interface,
             SERVICE.as_ptr(),
-            std::ptr::null(),
+            DOMAIN.as_ptr(),
             on_browse,
             context.cast(),
         )
     };
     if browsing != NO_ERROR {
-        // SAFETY: the connection is ours and no longer used.
-        unsafe { DNSServiceRefDeallocate(connection) };
+        // SAFETY: the connection is ours and no longer used; `context`
+        // came from `Box::into_raw` and no callback can run any more.
+        unsafe {
+            DNSServiceRefDeallocate(connection);
+            drop(Box::from_raw(context));
+        }
         let _ = ready.send(Err(io::Error::other("Bonjour browsing failed")));
         return;
     }
@@ -384,9 +417,19 @@ fn run(
                 instances,
                 port,
                 addresses,
-            }) => publish(&mut state, &instances, port, &addresses),
+            }) => {
+                // SAFETY: no callback runs outside `DNSServiceProcessResult`
+                // below, so this is the only reference to the state now.
+                let state = unsafe { &mut *context };
+                publish(state, &instances, port, &addresses);
+            }
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => break,
+        }
+        {
+            // SAFETY: as above, between callbacks.
+            let state = unsafe { &mut *context };
+            expire(state);
         }
         let mut poll_fd = PollFd {
             fd,
@@ -395,14 +438,25 @@ fn run(
         };
         // SAFETY: one valid pollfd, waited on for at most POLL_MS.
         let ready_fds = unsafe { poll(&raw mut poll_fd, 1, POLL_MS) };
-        if ready_fds > 0 && poll_fd.revents & POLLIN != 0 {
-            // SAFETY: the connection is valid; replies run the callbacks
-            // here, on this thread, with the context set above.
-            if unsafe { DNSServiceProcessResult(connection) } != NO_ERROR {
+        if ready_fds > 0 {
+            if poll_fd.revents & (POLLERR | POLLHUP | POLLNVAL) != 0 {
+                // mDNSResponder's end closed: this connection is done (the
+                // owner sees `stopped` and starts another).
+                break;
+            }
+            if poll_fd.revents & POLLIN != 0
+                // SAFETY: the connection is valid; replies run the
+                // callbacks here, on this thread, with the context set
+                // above.
+                && unsafe { DNSServiceProcessResult(connection) } != NO_ERROR
+            {
                 break;
             }
         }
     }
+    // SAFETY: from `Box::into_raw` above; no callback runs outside
+    // `DNSServiceProcessResult`, so the state is ours alone again.
+    let mut state = unsafe { Box::from_raw(context) };
     for advertised in std::mem::take(&mut state.advertised) {
         withdraw(&state, advertised);
     }
@@ -410,10 +464,31 @@ fn run(
         release(pending);
     }
     // SAFETY: the browse ref and then the connection are ours; deallocating
-    // the connection releases every ref still sharing it.
+    // the connection releases every ref still sharing it. No callback runs
+    // after this, so the state may go.
     unsafe {
         DNSServiceRefDeallocate(browse);
         DNSServiceRefDeallocate(connection);
+    }
+    drop(state);
+}
+
+/// Frees the slots of instances that did not resolve in time (or were
+/// dropped for their shape): mDNSResponder will not report them again
+/// until they go and come back.
+fn expire(state: &mut State) {
+    let unresolved: Vec<String> = state
+        .pending
+        .iter()
+        .filter(|(_, pending)| {
+            pending.addresses.is_empty() && pending.since.elapsed() > UNRESOLVED_MAX
+        })
+        .map(|(name, _)| name.clone())
+        .collect();
+    for name in unresolved {
+        if let Some(pending) = state.pending.remove(&name) {
+            release(pending);
+        }
     }
 }
 
@@ -455,6 +530,22 @@ fn advertise(
     let label = CString::new(instance.label.as_str()).ok()?;
     let host = CString::new(format!("{}.local.", instance.label)).ok()?;
     let txt = txt_record(&instance.txt_value)?;
+    // The interfaces the instance goes on: those with an allowed address
+    // (never all of them), or this device alone in tests.
+    let mut interfaces: Vec<u32> = if state.interface == INTERFACE_LOCAL_ONLY {
+        vec![INTERFACE_LOCAL_ONLY]
+    } else {
+        addresses
+            .iter()
+            .map(|address| address.interface)
+            .filter(|&interface| interface != INTERFACE_ANY)
+            .collect()
+    };
+    interfaces.sort_unstable();
+    interfaces.dedup();
+    if interfaces.is_empty() {
+        return None;
+    }
     let mut records = Vec::new();
     for address in addresses {
         let (rrtype, rdata) = match address.ip {
@@ -466,6 +557,9 @@ fn advertise(
         } else {
             address.interface
         };
+        if interface == INTERFACE_ANY {
+            continue;
+        }
         let mut record: DnsRecordRef = std::ptr::null_mut();
         // SAFETY: the shared connection is valid; `host` and `rdata` are
         // valid for the call (dns_sd copies them); `rdata`'s length fits
@@ -491,27 +585,33 @@ fn advertise(
             records.push(record);
         }
     }
-    let mut service = state.connection;
-    // SAFETY: `service` starts as the shared connection; the strings and
-    // the TXT bytes are valid for the call (dns_sd copies them); the TXT
-    // length fits u16 (checked when it was built).
-    let registered = unsafe {
-        DNSServiceRegister(
-            &raw mut service,
-            FLAG_SHARE_CONNECTION | FLAG_NO_AUTO_RENAME,
-            state.interface,
-            label.as_ptr(),
-            SERVICE.as_ptr(),
-            std::ptr::null(),
-            host.as_ptr(),
-            port.to_be(),
-            u16::try_from(txt.len()).unwrap_or(0),
-            txt.as_ptr().cast(),
-            Some(on_register),
-            std::ptr::null_mut(),
-        )
-    };
-    if registered != NO_ERROR {
+    let mut services = Vec::new();
+    for interface in interfaces {
+        let mut service = state.connection;
+        // SAFETY: `service` starts as the shared connection; the strings
+        // and the TXT bytes are valid for the call (dns_sd copies them);
+        // the TXT length fits u16 (checked when it was built).
+        let registered = unsafe {
+            DNSServiceRegister(
+                &raw mut service,
+                FLAG_SHARE_CONNECTION | FLAG_NO_AUTO_RENAME,
+                interface,
+                label.as_ptr(),
+                SERVICE.as_ptr(),
+                DOMAIN.as_ptr(),
+                host.as_ptr(),
+                port.to_be(),
+                u16::try_from(txt.len()).unwrap_or(0),
+                txt.as_ptr().cast(),
+                Some(on_register),
+                std::ptr::null_mut(),
+            )
+        };
+        if registered == NO_ERROR {
+            services.push(service);
+        }
+    }
+    if services.is_empty() {
         for record in records {
             // SAFETY: each record was added on this connection.
             unsafe { DNSServiceRemoveRecord(state.connection, record, 0) };
@@ -522,16 +622,18 @@ fn advertise(
         instance: instance.clone(),
         port,
         addresses: addresses.to_vec(),
-        service,
+        services,
         records,
     })
 }
 
 fn withdraw(state: &State, advertised: Advertised) {
-    // SAFETY: the service ref and the records belong to this connection
+    // SAFETY: the service refs and the records belong to this connection
     // and are released once.
     unsafe {
-        DNSServiceRefDeallocate(advertised.service);
+        for service in advertised.services {
+            DNSServiceRefDeallocate(service);
+        }
         for record in advertised.records {
             DNSServiceRemoveRecord(state.connection, record, 0);
         }
@@ -665,14 +767,31 @@ extern "C" fn on_browse(
         return;
     }
     if flags & FLAG_ADD == 0 {
-        if let Some(pending) = state.pending.remove(&instance) {
-            release(pending);
+        // Gone from one interface; reported gone once it is on none.
+        let gone = state.pending.get_mut(&instance).is_none_or(|pending| {
+            pending.interfaces.retain(|&known| known != interface);
+            pending.interfaces.is_empty()
+        });
+        if gone {
+            if let Some(pending) = state.pending.remove(&instance) {
+                release(pending);
+            }
+            let _ = state.outbox.try_send(Found::Removed { name: instance });
         }
-        let _ = state.outbox.try_send(Found::Removed { name: instance });
         flush(state, flags);
         return;
     }
-    if state.pending.contains_key(&instance) || state.pending.len() >= RESOLVING {
+    if let Some(pending) = state.pending.get_mut(&instance) {
+        if !pending.interfaces.contains(&interface) && pending.interfaces.len() < INTERFACES {
+            pending.interfaces.push(interface);
+        }
+        flush(state, flags);
+        return;
+    }
+    // Only §9 labels in `local.` take one of the bounded slots.
+    let local = text(domain).is_some_and(|domain| domain.eq_ignore_ascii_case("local."));
+    if !local || !is_label(&instance) || state.pending.len() >= RESOLVING {
+        flush(state, flags);
         return;
     }
     let mut resolve = state.connection;
@@ -695,6 +814,8 @@ extern "C" fn on_browse(
         state.pending.insert(
             instance,
             Pending {
+                interfaces: vec![interface],
+                since: std::time::Instant::now(),
                 resolve,
                 lookup: None,
                 port: 0,
@@ -746,7 +867,12 @@ extern "C" fn on_resolve(
     let Some(instance) = text(fullname).and_then(|full| instance_name(&full)) else {
         return;
     };
-    if error != NO_ERROR || host.is_null() {
+    if error != NO_ERROR {
+        return;
+    }
+    // A host outside `.local.` would be looked up by unicast DNS, a query
+    // for a name a stranger chose: dropped (the slot ages out).
+    if !text(host).is_some_and(|host| is_local_host(&host)) {
         return;
     }
     let record = if txt.is_null() {
@@ -755,7 +881,10 @@ extern "C" fn on_resolve(
         // SAFETY: dns_sd passes `txt_len` readable bytes for the call.
         unsafe { std::slice::from_raw_parts(txt, usize::from(txt_len)) }
     };
-    let Some(strings) = txt_strings(record) else {
+    // §9: exactly one `v1=` string; anything else is no todoke record.
+    let Some(strings) = txt_strings(record)
+        .filter(|strings| matches!(strings.as_slice(), [one] if one.starts_with(b"v1=")))
+    else {
         return;
     };
     let connection = state.connection;
@@ -775,7 +904,7 @@ extern "C" fn on_resolve(
     let looking = unsafe {
         DNSServiceGetAddrInfo(
             &raw mut lookup,
-            FLAG_SHARE_CONNECTION,
+            FLAG_SHARE_CONNECTION | FLAG_FORCE_MULTICAST,
             interface,
             PROTOCOL_IPV4 | PROTOCOL_IPV6,
             host,
@@ -830,6 +959,25 @@ extern "C" fn on_address(
     flush(state, flags);
 }
 
+/// Whether `name` has the shape of a §9 instance label: 16 lowercase hex
+/// characters.
+fn is_label(name: &str) -> bool {
+    name.len() == 16
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+/// Whether `host` is a multicast DNS name: one label under `local.` (as
+/// every todoke host name is), compared without case.
+fn is_local_host(host: &str) -> bool {
+    let host = host.strip_suffix('.').unwrap_or(host);
+    host.len() > ".local".len()
+        && host
+            .get(host.len() - ".local".len()..)
+            .is_some_and(|tail| tail.eq_ignore_ascii_case(".local"))
+}
+
 /// The instance part of a full service name (`<instance>._todoke._tcp.local.`),
 /// unescaped only for the plain labels todoke uses.
 fn instance_name(fullname: &str) -> Option<String> {
@@ -854,6 +1002,22 @@ mod tests {
         assert_eq!(txt_strings(b"\x05v1=a"), None);
         assert_eq!(txt_strings(b""), Some(Vec::new()));
         assert_eq!(txt_record(&"x".repeat(253)), None);
+    }
+
+    #[test]
+    fn only_labels_and_local_hosts_are_followed() {
+        assert!(is_label("0123456789abcdef"));
+        assert!(!is_label("0123456789ABCDEF"));
+        assert!(!is_label("0123456789abcde"));
+        assert!(!is_label("0123456789abcdefa"));
+        assert!(!is_label("0123456789abcdeg"));
+        assert!(is_local_host("0123456789abcdef.local."));
+        assert!(is_local_host("Some-Host.LOCAL"));
+        assert!(!is_local_host("tracker.attacker.example."));
+        assert!(!is_local_host("local."));
+        assert!(!is_local_host(".local."));
+        assert!(!is_local_host("x.local.example."));
+        assert!(!is_local_host("xlocal."));
     }
 
     #[test]

@@ -25,6 +25,11 @@ use crate::backend::{MdnsError, STRANGER_MAX};
 use crate::directory::{Directory, Observed};
 use crate::sighting::Sighting;
 
+/// How often the local addresses are read again.
+const ADDRESSES_EVERY: Duration = Duration::from_secs(5);
+/// The least time between two restarts of a stopped responder.
+const RESTART_EVERY: Duration = Duration::from_secs(5);
+
 /// The Bonjour responder and browser for `_todoke._tcp.local.`.
 pub struct Bonjour {
     sys: sys::Bonjour,
@@ -34,6 +39,12 @@ pub struct Bonjour {
     paired: Option<Advertisement>,
     stranger: Option<(Advertisement, Instant)>,
     addresses: Vec<Address>,
+    /// When the addresses were read.
+    addresses_at: Option<Instant>,
+    /// What the responder advertises now, to publish only changes.
+    published: Option<(Vec<Instance>, Vec<Address>)>,
+    /// When the responder last (re)started.
+    started: Instant,
 }
 
 impl core::fmt::Debug for Bonjour {
@@ -61,17 +72,28 @@ impl Bonjour {
             paired: None,
             stranger: None,
             addresses: Vec::new(),
+            addresses_at: None,
+            published: None,
+            started: Instant::now(),
         })
     }
 
-    /// Advertises `plan`: exactly its records, on this device's current
-    /// local addresses.
+    /// Advertises `plan`: exactly its records, on this device's local
+    /// addresses (read again every few seconds). Only changes reach
+    /// mDNSResponder. A responder whose connection broke is started again.
     ///
     /// # Errors
     ///
     /// None today; the signature matches [`crate::Mdns::apply`].
     pub fn apply(&mut self, plan: &Plan) -> Result<(), MdnsError> {
         let now = Instant::now();
+        if self.sys.stopped() && now.saturating_duration_since(self.started) >= RESTART_EVERY {
+            self.started = now;
+            if let Ok(sys) = sys::Bonjour::start(allows_loopback(self.policy)) {
+                self.sys = sys;
+                self.published = None;
+            }
+        }
         self.stranger = match (plan.stranger, self.stranger) {
             (Some(wanted), Some((current, since))) if wanted.label == current.label => {
                 Some((wanted, since))
@@ -86,8 +108,14 @@ impl Bonjour {
             self.stranger = None;
         }
         self.paired = plan.paired;
-        self.addresses = local_addresses(self.policy);
-        let instances = self
+        if self
+            .addresses_at
+            .is_none_or(|at| now.saturating_duration_since(at) >= ADDRESSES_EVERY)
+        {
+            self.addresses = local_addresses(self.policy);
+            self.addresses_at = Some(now);
+        }
+        let instances: Vec<Instance> = self
             .paired
             .iter()
             .chain(self.stranger.iter().map(|(advertisement, _)| advertisement))
@@ -96,8 +124,12 @@ impl Bonjour {
                 txt_value: advertisement.record.txt_value(),
             })
             .collect();
-        self.sys
-            .publish(instances, self.port, self.addresses.clone());
+        let wanted = (instances, self.addresses.clone());
+        if self.published.as_ref() != Some(&wanted) {
+            self.sys
+                .publish(wanted.0.clone(), self.port, wanted.1.clone());
+            self.published = Some(wanted);
+        }
         Ok(())
     }
 
@@ -172,9 +204,12 @@ fn local_addresses(policy: LanPolicy) -> Vec<Address> {
         .filter_map(|interface| {
             let ip: IpAddr = interface.ip();
             let allowed = is_local_network(ip) || (loopback && ip.is_loopback());
-            allowed.then(|| Address {
+            // Without its index an address could only go on every
+            // interface: skipped.
+            let index = interface.index.filter(|&index| index != 0)?;
+            allowed.then_some(Address {
                 ip,
-                interface: interface.index.unwrap_or(0),
+                interface: index,
             })
         })
         .collect();
