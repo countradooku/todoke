@@ -1,15 +1,14 @@
 // Background work, within what PROTOCOL §10.3 and iOS allow: a transfer
 // runs in the foreground, or in a continued-processing task the user
-// started (iOS 26 and later). The task is asked for when the user sends or
+// started. The task is asked for when the user sends or
 // accepts, in the foreground, as iOS requires; the system shows its
 // progress and the user can stop it. While the app is in the background
 // the core keeps no listener, advertises nothing, and has no relay
 // presence (`setBackground`): only the transfers already going move.
 //
 // Nothing else runs in the background: no refresh task resumes transfers
-// on its own (it would have to start the core, which listens), and before
-// iOS 26 the core stops when the app leaves the screen; interrupted
-// transfers resume when the user opens the app again (§7.5).
+// on its own (it would have to start the core, which listens); transfers
+// interrupted anyway resume when the user opens the app again (§7.5).
 
 import BackgroundTasks
 import Foundation
@@ -26,7 +25,6 @@ enum BackgroundWork {
     /// Registers the handler; called once, before the app finishes
     /// launching.
     static func register(core: CoreService) {
-        guard #available(iOS 26.0, *) else { return }
         BGTaskScheduler.shared.register(forTaskWithIdentifier: transfer, using: nil) { task in
             guard let task = task as? BGContinuedProcessingTask else {
                 task.setTaskCompleted(success: false)
@@ -39,7 +37,7 @@ enum BackgroundWork {
     /// The user started a transfer (in the foreground): ask iOS to let it
     /// finish if they leave the app. Once at a time.
     static func userStartedTransfer() {
-        guard #available(iOS 26.0, *), !running else { return }
+        guard !running else { return }
         #if DEBUG
         // The scripted core of the UI tests has nothing to finish.
         if UserDefaults.standard.string(forKey: "ui-test-scenario") != nil { return }
@@ -52,7 +50,6 @@ enum BackgroundWork {
         running = (try? BGTaskScheduler.shared.submit(request)) != nil
     }
 
-    @available(iOS 26.0, *)
     private static func run(_ task: BGContinuedProcessingTask, core: CoreService) async {
         running = true
         var expired = false

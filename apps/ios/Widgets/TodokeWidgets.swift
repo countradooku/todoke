@@ -14,9 +14,7 @@ struct TodokeWidgets: WidgetBundle {
     var body: some Widget {
         VisibilityWidget()
         TransferLiveActivity()
-        if #available(iOS 18.0, *) {
-            VisibilityControl()
-        }
+        VisibilityControl()
     }
 }
 
@@ -124,7 +122,6 @@ private func title(_ state: TransferAttributes.ContentState) -> String {
 
 // MARK: Control Center
 
-@available(iOS 18.0, *)
 struct VisibilityControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "org.todoke.ios.visibility") {

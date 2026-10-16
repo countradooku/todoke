@@ -2,7 +2,7 @@
 // off the main thread: it blocks while the profile opens, and with a gated
 // key the system asks for Face ID, Touch ID, or the passcode then. When the
 // app leaves the foreground it stops, unless a continued-processing task
-// the user started runs (iOS 26): then it stays in its background mode, no
+// the user started runs: then it stays in its background mode, no
 // listener, no advertising, no relay presence (PROTOCOL §10.3), until that
 // task ends. A stop while a start is under way wins: the core that start
 // opens is released at once.

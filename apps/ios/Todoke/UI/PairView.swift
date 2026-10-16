@@ -245,7 +245,9 @@ private struct Codes: View {
 /// app switcher (iOS has no per-window secure flag).
 private struct Secret: ViewModifier {
     @Environment(\.scenePhase) private var phase
-    @State private var captured = UIScreen.main.isCaptured
+    /// This scene recorded, mirrored, or shown elsewhere, kept current by
+    /// the system.
+    @Environment(\.isSceneCaptured) private var captured
 
     func body(content: Content) -> some View {
         content
@@ -255,9 +257,6 @@ private struct Secret: ViewModifier {
                     Rectangle().fill(.background)
                         .overlay(Label("Hidden while the screen is shared", systemImage: "eye.slash"))
                 }
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIScreen.capturedDidChangeNotification)) { _ in
-                captured = UIScreen.main.isCaptured
             }
     }
 }
