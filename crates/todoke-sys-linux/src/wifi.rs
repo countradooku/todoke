@@ -8,6 +8,8 @@
 //! for the active session without an administrator. Nothing about it is
 //! saved or suggested to the system. The host's default route, routes, and
 //! DNS servers are ignored: the link carries only the session to the host.
+//! The host gets no host name and a random MAC address, and its address
+//! must be on the link.
 //! WPS and open networks are never used.
 //!
 //! `NetworkManager` 1.16 or later (in-memory connections and SAE). Hosting
@@ -18,6 +20,7 @@
 use std::collections::HashMap;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use zbus::blocking::{Connection, Proxy};
@@ -63,8 +66,9 @@ fn bus(error: zbus::Error) -> io::Error {
 pub struct WifiDevice {
     path: OwnedObjectPath,
     interface: String,
-    /// It can join WPA3-Personal (SAE).
-    pub sae: bool,
+    /// Whether it can join WPA3-Personal (SAE): `None` when
+    /// `wpa_supplicant` would not say (its bus API is often root's only).
+    pub sae: Option<bool>,
 }
 
 /// The first Wi-Fi device `NetworkManager` manages, if any (no
@@ -92,8 +96,8 @@ pub fn probe() -> Option<WifiDevice> {
 }
 
 /// Whether `wpa_supplicant` reports SAE for `interface` (`NetworkManager`'s
-/// own capabilities do not say).
-fn supports_sae(connection: &Connection, interface: &str) -> bool {
+/// own capabilities do not say); `None` if it would not answer.
+fn supports_sae(connection: &Connection, interface: &str) -> Option<bool> {
     let check = || -> Option<bool> {
         let supplicant = Proxy::new(connection, SUPPLICANT, SUPPLICANT_PATH, SUPPLICANT).ok()?;
         let path: OwnedObjectPath = supplicant.call("GetInterface", &(interface,)).ok()?;
@@ -107,7 +111,7 @@ fn supports_sae(connection: &Connection, interface: &str) -> bool {
             .ok()?;
         Some(key_mgmt.iter().any(|value| value == "sae"))
     };
-    check().unwrap_or(false)
+    check()
 }
 
 /// A joined network: taken down (and, being volatile, deleted) when
@@ -153,6 +157,7 @@ pub fn join(
     passphrase: &Zeroizing<Vec<u8>>,
     security: Security,
     within: Duration,
+    cancel: &AtomicBool,
 ) -> io::Result<Joined> {
     let deadline = Instant::now() + within;
     let passphrase = core::str::from_utf8(passphrase)
@@ -194,6 +199,7 @@ pub fn join(
             ACTIVATED => break,
             DEACTIVATED => return Err(io::Error::other("the network did not come up")),
             _ if Instant::now() >= deadline => return Err(io::ErrorKind::TimedOut.into()),
+            _ if cancel.load(Ordering::SeqCst) => return Err(io::ErrorKind::Interrupted.into()),
             _ => std::thread::sleep(POLL),
         }
     }
@@ -210,11 +216,12 @@ fn addresses(connection: &Connection, active: &Proxy<'_>) -> io::Result<(IpAddr,
     let ip4: OwnedObjectPath = active.get_property("Ip4Config").map_err(bus)?;
     let config = Proxy::new(connection, NM, ip4.as_str(), IP4).map_err(bus)?;
     let data: Vec<HashMap<String, OwnedValue>> = config.get_property("AddressData").map_err(bus)?;
-    let local = data
+    let (local, prefix) = data
         .iter()
         .find_map(|entry| {
             let address: String = entry.get("address")?.try_clone().ok()?.try_into().ok()?;
-            address.parse::<Ipv4Addr>().ok()
+            let prefix: u32 = entry.get("prefix")?.try_clone().ok()?.try_into().ok()?;
+            Some((address.parse::<Ipv4Addr>().ok()?, prefix))
         })
         .ok_or_else(|| io::Error::other("the network gave no address"))?;
     let dhcp: Option<Ipv4Addr> = (|| {
@@ -230,7 +237,21 @@ fn addresses(connection: &Connection, active: &Proxy<'_>) -> io::Result<(IpAddr,
             gateway.parse().ok()
         })
         .ok_or_else(|| io::Error::other("the network named no host"))?;
+    // The host is on the link: its address within ours, never one that
+    // only a route would reach.
+    if host == local || !on_link(local, prefix, host) {
+        return Err(io::Error::other("the network's host is not on the link"));
+    }
     Ok((IpAddr::V4(local), IpAddr::V4(host)))
+}
+
+/// Whether `host` is inside `local`'s network of `prefix` bits.
+fn on_link(local: Ipv4Addr, prefix: u32, host: Ipv4Addr) -> bool {
+    if !(8..=30).contains(&prefix) {
+        return false;
+    }
+    let mask = u32::MAX << (32 - prefix);
+    u32::from(local) & mask == u32::from(host) & mask
 }
 
 /// The settings of the connection: an app-scoped, unsaved network that
@@ -262,6 +283,9 @@ fn settings<'a>(
     let wireless = HashMap::from([
         ("ssid", Value::from(ssid.as_bytes().to_vec())),
         ("mode", Value::from("infrastructure")),
+        // A random address for this network: the host learns nothing that
+        // identifies this machine elsewhere.
+        ("cloned-mac-address", Value::from("random")),
     ]);
     let mut wireless_security = HashMap::from([
         (
@@ -283,6 +307,7 @@ fn settings<'a>(
     let ipv4 = HashMap::from([
         ("method", Value::from("auto")),
         ("never-default", Value::from(true)),
+        ("dhcp-send-hostname", Value::from(false)),
         ("ignore-auto-dns", Value::from(true)),
         ("ignore-auto-routes", Value::from(true)),
     ]);
@@ -355,6 +380,11 @@ mod tests {
             assert_eq!(ipv4[key], Value::from(true), "{key}");
         }
         assert_eq!(wpa3["connection"]["autoconnect"], Value::from(false));
+        assert_eq!(ipv4["dhcp-send-hostname"], Value::from(false));
+        assert_eq!(
+            string(&wpa3["802-11-wireless"]["cloned-mac-address"]).as_deref(),
+            Some("random")
+        );
         assert_eq!(
             wpa3["connection"]["permissions"],
             Value::from(vec!["user:alice".to_owned()])
@@ -374,6 +404,18 @@ mod tests {
             Some("wpa-psk")
         );
         assert!(!wpa2["802-11-wireless-security"].contains_key("pmf"));
+    }
+
+    /// Only a host inside this machine's own network is taken.
+    #[test]
+    fn the_host_is_on_the_link() {
+        let local = Ipv4Addr::new(192, 168, 49, 23);
+        assert!(on_link(local, 24, Ipv4Addr::new(192, 168, 49, 1)));
+        assert!(!on_link(local, 24, Ipv4Addr::new(192, 168, 50, 1)));
+        assert!(!on_link(local, 24, Ipv4Addr::new(10, 0, 0, 1)));
+        // Absurd prefixes name no link.
+        assert!(!on_link(local, 0, Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(!on_link(local, 32, local));
     }
 
     #[test]

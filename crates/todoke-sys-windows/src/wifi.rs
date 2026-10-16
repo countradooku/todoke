@@ -26,20 +26,22 @@ use core::ffi::c_void;
 use std::ffi::CStr;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{HANDLE, NO_ERROR};
+use windows_sys::Win32::Foundation::{ERROR_ACCESS_DENIED, HANDLE, NO_ERROR};
 use windows_sys::Win32::NetworkManagement::IpHelper::{
     GAA_FLAG_INCLUDE_GATEWAYS, GAA_FLAG_SKIP_ANYCAST, GAA_FLAG_SKIP_DNS_SERVER,
     GAA_FLAG_SKIP_MULTICAST, GetAdaptersAddresses, IP_ADAPTER_ADDRESSES_LH,
 };
 use windows_sys::Win32::NetworkManagement::WiFi::{
     DOT11_AUTH_ALGO_WPA3_SAE, DOT11_AUTH_CIPHER_PAIR, WLAN_AUTH_CIPHER_PAIR_LIST,
-    WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO, WLAN_INTERFACE_INFO_LIST, WlanCloseHandle,
-    WlanConnect, WlanDisconnect, WlanEnumInterfaces, WlanFreeMemory, WlanOpenHandle,
-    WlanQueryInterface, dot11_BSS_type_infrastructure, wlan_connection_mode_temporary_profile,
-    wlan_interface_state_connected, wlan_intf_opcode_interface_state,
-    wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs,
+    WLAN_CONNECTION_ATTRIBUTES, WLAN_CONNECTION_PARAMETERS, WLAN_INTERFACE_INFO,
+    WLAN_INTERFACE_INFO_LIST, WlanCloseHandle, WlanConnect, WlanDisconnect, WlanEnumInterfaces,
+    WlanFreeMemory, WlanOpenHandle, WlanQueryInterface, dot11_BSS_type_infrastructure,
+    wlan_connection_mode_temporary_profile, wlan_interface_state_connected,
+    wlan_interface_state_not_ready, wlan_intf_opcode_current_connection,
+    wlan_intf_opcode_interface_state, wlan_intf_opcode_supported_infrastructure_auth_cipher_pairs,
 };
 use windows_sys::Win32::Networking::WinSock::AF_INET;
 use windows_sys::core::GUID;
@@ -119,8 +121,9 @@ impl Drop for WlanMemory {
 #[derive(Clone, Copy)]
 pub struct WifiDevice {
     guid: GUID,
-    /// It can join WPA3-Personal (SAE).
-    pub sae: bool,
+    /// Whether it can join WPA3-Personal (SAE): `None` when the driver
+    /// would not say.
+    pub sae: Option<bool>,
 }
 
 impl core::fmt::Debug for WifiDevice {
@@ -148,7 +151,10 @@ pub fn probe() -> Option<WifiDevice> {
         let count = (*list).dwNumberOfItems as usize;
         core::slice::from_raw_parts((&raw const (*list).InterfaceInfo).cast(), count)
     };
-    let guid = interfaces.first()?.InterfaceGuid;
+    let guid = interfaces
+        .iter()
+        .find(|interface| interface.isState != wlan_interface_state_not_ready)?
+        .InterfaceGuid;
     Some(WifiDevice {
         guid,
         sae: supports_sae(&client, &guid),
@@ -156,8 +162,8 @@ pub fn probe() -> Option<WifiDevice> {
 }
 
 /// Whether the driver lists SAE among its infrastructure auth/cipher
-/// pairs.
-fn supports_sae(client: &Client, guid: &GUID) -> bool {
+/// pairs; `None` if it would not say.
+fn supports_sae(client: &Client, guid: &GUID) -> Option<bool> {
     let mut size = 0_u32;
     let mut data: *mut c_void = core::ptr::null_mut();
     // SAFETY: the handle is open and `guid` is valid; the out-pointers are
@@ -174,20 +180,23 @@ fn supports_sae(client: &Client, guid: &GUID) -> bool {
         )
     };
     let _memory = WlanMemory(data);
-    if status != NO_ERROR || data.is_null() {
-        return false;
+    if status != NO_ERROR || data.is_null() || (size as usize) < size_of::<u32>() {
+        return None;
     }
     let list = data.cast::<WLAN_AUTH_CIPHER_PAIR_LIST>();
-    // SAFETY: on success `data` is a pair list of `size` bytes whose array
-    // holds `dwNumberOfItems` pairs; the count is bounded by the size.
+    // SAFETY: on success `data` is a pair list of `size` bytes (checked to
+    // hold at least the count) whose array holds `dwNumberOfItems` pairs;
+    // the count read is bounded by the size.
     let pairs: &[DOT11_AUTH_CIPHER_PAIR] = unsafe {
         let fits = (size as usize).saturating_sub(4) / size_of::<DOT11_AUTH_CIPHER_PAIR>();
         let count = ((*list).dwNumberOfItems as usize).min(fits);
         core::slice::from_raw_parts((&raw const (*list).pAuthCipherPairList).cast(), count)
     };
-    pairs
-        .iter()
-        .any(|pair| pair.AuthAlgoId == DOT11_AUTH_ALGO_WPA3_SAE)
+    Some(
+        pairs
+            .iter()
+            .any(|pair| pair.AuthAlgoId == DOT11_AUTH_ALGO_WPA3_SAE),
+    )
 }
 
 /// A joined network, disconnected when dropped (its temporary profile
@@ -222,23 +231,34 @@ impl Drop for Joined {
 
 /// Joins `ssid` with `passphrase` on `device`, within `within`.
 ///
+/// The joined network is checked to be this one: the interface's current
+/// connection is this temporary profile with this SSID, or, where Windows
+/// will not say (no location consent), its address and gateway are no
+/// longer the network it was on, and the gateway is on the link.
+///
 /// # Errors
 ///
 /// An SSID or passphrase of the wrong shape (`InvalidInput`); the Native
-/// Wifi error (`ERROR_ACCESS_DENIED` without location consent); a network
-/// that does not come up or give an address in time.
+/// Wifi error; `Interrupted` once `cancel` is set; a network that does not
+/// come up or give an address in time.
 pub fn join(
     device: &WifiDevice,
     ssid: &str,
     passphrase: &Zeroizing<Vec<u8>>,
     security: Security,
     within: Duration,
+    cancel: &AtomicBool,
 ) -> io::Result<Joined> {
     let deadline = Instant::now() + within;
     let profile = profile(ssid, passphrase, security)?;
-    let wide: Zeroizing<Vec<u16>> =
-        Zeroizing::new(profile.encode_utf16().chain(core::iter::once(0)).collect());
+    // Sized once: no reallocation leaves a copy of the passphrase behind.
+    let mut wide = Zeroizing::new(Vec::with_capacity(profile.len() + 1));
+    wide.extend(profile.encode_utf16());
+    wide.push(0);
     let client = Client::open()?;
+    // The network the interface is on now, if any: never taken for the
+    // new one.
+    let before = adapter(&device.guid);
     let parameters = WLAN_CONNECTION_PARAMETERS {
         wlanConnectionMode: wlan_connection_mode_temporary_profile,
         strProfile: wide.as_ptr(),
@@ -267,11 +287,19 @@ pub fn join(
         host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
         interface: 0,
     };
-    // Associated, then addressed (DHCP takes a moment).
+    // Associated with this network, then addressed (DHCP takes a moment).
     loop {
-        if connected(&joined.client, &joined.guid)
-            && let Some((local, host, index)) = adapter(&joined.guid)
+        std::thread::sleep(POLL);
+        if cancel.load(Ordering::SeqCst) {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let ours = current_is(&joined.client, &joined.guid, ssid.as_bytes());
+        if ours != Some(false)
+            && connected(&joined.client, &joined.guid)
+            && let Some(found) = adapter(&joined.guid)
+            && (ours == Some(true) || Some(found) != before)
         {
+            let (local, host, index) = found;
             joined.local = IpAddr::V4(local);
             joined.host = IpAddr::V4(host);
             joined.interface = index;
@@ -280,8 +308,46 @@ pub fn join(
         if Instant::now() >= deadline {
             return Err(io::ErrorKind::TimedOut.into());
         }
-        std::thread::sleep(POLL);
     }
+}
+
+/// Whether the interface's current connection is this temporary profile
+/// on `ssid`; `None` when Windows will not say (without location consent).
+fn current_is(client: &Client, guid: &GUID, ssid: &[u8]) -> Option<bool> {
+    let mut size = 0_u32;
+    let mut data: *mut c_void = core::ptr::null_mut();
+    // SAFETY: as in `supports_sae`.
+    let status = unsafe {
+        WlanQueryInterface(
+            client.0,
+            guid,
+            wlan_intf_opcode_current_connection,
+            core::ptr::null(),
+            &raw mut size,
+            &raw mut data,
+            core::ptr::null_mut(),
+        )
+    };
+    let _memory = WlanMemory(data);
+    if status == ERROR_ACCESS_DENIED {
+        return None;
+    }
+    if status != NO_ERROR
+        || data.is_null()
+        || (size as usize) < size_of::<WLAN_CONNECTION_ATTRIBUTES>()
+    {
+        return Some(false);
+    }
+    // SAFETY: on success `data` holds connection attributes, checked to fit
+    // `size`; read unaligned to be safe.
+    let attributes = unsafe { data.cast::<WLAN_CONNECTION_ATTRIBUTES>().read_unaligned() };
+    let current = &attributes.wlanAssociationAttributes.dot11Ssid;
+    let length = (current.uSSIDLength as usize).min(current.ucSSID.len());
+    Some(
+        attributes.isState == wlan_interface_state_connected
+            && attributes.wlanConnectionMode == wlan_connection_mode_temporary_profile
+            && &current.ucSSID[..length] == ssid,
+    )
 }
 
 /// Whether the interface is connected.
@@ -364,7 +430,7 @@ fn adapter(guid: &GUID) -> Option<(Ipv4Addr, Ipv4Addr, u32)> {
             if let Some(ip) = ipv4(node.Address.lpSockaddr.cast(), node.Address.iSockaddrLength)
                 && !ip.is_link_local()
             {
-                local = Some(ip);
+                local = Some((ip, node.OnLinkPrefixLength));
                 break;
             }
         }
@@ -382,9 +448,20 @@ fn adapter(guid: &GUID) -> Option<(Ipv4Addr, Ipv4Addr, u32)> {
         // SAFETY: the union's first member is the length and the IPv4
         // interface index, written by the call for every adapter.
         let index = unsafe { adapter.Anonymous1.Anonymous.IfIndex };
-        return Some((local?, host?, index));
+        let ((local, prefix), host) = (local?, host?);
+        // The host is on the link: inside this machine's network.
+        return (host != local && on_link(local, prefix, host)).then_some((local, host, index));
     }
     None
+}
+
+/// Whether `host` is inside `local`'s network of `prefix` bits.
+fn on_link(local: Ipv4Addr, prefix: u8, host: Ipv4Addr) -> bool {
+    if !(8..=30).contains(&prefix) {
+        return false;
+    }
+    let mask = u32::MAX << (32 - u32::from(prefix));
+    u32::from(local) & mask == u32::from(host) & mask
 }
 
 /// An IPv4 address from a `SOCKADDR_IN` of `length` bytes.
@@ -483,6 +560,15 @@ mod tests {
         assert!(profile("", b"abcdefgh", Security::Wpa2).is_err());
         assert!(profile(&"s".repeat(33), b"abcdefgh", Security::Wpa2).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn the_host_is_on_the_link() {
+        let local = Ipv4Addr::new(192, 168, 49, 23);
+        assert!(on_link(local, 24, Ipv4Addr::new(192, 168, 49, 1)));
+        assert!(!on_link(local, 24, Ipv4Addr::new(192, 168, 50, 1)));
+        assert!(!on_link(local, 0, Ipv4Addr::new(10, 0, 0, 1)));
+        assert!(!on_link(local, 32, local));
     }
 
     #[test]

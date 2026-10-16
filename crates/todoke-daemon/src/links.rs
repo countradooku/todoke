@@ -40,23 +40,29 @@ mod imp {
     }
 
     impl Joiner {
-        /// The security to join `offered` with: SAE where the device has
-        /// it (a transition network takes either), WPA2 otherwise.
-        fn security(&self, offered: LinkSecurity) -> io::Result<wifi::Security> {
-            match offered {
-                LinkSecurity::Wpa3 | LinkSecurity::Wpa3Transition if self.device.sae => {
-                    Ok(wifi::Security::Wpa3)
+        /// The securities to try for `offered`, in order: SAE where the
+        /// device has it or may (a transition network then also takes
+        /// WPA2), WPA2 otherwise.
+        fn securities(&self, offered: LinkSecurity) -> io::Result<Vec<wifi::Security>> {
+            use wifi::Security::{Wpa2, Wpa3};
+            Ok(match (offered, self.device.sae) {
+                (LinkSecurity::Wpa3, Some(true) | None)
+                | (LinkSecurity::Wpa3Transition, Some(true)) => vec![Wpa3],
+                (LinkSecurity::Wpa3Transition, None) => vec![Wpa3, Wpa2],
+                (LinkSecurity::Wpa3Transition, Some(false)) | (LinkSecurity::Wpa2, _) => {
+                    vec![Wpa2]
                 }
-                LinkSecurity::Wpa3Transition | LinkSecurity::Wpa2 => Ok(wifi::Security::Wpa2),
-                _ => Err(io::ErrorKind::Unsupported.into()),
-            }
+                _ => return Err(io::ErrorKind::Unsupported.into()),
+            })
         }
     }
 
     impl LinkPlatform for Joiner {
         fn abilities(&self) -> LinkAbilities {
             let mut security = vec![LinkSecurity::Wpa3Transition, LinkSecurity::Wpa2];
-            if self.device.sae {
+            // Unknown (the system would not say): most devices have SAE;
+            // a failed WPA3 join is answered and backed off.
+            if self.device.sae != Some(false) {
                 security.insert(0, LinkSecurity::Wpa3);
             }
             LinkAbilities::new(&[], &[LinkKind::WifiDirect, LinkKind::Hotspot], &security)
@@ -70,20 +76,30 @@ mod imp {
             if request.kind == LinkKind::WifiAware {
                 return Err(io::ErrorKind::Unsupported.into());
             }
-            let security = self.security(request.security)?;
-            let joined = wifi::join(
-                &self.device,
-                &request.ssid,
-                &request.secret,
-                security,
-                request.within,
-            )?;
-            Ok(LinkLease::new(
-                joined.local,
-                Some(joined.host),
-                joined.interface,
-                joined,
-            ))
+            let started = std::time::Instant::now();
+            let mut last = io::Error::from(io::ErrorKind::Unsupported);
+            for security in self.securities(request.security)? {
+                let left = request.within.saturating_sub(started.elapsed());
+                match wifi::join(
+                    &self.device,
+                    &request.ssid,
+                    &request.secret,
+                    security,
+                    left,
+                    &request.cancel,
+                ) {
+                    Ok(joined) => {
+                        return Ok(LinkLease::new(
+                            joined.local,
+                            Some(joined.host),
+                            joined.interface,
+                            joined,
+                        ));
+                    }
+                    Err(error) => last = error,
+                }
+            }
+            Err(last)
         }
     }
 }
