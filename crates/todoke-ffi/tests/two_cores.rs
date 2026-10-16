@@ -618,6 +618,26 @@ fn failing_key_stores_stop_the_start() -> TestResult {
     Ok(())
 }
 
+/// A key needing the user's presence is only ever the platform's: any
+/// other policy could fall back to a file, which needs no one. Refused
+/// before anything is opened.
+#[test]
+fn presence_needs_the_platform_policy() -> TestResult {
+    let _serial = serial();
+    let home = Scratch::new("presence")?;
+    for policy in [KeyStoragePolicy::Auto, KeyStoragePolicy::File] {
+        let mut asked = settings(&home.0);
+        asked.key_storage = policy;
+        let started = Core::with_presence(asked);
+        assert!(
+            matches!(started, Err(TodokeError::Invalid { .. })),
+            "{policy:?}: {started:?}"
+        );
+    }
+    assert!(!home.0.join("state").exists());
+    Ok(())
+}
+
 /// A profile whose ID cannot be read does not start (it would otherwise
 /// look for its key under another name).
 #[test]

@@ -13,8 +13,12 @@
 //! Face ID, Touch ID, or the device passcode, asked by the system
 //! (`LocalAuthentication`) each time the key is unwrapped. The access control
 //! sits on the Secure Enclave key, or on the item where there is no Secure
-//! Enclave (the iOS Simulator). A refused or cancelled prompt is
-//! [`io::ErrorKind::PermissionDenied`].
+//! Enclave (an Intel iOS Simulator). A refused or cancelled prompt is
+//! [`io::ErrorKind::PermissionDenied`]; a locked-out, unenrolled, or
+//! passcode-less device is an error to report.
+//!
+//! On an iOS device the key is never stored without the Secure Enclave,
+//! and never outside the data-protection keychain.
 
 use std::io;
 use std::sync::Mutex;
@@ -35,9 +39,38 @@ const NOT_FOUND: i32 = -25_300;
 const MISSING_ENTITLEMENT: i32 = -34_018;
 /// `errSecDuplicateItem`.
 const DUPLICATE: i32 = -25_299;
-/// `errSecUserCanceled`, `errSecAuthFailed`, and
-/// `errSecInteractionNotAllowed`: the user did not (or could not) unlock.
-const REFUSED: [i32; 3] = [-128, -25_293, -25_308];
+/// `errSecUserCanceled` and `errSecInteractionNotAllowed`: the user did
+/// not (or could not, the device being locked) unlock.
+#[cfg(target_os = "macos")]
+const REFUSED: &[i32] = &[-128, -25_308];
+/// The same, and `errSecAuthFailed`: on iOS only the user's failed
+/// authentication (on macOS it is also a login keychain item whose access
+/// list names another binary, a real failure).
+#[cfg(target_os = "ios")]
+const REFUSED: &[i32] = &[-128, -25_293, -25_308];
+/// `LAError` codes of an unlock the user cancelled or failed:
+/// authentication failed, user cancel, user fallback, system cancel, app
+/// cancel, not interactive. Lockout, no passcode, no enrolment, and the
+/// rest are failures to report, not a prompt to repeat.
+const LA_REFUSED: [isize; 6] = [-1, -2, -3, -4, -9, -1004];
+/// `errSecNotAvailable`.
+const NOT_AVAILABLE: i32 = -25_291;
+/// Whether a key may be stored without the Secure Enclave when it cannot
+/// be used: on macOS (Macs without one) and the iOS Simulator; never on an
+/// iOS device, where every supported model has one and a failure is an
+/// error, not a reason to weaken the key.
+const ENCLAVE_OPTIONAL: bool = cfg!(any(target_os = "macos", target_abi = "sim"));
+
+/// Whether an unwrap error from `domain` with `code` is the user's refusal.
+fn refused_unwrap(domain: &str, code: isize) -> bool {
+    if domain.contains("LocalAuthentication") {
+        LA_REFUSED.contains(&code)
+    } else {
+        REFUSED
+            .iter()
+            .any(|refused| isize::try_from(*refused).is_ok_and(|refused| refused == code))
+    }
+}
 
 /// A stored blob: one format byte, then the payload.
 const RAW: u8 = 1;
@@ -271,17 +304,17 @@ impl Keychain {
                     .map_err(|error| {
                         // A cancelled or failed prompt: an OSStatus code, or
                         // LocalAuthentication's own domain.
-                        let refused = error.domain().to_string().contains("LocalAuthentication")
-                            || REFUSED.iter().any(|code| {
-                                isize::try_from(*code).is_ok_and(|code| code == error.code())
-                            });
-                        if refused {
+                        let domain = error.domain().to_string();
+                        if refused_unwrap(&domain, error.code()) {
                             io::Error::new(
                                 io::ErrorKind::PermissionDenied,
                                 "the unlock was refused",
                             )
                         } else {
-                            io::Error::other("the Secure Enclave refused to unwrap")
+                            io::Error::other(format!(
+                                "the Secure Enclave refused to unwrap ({domain} {})",
+                                error.code()
+                            ))
                         }
                     })?;
                 Zeroizing::new(plain)
@@ -323,13 +356,21 @@ impl Keychain {
                     self.set_protection(protection);
                     return Ok(());
                 }
-                // Not entitled after all: the login keychain.
+                // Not entitled after all: the login keychain (macOS only).
+                #[cfg(target_os = "macos")]
                 Err(error) if error.code() == MISSING_ENTITLEMENT => {}
                 Err(error) if error.code() == DUPLICATE => {
                     return Err(io::ErrorKind::AlreadyExists.into());
                 }
                 Err(error) => return Err(os(error)),
             }
+        }
+        // iOS has no login keychain: an item outside the data-protection
+        // keychain would not be "this device only".
+        if cfg!(target_os = "ios") {
+            return Err(io::Error::other(
+                "the data-protection keychain is unavailable",
+            ));
         }
         let mut blob = Zeroizing::new(Vec::with_capacity(33));
         blob.push(RAW);
@@ -355,20 +396,31 @@ impl Keychain {
     ) -> Result<KeyProtection, security_framework::base::Error> {
         let mut blob = Zeroizing::new(Vec::with_capacity(160));
         let mut protection = KeyProtection::Keychain;
-        // Wrapped by the Secure Enclave when it is there; the raw key
-        // otherwise.
-        let wrapped = self
-            .wrapping_key()
-            .or_else(|| self.new_wrapping_key())
-            .and_then(|private| private.public_key())
-            .and_then(|public| {
-                public
-                    .encrypt_data(
-                        Algorithm::ECIESEncryptionCofactorVariableIVX963SHA256AESGCM,
-                        key,
-                    )
-                    .ok()
-            });
+        // No item is stored (`store` checked), so a wrapping key still
+        // there was left by a store that did not finish: never reused, as
+        // its access control may not be what is asked now.
+        if let Some(orphan) = self.wrapping_key() {
+            orphan.delete()?;
+        }
+        // Wrapped by the Secure Enclave; the raw key only where the
+        // enclave is optional and cannot be used.
+        let wrapped = match self.new_wrapping_key() {
+            Some(private) => Some(
+                private
+                    .public_key()
+                    .and_then(|public| {
+                        public
+                            .encrypt_data(
+                                Algorithm::ECIESEncryptionCofactorVariableIVX963SHA256AESGCM,
+                                key,
+                            )
+                            .ok()
+                    })
+                    .ok_or_else(|| security_framework::base::Error::from_code(NOT_AVAILABLE))?,
+            ),
+            None if ENCLAVE_OPTIONAL => None,
+            None => return Err(security_framework::base::Error::from_code(NOT_AVAILABLE)),
+        };
         if let Some(ciphertext) = wrapped {
             blob.push(WRAPPED);
             blob.extend_from_slice(&ciphertext);
@@ -400,6 +452,28 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    /// Only a cancelled or failed prompt is a refusal (the app offers to
+    /// unlock again); lockout, no passcode, and other errors are failures.
+    #[test]
+    fn only_a_refused_prompt_is_a_refusal() {
+        let la = "com.apple.LocalAuthentication";
+        for code in [-1, -2, -3, -4, -9, -1004] {
+            assert!(refused_unwrap(la, code), "{code}");
+        }
+        // Lockout, passcode not set, not enrolled, not available.
+        for code in [-5, -6, -7, -8, -1000] {
+            assert!(!refused_unwrap(la, code), "{code}");
+        }
+        assert!(refused_unwrap("NSOSStatusErrorDomain", -128));
+        assert!(refused_unwrap("NSOSStatusErrorDomain", -25_308));
+        assert_eq!(
+            refused_unwrap("NSOSStatusErrorDomain", -25_293),
+            cfg!(target_os = "ios")
+        );
+        assert!(!refused_unwrap("NSOSStatusErrorDomain", -25_300));
+        assert!(!refused_unwrap("NSOSStatusErrorDomain", -2));
+    }
 
     /// A key stored is the key loaded; a second store is refused; deleting
     /// leaves nothing. Uses an item of its own (a path no profile has).

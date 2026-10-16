@@ -15,8 +15,9 @@ use crate::types::{KeyStoragePolicy, Settings};
 /// [`TodokeError::Invalid`] for a relative directory, a history longer
 /// than the core keeps, loopback outside a test build, or a key storage
 /// policy that could leave the key in a file unasked: with the app's key
-/// store the key lives there only (`Platform`); on Android and iOS without
-/// one, only an explicit `File` is accepted.
+/// store the key lives there only (`Platform`); on Android without one,
+/// only an explicit `File` is accepted; on iOS (the Keychain, natively)
+/// `Platform` or an explicit `File`, never `Auto`.
 pub(crate) fn core_config(
     settings: &Settings,
     with_key_store: bool,
@@ -39,6 +40,12 @@ pub(crate) fn core_config(
         return Err(TodokeError::Invalid {
             message: "give a key store (Core::with_key_store), or ask for a file key explicitly"
                 .to_owned(),
+        });
+    }
+    // A refused or unavailable Keychain must not quietly become a file.
+    if cfg!(target_os = "ios") && policy == KeyStoragePolicy::Auto {
+        return Err(TodokeError::Invalid {
+            message: "use KeyStoragePolicy::Platform (or ask for a file key explicitly)".to_owned(),
         });
     }
     let home = absolute(&settings.home, "the app's directory")?;
