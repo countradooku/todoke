@@ -400,12 +400,14 @@ class BindingsTest {
     @Test
     fun pointingParametersAreChecked() = runBlocking(Dispatchers.IO) {
         Core(settings(home("point"))).use { core ->
-            core.setRangingReady(0x1234u, 1u)
-            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(0u, 1u) }
-            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(0x1234u, 2u) }
+            core.setRangingReady(1u)
+            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(0u) }
+            assertFailsWith<TodokeError.Invalid> { core.setRangingReady(2u) }
             core.clearRangingReady()
-            assertFailsWith<TodokeError.Invalid> { core.pointStart(7u, 6u, 10u) }
-            core.pointStart(7u, 9u, 10u)
+            assertFailsWith<TodokeError.Invalid> { core.pointStart(emptyList()) }
+            assertFailsWith<TodokeError.Invalid> { core.pointStart(listOf(UwbController(7u, 6u, 10u))) }
+            core.pointStart(listOf(UwbController(7u, 9u, 10u), UwbController(8u, 5u, 9u)))
+            assertFailsWith<TodokeError> { core.refuseRanging("ab".repeat(32), 1u) }
             core.pointStop()
         }
     }

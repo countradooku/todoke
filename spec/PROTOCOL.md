@@ -674,6 +674,7 @@ the session; its cipher state MUST NOT be reused on another pipe.
 | 0x0021 / 0x0022 | LinkOffer / LinkAnswer, §10.2 |
 | 0x0023 | RangingReady, §10.4 |
 | 0x0024 / 0x0025 | RangingStart / RangingStop, §10.4 |
+| 0x0026 | RangingAccept, §10.4 |
 | 0x0040 | Revoke, §2 |
 | 0x0100..0x01ff | Reserved Tor |
 | 0x0200..0x02ff | Reserved PQ variants |
@@ -1577,13 +1578,16 @@ any consent. The user still chooses and confirms what to send to whom.
 The device that points is the controller; the other is the controlee
 (FiRa unicast double-sided two-way ranging with a provisioned STS).
 
+Every UWB short address is used for one ranging only: platforms allocate a fresh one
+for each ranging session (Android's `androidx.core.uwb` does). Each side therefore
+sends its address with each ranging, never once per session.
+
 `RangingReady` (0x0023): sent at most once per session, after Capabilities, by an
 endpoint that can range as a controlee now (its UWB hardware is on and its app is in
 the foreground).
 
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
-| address | 2 | The controlee's UWB short address for this session, not 0x0000 or 0xffff |
 | configs | 1 | Bitmask of supported configurations; bit 0: provisioned-STS unicast DS-TWR. Other bits reserved zero; 0 is MALFORMED |
 
 `RangingStart` (0x0024): from the controller, only after the peer's `RangingReady`,
@@ -1592,22 +1596,31 @@ at most 8 per session, and never while one is running.
 | Field | Bytes | Limit / semantics |
 | --- | ---: | --- |
 | session_id | 4 | Random, not zero |
-| controller | 2 | The controller's UWB short address, not 0x0000 or 0xffff |
+| controller | 2 | The controller's UWB short address for this ranging, not 0x0000 or 0xffff |
 | channel | 1 | 5 or 9 |
 | preamble | 1 | 9..12 or 25..32 |
 | config | 1 | One configuration bit the peer announced |
 | sts_key | 16 | Random from a CSPRNG for this start; the provisioned STS key |
 
-`RangingStop` (0x0025): from either endpoint, `session_id` (4 bytes) of the running
-ranging.
+`RangingAccept` (0x0026): from the controlee, at most once per `RangingStart`, while
+it runs; then both endpoints range.
 
-A controlee that is no longer in the foreground or whose UWB is off ignores a
+| Field | Bytes | Limit / semantics |
+| --- | ---: | --- |
+| session_id | 4 | The running ranging's |
+| controlee | 2 | The controlee's UWB short address for this ranging, not 0x0000 or 0xffff, and not the controller's |
+
+`RangingStop` (0x0025): from either endpoint, `session_id` (4 bytes) of the running
+ranging, accepted or not.
+
+A controlee that is no longer in the foreground or whose UWB is off does not accept a
 `RangingStart` (it does not range) and sends `RangingStop`. Ranging ends with
 `RangingStop`, when the session ends, when either app leaves the foreground, and in
-any case 120 seconds after its start. Neither endpoint keeps the key or the
-measurements once ranging ends, and neither logs them. A record before its
+any case 120 seconds after its start, accepted or not. Neither endpoint keeps the key
+or the measurements once ranging ends, and neither logs them. A record before its
 precondition, a second `RangingReady`, a `RangingStart` beyond the limit or while one
-runs, or a `RangingStop` for another session ID is STATE; a field outside its limits
+runs, a `RangingAccept` from the controller, a second one, or one for another session
+ID, or a `RangingStop` for another session ID is STATE; a field outside its limits
 is MALFORMED.
 
 ## 11. Transfer and session state requirements

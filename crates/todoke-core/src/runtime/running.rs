@@ -298,7 +298,9 @@ pub(super) struct State {
     /// This device can be pointed at now: what its sessions tell peers.
     pub(super) ranging_ready: Cell<Option<todoke_proto::ranging::RangingReady>>,
     /// This device pointing now (§10.4).
-    pub(super) pointer: Cell<Option<super::pointing::Pointer>>,
+    pub(super) pointer: RefCell<Option<super::pointing::Pointer>>,
+    /// The last pointing's epoch (each `PointStart` takes the next).
+    pub(super) point_epoch: Cell<u64>,
     /// Finished transfers, sealed at rest.
     history: RefCell<History<SoftwareSealer>>,
     /// What protects the storage key.
@@ -408,7 +410,8 @@ impl State {
             link_backoff: RefCell::new(BTreeMap::new()),
             hosting: Cell::new(false),
             ranging_ready: Cell::new(None),
-            pointer: Cell::new(None),
+            pointer: RefCell::new(None),
+            point_epoch: Cell::new(0),
             history: RefCell::new(history),
             key_protection,
         }))
@@ -831,12 +834,13 @@ impl State {
             }
             Request::SetBackground { background } => self.set_background(background),
             Request::SetRangingReady { ready } => self.set_ranging_ready(ready),
-            Request::PointStart {
-                controller,
-                channel,
-                preamble,
-            } => self.point_start(controller, channel, preamble),
+            Request::PointStart { controllers } => self.point_start(controllers),
             Request::PointStop => self.point_stop(),
+            Request::RangingAnswer {
+                contact,
+                session_id,
+                controlee,
+            } => self.ranging_answer(&contact, session_id, controlee).await,
             Request::History => Response::History(self.history.borrow().list(wall())),
             Request::ClearHistory => {
                 if self.history.borrow_mut().clear() {
@@ -1425,7 +1429,7 @@ impl State {
 
     /// The contact `prefix` names, if this device may still exchange files
     /// with it (not blocked or revoked).
-    async fn resolve_contact(&self, prefix: &str) -> Result<Ed25519PublicKey, Response> {
+    pub(super) async fn resolve_contact(&self, prefix: &str) -> Result<Ed25519PublicKey, Response> {
         let prefix = prefix.to_ascii_lowercase();
         if prefix.len() < MIN_PREFIX {
             return Err(Response::error(

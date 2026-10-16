@@ -527,6 +527,11 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
                 self.ranging_step(step);
                 Ok(())
             }
+            FrameType::RANGING_ACCEPT => {
+                let step = self.pointing.on_accept(body)?;
+                self.ranging_step(step);
+                Ok(())
+            }
             FrameType::RANGING_STOP => {
                 let step = self.pointing.on_stop(body)?;
                 self.ranging_step(step);
@@ -645,6 +650,7 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         self.event(match step {
             ranging::Step::PeerReady(ready) => TransferEvent::RangingReady(ready),
             ranging::Step::Requested(start) => TransferEvent::RangingRequested(start),
+            ranging::Step::Accepted(accept) => TransferEvent::RangingAccepted(accept),
             ranging::Step::Stopped(session_id) => TransferEvent::RangingStopped { session_id },
         });
     }
@@ -686,6 +692,22 @@ impl<'k, K: KeyStore, S: SendSource, R: ReceiveSink> TransferEngine<'k, K, S, R>
         }
         self.pointing.start(start, now)?;
         self.queue_secret(FrameType::RANGING_START, start.encode());
+        Ok(())
+    }
+
+    /// Accepts the ranging the peer started (`RangingAccept`, §10.4), at
+    /// `controlee`, this side's fresh address for it.
+    ///
+    /// # Errors
+    ///
+    /// [`RangingError::NotReady`]; [`RangingError::NotRunning`];
+    /// [`RangingError::Address`].
+    pub fn accept_ranging(&mut self, session_id: u32, controlee: u16) -> Result<(), RangingError> {
+        if !matches!(self.phase, Phase::Ready(_)) {
+            return Err(RangingError::NotReady);
+        }
+        let accept = self.pointing.accept(session_id, controlee)?;
+        self.queue(FrameType::RANGING_ACCEPT, accept.encode().to_vec());
         Ok(())
     }
 

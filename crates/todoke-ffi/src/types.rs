@@ -484,7 +484,8 @@ pub enum CoreEvent {
         /// The ranging.
         ranging: RangingInfo,
     },
-    /// A contact points at this device: range with it as the controlee.
+    /// A contact points at this device: answer with `Core::accept_ranging`
+    /// (then range with it as the controlee) or `Core::refuse_ranging`.
     RangingRequested {
         /// The ranging.
         ranging: RangingInfo,
@@ -499,6 +500,19 @@ pub enum CoreEvent {
     },
 }
 
+/// A controller session the platform prepared for pointing (PROTOCOL
+/// §10.4): its address serves one ranging.
+#[data]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UwbController {
+    /// Its UWB short address.
+    pub address: u16,
+    /// The channel: 5 or 9.
+    pub channel: u8,
+    /// The preamble index: 9 to 12 or 25 to 32.
+    pub preamble: u8,
+}
+
 /// One ultra-wideband ranging between this device and a contact
 /// (PROTOCOL §10.4): `FiRa` provisioned-STS unicast DS-TWR. It only hints at
 /// which contact the user points at: it authenticates nothing.
@@ -511,8 +525,9 @@ pub struct RangingInfo {
     pub session_id: u32,
     /// The controller's UWB short address.
     pub controller: u16,
-    /// The controlee's UWB short address.
-    pub controlee: u16,
+    /// The controlee's UWB short address; none in a request (answer with
+    /// a fresh one: `Core::accept_ranging`).
+    pub controlee: Option<u16>,
     /// The channel: 5 or 9.
     pub channel: u8,
     /// The preamble index.
@@ -802,7 +817,7 @@ mod tests {
             contact: "ab".into(),
             session_id: 9,
             controller: 1,
-            controlee: 2,
+            controlee: Some(2),
             channel: 9,
             preamble: 10,
             config: 1,
@@ -823,7 +838,7 @@ mod tests {
         );
         assert_eq!(
             (info.controller, info.controlee, info.session_id),
-            (1, 2, 9)
+            (1, Some(2), 9)
         );
         let printed = format!("{info:?}");
         assert!(!printed.contains("sts_key") && !printed.contains("17"));

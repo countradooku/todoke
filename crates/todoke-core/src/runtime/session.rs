@@ -34,6 +34,12 @@ pub(super) enum SessionCommand {
     Decline(TransferId),
     /// The user cancelled.
     Cancel(TransferId),
+    /// The app's answer to a ranging request (§10.4): accept at this
+    /// controlee address, or refuse.
+    Ranging {
+        session_id: u32,
+        controlee: Option<u16>,
+    },
     /// A decision with somewhere to report its outcome.
     Reply(Box<SessionCommand>, oneshot::Sender<Response>),
 }
@@ -121,7 +127,9 @@ pub(super) async fn run<L: Link>(state: Rc<State>, mut established: Established<
             }
         }
         while let Ok(command) = inbox.try_recv() {
-            apply(&state, &mut engine, &mut prepared, ready, command, now);
+            if let Some(command) = pointing.command(&state, &mut engine, command) {
+                apply(&state, &mut engine, &mut prepared, ready, command, now);
+            }
             idle_since = now;
         }
         if pumped.is_err() {
@@ -366,7 +374,8 @@ fn apply(
         }
         SessionCommand::Decline(id) => engine.reject(&id, RejectReason::Declined),
         SessionCommand::Cancel(id) => engine.cancel(&id, CancelReason::User, now),
-        SessionCommand::Reply(..) => Ok(()),
+        // Taken by the session's pointing.
+        SessionCommand::Reply(..) | SessionCommand::Ranging { .. } => Ok(()),
     };
     if let Some(reply) = reply {
         let _ = reply.send(match outcome {

@@ -363,12 +363,17 @@ final class TodokeTests: XCTestCase {
     func testPointingParametersAreChecked() throws {
         let home = try Scratch("point")
         let core = try Core(settings: home.settings())
-        try core.setRangingReady(address: 0x1234, configs: 1)
-        XCTAssertThrowsError(try core.setRangingReady(address: 0, configs: 1))
-        XCTAssertThrowsError(try core.setRangingReady(address: 0x1234, configs: 2))
+        try core.setRangingReady(configs: 1)
+        XCTAssertThrowsError(try core.setRangingReady(configs: 0))
+        XCTAssertThrowsError(try core.setRangingReady(configs: 2))
         try core.clearRangingReady()
-        XCTAssertThrowsError(try core.pointStart(controller: 7, channel: 6, preamble: 10))
-        try core.pointStart(controller: 7, channel: 9, preamble: 10)
+        XCTAssertThrowsError(try core.pointStart(controllers: []))
+        XCTAssertThrowsError(
+            try core.pointStart(controllers: [UwbController(address: 7, channel: 6, preamble: 10)]))
+        try core.pointStart(controllers: [
+            UwbController(address: 7, channel: 9, preamble: 10),
+            UwbController(address: 8, channel: 5, preamble: 9),
+        ])
         try core.pointStop()
     }
 

@@ -1,11 +1,13 @@
 //! Pointing in the session (PROTOCOL §10.4): readiness once each, starts
 //! only toward a ready peer with a configuration it announced, one at a
-//! time and at most eight, stops by session ID, and an end after 120 s.
+//! time and at most eight, accepted once by the controlee at an address of
+//! its own, stops by session ID, and an end after 120 s.
 
 use core::time::Duration;
 
 use todoke_proto::ranging::{
-    CONFIG_PROVISIONED_DS_TWR, MAX_STARTS, RangingReady, RangingStart, RangingStop, STS_KEY_LEN,
+    CONFIG_PROVISIONED_DS_TWR, MAX_STARTS, RangingAccept, RangingReady, RangingStart, RangingStop,
+    STS_KEY_LEN,
 };
 use todoke_proto::session::FrameType;
 use zeroize::Zeroizing;
@@ -27,7 +29,6 @@ fn link(fixture: &super::support::Fixture) -> Result<Link<'_>, Box<dyn std::erro
 }
 
 const READY: RangingReady = RangingReady {
-    address: 0x2222,
     configs: CONFIG_PROVISIONED_DS_TWR,
 };
 
@@ -71,6 +72,31 @@ fn a_ranging_starts_and_stops() -> TestResult {
         _ => None,
     });
     assert_eq!(requested.as_deref(), Some(&start(7)));
+    // Bob accepts at an address of his own, once; Alice may not accept
+    // her own start.
+    assert_eq!(
+        link.b.accept_ranging(8, 0x2222),
+        Err(RangingError::NotRunning)
+    );
+    assert_eq!(link.b.accept_ranging(7, 0x1111), Err(RangingError::Address));
+    assert_eq!(link.b.accept_ranging(7, 0xffff), Err(RangingError::Address));
+    assert_eq!(
+        link.a.accept_ranging(7, 0x2222),
+        Err(RangingError::NotRunning)
+    );
+    link.b.accept_ranging(7, 0x2222)?;
+    assert_eq!(
+        link.b.accept_ranging(7, 0x2223),
+        Err(RangingError::NotRunning)
+    );
+    link.settle()?;
+    assert!(
+        link.a_events
+            .contains(&TransferEvent::RangingAccepted(RangingAccept {
+                session_id: 7,
+                controlee: 0x2222,
+            }))
+    );
     assert_eq!(link.a.stop_ranging(8), Err(RangingError::NotRunning));
     link.a.stop_ranging(7)?;
     link.settle()?;
@@ -148,6 +174,50 @@ fn pointing_out_of_line_is_state() -> TestResult {
         .b
         .handle_frame(FrameType::RANGING_STOP, &stop, other.now);
     assert_eq!(session_failure(result), Some(FailureCode::State));
+    // An accept to the controlee, for another ranging, or a second one:
+    // STATE; at the controller's own address: MALFORMED.
+    let accept = |session_id, controlee| {
+        RangingAccept {
+            session_id,
+            controlee,
+        }
+        .encode()
+    };
+    let mut to_controlee = link(&fixture)?;
+    to_controlee.b.send_ranging_ready(READY)?;
+    to_controlee
+        .b
+        .handle_frame(FrameType::RANGING_START, &body, to_controlee.now)?;
+    let result = to_controlee.b.handle_frame(
+        FrameType::RANGING_ACCEPT,
+        &accept(5, 0x2222),
+        to_controlee.now,
+    );
+    assert_eq!(session_failure(result), Some(FailureCode::State));
+    for (bodies, failure) in [
+        (vec![accept(6, 0x2222)], FailureCode::State),
+        (
+            vec![accept(5, 0x2222), accept(5, 0x2222)],
+            FailureCode::State,
+        ),
+        (vec![accept(5, 0x1111)], FailureCode::Malformed),
+    ] {
+        let mut controller = link(&fixture)?;
+        controller
+            .a
+            .handle_frame(FrameType::RANGING_READY, &READY.encode(), controller.now)?;
+        controller.a.start_ranging(&start(5), controller.now)?;
+        let (last, first) = bodies.split_last().ok_or("no body")?;
+        for body in first {
+            controller
+                .a
+                .handle_frame(FrameType::RANGING_ACCEPT, body, controller.now)?;
+        }
+        let result = controller
+            .a
+            .handle_frame(FrameType::RANGING_ACCEPT, last, controller.now);
+        assert_eq!(session_failure(result), Some(failure));
+    }
     let mut ninth = link(&fixture)?;
     ninth.b.send_ranging_ready(READY)?;
     for id in 1..=u32::from(MAX_STARTS) {
@@ -168,7 +238,7 @@ fn pointing_out_of_line_is_state() -> TestResult {
     let mut malformed = link(&fixture)?;
     let result = malformed
         .a
-        .handle_frame(FrameType::RANGING_READY, &[0, 0, 1], malformed.now);
+        .handle_frame(FrameType::RANGING_READY, &[0], malformed.now);
     assert_eq!(session_failure(result), Some(FailureCode::Malformed));
     Ok(())
 }

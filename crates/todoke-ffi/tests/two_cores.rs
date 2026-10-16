@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings};
+use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings, UwbController};
 use todoke_ffi::{
     ContactHandle, Core, Events, KeyStore, KeyStoreError, LinkAbilities, LinkError, LinkLease,
     LinkRequest, NfcTag, Notifier, OfferNotice, TodokeError, WifiLinks,
@@ -693,28 +693,69 @@ fn links_are_given_once() -> TestResult {
     Ok(())
 }
 
-/// Pointing checks its parameters as the records will (PROTOCOL §10.4).
+/// Pointing through the binding (PROTOCOL §10.4): parameters are checked;
+/// A points with a pool of controllers, B accepts at an address of its
+/// own, and A's target names both addresses and the same key.
 #[test]
-fn pointing_parameters_are_checked() -> TestResult {
+fn pointing_between_two_cores() -> TestResult {
     let _serial = serial();
-    let home = Scratch::new("point")?;
-    let core = Core::new(settings(&home.0))?;
-    core.set_ranging_ready(0x1234, 1)?;
-    for (address, configs) in [(0, 1), (0xffff, 1), (0x1234, 0), (0x1234, 2)] {
+    let (a_home, b_home) = (Scratch::new("point-a")?, Scratch::new("point-b")?);
+    let (a, b, _) = paired(&a_home, &b_home)?;
+    let (a_events, b_events) = (a.subscribe()?, b.subscribe()?);
+    let controller = |address, channel, preamble| UwbController {
+        address,
+        channel,
+        preamble,
+    };
+    for configs in [0, 2] {
         assert!(matches!(
-            core.set_ranging_ready(address, configs),
+            b.set_ranging_ready(configs),
             Err(TodokeError::Invalid { .. })
         ));
     }
-    core.clear_ranging_ready()?;
-    for (controller, channel, preamble) in [(0, 9, 10), (7, 6, 10), (7, 9, 13), (0xffff, 5, 25)] {
+    for controllers in [
+        vec![],
+        vec![controller(0, 9, 10)],
+        vec![controller(7, 6, 10)],
+        vec![controller(7, 9, 13)],
+        vec![controller(7, 9, 10), controller(7, 5, 9)],
+    ] {
         assert!(matches!(
-            core.point_start(controller, channel, preamble),
+            a.point_start(controllers),
             Err(TodokeError::Invalid { .. })
         ));
     }
-    core.point_start(7, 9, 10)?;
-    core.point_stop()?;
+    b.set_ranging_ready(1)?;
+    a.point_start(vec![controller(0x1111, 9, 10), controller(0x1112, 5, 9)])?;
+    let requested = wait_for(&b_events, |event| match event {
+        CoreEvent::RangingRequested { ranging } => Some(ranging),
+        _ => None,
+    })?;
+    assert_eq!(requested.controlee, None);
+    assert_eq!(requested.contact, a.status()?.device);
+    assert!(matches!(
+        b.accept_ranging(requested.contact.clone(), requested.session_id, 0x1111),
+        Err(TodokeError::Invalid { .. })
+    ));
+    b.accept_ranging(requested.contact.clone(), requested.session_id, 0x2222)?;
+    let target = wait_for(&a_events, |event| match event {
+        CoreEvent::PointTarget { ranging } => Some(ranging),
+        _ => None,
+    })?;
+    assert_eq!(target.contact, b.status()?.device);
+    assert_eq!(
+        (target.controller, target.controlee),
+        (0x1111, Some(0x2222))
+    );
+    assert_eq!(target.session_id, requested.session_id);
+    assert_eq!(target.sts_key.len(), 16);
+    assert_eq!(target.sts_key, requested.sts_key);
+    a.point_stop()?;
+    wait_for(&b_events, |event| match event {
+        CoreEvent::RangingStopped { session_id, .. } if session_id == target.session_id => Some(()),
+        _ => None,
+    })?;
+    b.clear_ranging_ready()?;
     Ok(())
 }
 

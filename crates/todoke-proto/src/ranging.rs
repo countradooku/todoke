@@ -1,6 +1,8 @@
-//! Pointing records (PROTOCOL §10.4): `RangingReady`, `RangingStart`, and
-//! `RangingStop`, which let two contacts in a session range with
-//! ultra-wideband so a user can pick a nearby contact by pointing at it.
+//! Pointing records (PROTOCOL §10.4): `RangingReady`, `RangingStart`,
+//! `RangingAccept`, and `RangingStop`, which let two contacts in a session
+//! range with ultra-wideband so a user can pick a nearby contact by
+//! pointing at it. Every UWB address serves one ranging only: each side
+//! sends its own with each ranging (the start, the accept).
 //! Ranging is an interface hint only; nothing here authenticates or
 //! consents to anything.
 //!
@@ -16,9 +18,11 @@ use zeroize::Zeroizing;
 use crate::session::DecodeError;
 
 /// `RangingReady` body length.
-pub const READY_LEN: usize = 3;
+pub const READY_LEN: usize = 1;
 /// `RangingStart` body length.
 pub const START_LEN: usize = 25;
+/// `RangingAccept` body length.
+pub const ACCEPT_LEN: usize = 6;
 /// `RangingStop` body length.
 pub const STOP_LEN: usize = 4;
 /// STS key length (provisioned STS).
@@ -43,8 +47,6 @@ fn address(value: u16) -> Result<u16, DecodeError> {
 /// `RangingReady` (0x0023): this endpoint can range as a controlee now.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RangingReady {
-    /// Its UWB short address for this session.
-    pub address: u16,
     /// The configurations it supports (a bitmask, not zero).
     pub configs: u8,
 }
@@ -52,28 +54,22 @@ pub struct RangingReady {
 impl RangingReady {
     /// The body.
     #[must_use]
-    pub fn encode(&self) -> [u8; READY_LEN] {
-        let [high, low] = self.address.to_be_bytes();
-        [high, low, self.configs]
+    pub const fn encode(&self) -> [u8; READY_LEN] {
+        [self.configs]
     }
 
     /// Decodes a body.
     ///
     /// # Errors
     ///
-    /// [`DecodeError::Length`]; [`DecodeError::Range`] for an address that
-    /// names no device; [`DecodeError::Reserved`] for no or an unassigned
-    /// configuration.
+    /// [`DecodeError::Length`]; [`DecodeError::Reserved`] for no or an
+    /// unassigned configuration.
     pub fn decode(body: &[u8]) -> Result<Self, DecodeError> {
-        let [high, low, configs] =
-            <[u8; READY_LEN]>::try_from(body).map_err(|_| DecodeError::Length)?;
+        let [configs] = <[u8; READY_LEN]>::try_from(body).map_err(|_| DecodeError::Length)?;
         if configs == 0 || configs & !CONFIGS != 0 {
             return Err(DecodeError::Reserved);
         }
-        Ok(Self {
-            address: address(u16::from_be_bytes([high, low]))?,
-            configs,
-        })
+        Ok(Self { configs })
     }
 }
 
@@ -149,6 +145,44 @@ impl RangingStart {
             preamble,
             config,
             sts_key,
+        })
+    }
+}
+
+/// `RangingAccept` (0x0026): the controlee ranges, at this address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RangingAccept {
+    /// The ranging session ID.
+    pub session_id: u32,
+    /// The controlee's UWB short address for this ranging.
+    pub controlee: u16,
+}
+
+impl RangingAccept {
+    /// The body.
+    #[must_use]
+    pub fn encode(&self) -> [u8; ACCEPT_LEN] {
+        let mut out = [0; ACCEPT_LEN];
+        out[..4].copy_from_slice(&self.session_id.to_be_bytes());
+        out[4..].copy_from_slice(&self.controlee.to_be_bytes());
+        out
+    }
+
+    /// Decodes a body.
+    ///
+    /// # Errors
+    ///
+    /// [`DecodeError::Length`]; [`DecodeError::ZeroIdentifier`];
+    /// [`DecodeError::Range`] for an address that names no device.
+    pub fn decode(body: &[u8]) -> Result<Self, DecodeError> {
+        let body = <[u8; ACCEPT_LEN]>::try_from(body).map_err(|_| DecodeError::Length)?;
+        let session_id = u32::from_be_bytes([body[0], body[1], body[2], body[3]]);
+        if session_id == 0 {
+            return Err(DecodeError::ZeroIdentifier);
+        }
+        Ok(Self {
+            session_id,
+            controlee: address(u16::from_be_bytes([body[4], body[5]]))?,
         })
     }
 }

@@ -5,15 +5,16 @@
 //! Each side sends `RangingReady` at most once, after Capabilities, if it
 //! can range as a controlee now. A controller may start only after the
 //! peer's `RangingReady`, with a configuration the peer announced, at most
-//! [`MAX_STARTS`] times per session, never while one runs. Either side may
-//! stop the running one, by its session ID. A ranging ends by itself
-//! [`MAX_RANGING_SECONDS`] after its start. Anything out of line from the
-//! peer is STATE.
+//! [`MAX_STARTS`] times per session, never while one runs. The controlee
+//! accepts the running one once, with its own address for it (never the
+//! controller's). Either side may stop the running one, by its session ID.
+//! A ranging ends by itself [`MAX_RANGING_SECONDS`] after its start,
+//! accepted or not. Anything out of line from the peer is STATE.
 
 use core::time::Duration;
 
 use todoke_proto::ranging::{
-    MAX_RANGING_SECONDS, MAX_STARTS, RangingReady, RangingStart, RangingStop,
+    MAX_RANGING_SECONDS, MAX_STARTS, RangingAccept, RangingReady, RangingStart, RangingStop,
 };
 
 use super::{Violation, violation};
@@ -31,8 +32,12 @@ pub enum RangingError {
     PeerNotReady,
     /// A ranging runs already, or this session used its starts.
     Busy,
-    /// No ranging with that session ID runs.
+    /// No ranging with that session ID runs (or not one this side may
+    /// accept: its own, or one accepted already).
     NotRunning,
+    /// Not an address for this ranging (0x0000, 0xffff, or the
+    /// controller's).
+    Address,
 }
 
 impl core::fmt::Display for RangingError {
@@ -43,6 +48,7 @@ impl core::fmt::Display for RangingError {
             Self::PeerNotReady => "the peer cannot range with this configuration",
             Self::Busy => "a ranging runs already, or the session used its starts",
             Self::NotRunning => "no such ranging runs",
+            Self::Address => "not a UWB address for this ranging",
         })
     }
 }
@@ -54,6 +60,11 @@ impl std::error::Error for RangingError {}
 struct Running {
     session_id: u32,
     ends_at: Duration,
+    /// This side started it.
+    controller: bool,
+    /// The controller's address.
+    controller_address: u16,
+    accepted: bool,
 }
 
 /// The session's pointing.
@@ -71,6 +82,7 @@ pub(crate) struct Pointing {
 pub(crate) enum Step {
     PeerReady(RangingReady),
     Requested(Box<RangingStart>),
+    Accepted(RangingAccept),
     Stopped(u32),
 }
 
@@ -91,14 +103,17 @@ impl Pointing {
         Ok(Step::PeerReady(ready))
     }
 
-    fn take_start(&mut self, session_id: u32, now: Duration) -> bool {
+    fn take_start(&mut self, start: &RangingStart, controller: bool, now: Duration) -> bool {
         if self.running.is_some() || self.starts >= MAX_STARTS {
             return false;
         }
         self.starts += 1;
         self.running = Some(Running {
-            session_id,
+            session_id: start.session_id,
             ends_at: now + Duration::from_secs(MAX_RANGING_SECONDS),
+            controller,
+            controller_address: start.controller,
+            accepted: false,
         });
         true
     }
@@ -113,7 +128,7 @@ impl Pointing {
         if peer.configs & start.config == 0 {
             return Err(RangingError::PeerNotReady);
         }
-        if !self.take_start(start.session_id, now) {
+        if !self.take_start(start, true, now) {
             return Err(RangingError::Busy);
         }
         Ok(())
@@ -124,10 +139,54 @@ impl Pointing {
         let start = RangingStart::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
         let state = || violation(FailureCode::State);
         let own = self.own.ok_or_else(state)?;
-        if own.configs & start.config == 0 || !self.take_start(start.session_id, now) {
+        if own.configs & start.config == 0 || !self.take_start(&start, false, now) {
             return Err(state());
         }
         Ok(Step::Requested(Box::new(start)))
+    }
+
+    /// This side, the controlee, accepts the running ranging at its
+    /// address for it.
+    pub(crate) fn accept(
+        &mut self,
+        session_id: u32,
+        controlee: u16,
+    ) -> Result<RangingAccept, RangingError> {
+        let running = self
+            .running
+            .as_mut()
+            .filter(|running| {
+                running.session_id == session_id && !running.controller && !running.accepted
+            })
+            .ok_or(RangingError::NotRunning)?;
+        let accept = RangingAccept {
+            session_id,
+            controlee,
+        };
+        if controlee == running.controller_address
+            || RangingAccept::decode(&accept.encode()).is_err()
+        {
+            return Err(RangingError::Address);
+        }
+        running.accepted = true;
+        Ok(accept)
+    }
+
+    /// The peer, the controlee, accepts the ranging this side started.
+    pub(crate) fn on_accept(&mut self, body: &[u8]) -> Result<Step, Violation> {
+        let accept = RangingAccept::decode(body).map_err(|_| violation(FailureCode::Malformed))?;
+        let running = self
+            .running
+            .as_mut()
+            .filter(|running| {
+                running.session_id == accept.session_id && running.controller && !running.accepted
+            })
+            .ok_or_else(|| violation(FailureCode::State))?;
+        if accept.controlee == running.controller_address {
+            return Err(violation(FailureCode::Malformed));
+        }
+        running.accepted = true;
+        Ok(Step::Accepted(accept))
     }
 
     /// This side stops the running ranging.

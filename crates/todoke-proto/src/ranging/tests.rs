@@ -14,11 +14,16 @@ fn start() -> RangingStart {
 #[test]
 fn records_round_trip() -> Result<(), DecodeError> {
     let ready = RangingReady {
-        address: 0x1234,
         configs: CONFIG_PROVISIONED_DS_TWR,
     };
-    assert_eq!(ready.encode(), [0x12, 0x34, 1]);
+    assert_eq!(ready.encode(), [1]);
     assert_eq!(RangingReady::decode(&ready.encode())?, ready);
+    let accept = RangingAccept {
+        session_id: 0x0102_0304,
+        controlee: 0x1234,
+    };
+    assert_eq!(accept.encode(), [1, 2, 3, 4, 0x12, 0x34]);
+    assert_eq!(RangingAccept::decode(&accept.encode())?, accept);
     let body = start().encode();
     assert_eq!(body.len(), START_LEN);
     assert_eq!(&body[..9], &[1, 2, 3, 4, 0xab, 0xcd, 9, 10, 1]);
@@ -33,17 +38,23 @@ fn records_round_trip() -> Result<(), DecodeError> {
 fn fields_outside_their_limits_are_refused() {
     for address in [[0, 0], [0xff, 0xff]] {
         assert_eq!(
-            RangingReady::decode(&[address[0], address[1], 1]),
+            RangingAccept::decode(&[1, 2, 3, 4, address[0], address[1]]),
             Err(DecodeError::Range)
         );
     }
+    assert_eq!(
+        RangingAccept::decode(&[0, 0, 0, 0, 1, 2]),
+        Err(DecodeError::ZeroIdentifier)
+    );
+    assert_eq!(
+        RangingAccept::decode(&[1, 2, 3, 4, 5]),
+        Err(DecodeError::Length)
+    );
     for configs in [0, 0b10, 0b11, 0x80] {
-        assert_eq!(
-            RangingReady::decode(&[1, 2, configs]),
-            Err(DecodeError::Reserved)
-        );
+        assert_eq!(RangingReady::decode(&[configs]), Err(DecodeError::Reserved));
     }
     assert_eq!(RangingReady::decode(&[1, 2]), Err(DecodeError::Length));
+    assert_eq!(RangingReady::decode(&[]), Err(DecodeError::Length));
     let edit = |at: usize, value: u8| {
         let mut body = start().encode().to_vec();
         body[at] = value;

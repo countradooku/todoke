@@ -11,7 +11,7 @@
 use std::sync::{Arc, OnceLock};
 
 use libfuzzer_sys::fuzz_target;
-use todoke_ffi::types::{KeyProtection, KeyStoragePolicy, Settings};
+use todoke_ffi::types::{KeyProtection, KeyStoragePolicy, Settings, UwbController};
 use todoke_ffi::{Core, KeyStore, KeyStoreError, Notifier, OfferNotice, TodokeError};
 
 struct Harness {
@@ -210,17 +210,38 @@ fuzz_target!(|data: &[u8]| {
                 }
             }
             21 => {
-                // Pointing with any parameters: done, or invalid.
+                // Pointing with any parameters, and answers to rangings
+                // that do not run: done, or a typed refusal.
                 let [a, b, c] = [0; 3].map(|_| input.byte().unwrap_or(0));
                 let address = u16::from_be_bytes([a, b]);
-                let outcome = match op & 0xc0 {
-                    0x00 => core.set_ranging_ready(address, c),
-                    0x40 => core.clear_ranging_ready(),
-                    0x80 => core.point_start(address, c, input.byte().unwrap_or(0)),
+                let outcome = match op & 0xe0 {
+                    0x00 => core.set_ranging_ready(c),
+                    0x20 => core.clear_ranging_ready(),
+                    0x40 | 0x60 => {
+                        let controllers = (0..c % 10)
+                            .map(|_| UwbController {
+                                address: u16::from_be_bytes([
+                                    input.byte().unwrap_or(0),
+                                    input.byte().unwrap_or(0),
+                                ]),
+                                channel: input.byte().unwrap_or(0) % 12,
+                                preamble: input.byte().unwrap_or(0) % 34,
+                            })
+                            .collect();
+                        core.point_start(controllers)
+                    }
+                    0x80 => core.accept_ranging(input.hex(), u32::from(c), address),
+                    0xa0 => core.refuse_ranging(input.hex(), u32::from(c)),
                     _ => core.point_stop(),
                 };
                 if let Err(error) = outcome {
-                    assert!(matches!(error, TodokeError::Invalid { .. }));
+                    assert!(matches!(
+                        error,
+                        TodokeError::Invalid { .. }
+                            | TodokeError::Ambiguous { .. }
+                            | TodokeError::Unreachable { .. }
+                            | TodokeError::State { .. }
+                    ));
                 }
             }
             22 => {

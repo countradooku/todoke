@@ -29,6 +29,7 @@ use crate::hooks::{KeyStore, Notifier, WifiLinks};
 use crate::qr::QrOffer;
 use crate::types::{
     Contact, HistoryItem, KeyStoragePolicy, Offer, Settings, Status, Stranger, Transfer,
+    UwbController,
 };
 
 /// The app's notifier, shared with the event thread.
@@ -524,22 +525,22 @@ impl Core {
         }
     }
 
-    /// This device can be pointed at (PROTOCOL §10.4): its ultra-wideband
-    /// controlee `address` and the `configs` it supports (bit 0:
-    /// provisioned-STS unicast DS-TWR). Sessions tell contacts from now on.
-    /// Clear it when ultra-wideband goes off or the app leaves the
-    /// foreground.
+    /// This device can be pointed at (PROTOCOL §10.4), with the `configs`
+    /// it supports (bit 0: provisioned-STS unicast DS-TWR). Sessions tell
+    /// contacts from now on. Clear it when ultra-wideband goes off or the
+    /// app leaves the foreground.
     ///
     /// # Errors
     ///
-    /// [`TodokeError::Invalid`] for a reserved address or configuration.
-    pub fn set_ranging_ready(&self, address: u16, configs: u8) -> Result<(), TodokeError> {
+    /// [`TodokeError::Invalid`] for no or a reserved configuration.
+    pub fn set_ranging_ready(&self, configs: u8) -> Result<(), TodokeError> {
         self.shared.done(Request::SetRangingReady {
-            ready: Some(todoke_core::api::RangingAbility { address, configs }),
+            ready: Some(todoke_core::api::RangingAbility { configs }),
         })
     }
 
-    /// This device can no longer be pointed at: starts are refused.
+    /// This device can no longer be pointed at: starts are refused, and
+    /// rangings it accepted stop.
     ///
     /// # Errors
     ///
@@ -548,25 +549,62 @@ impl Core {
         self.shared.done(Request::SetRangingReady { ready: None })
     }
 
-    /// Points at nearby contacts for 120 seconds (PROTOCOL §10.4): this
-    /// device is the controller at `controller` on `channel` (5 or 9) with
-    /// `preamble` (9 to 12 or 25 to 32). Each contact on the local network
-    /// that can be pointed at comes as a `CoreEvent::PointTarget`.
+    /// Points at nearby contacts for 120 seconds (PROTOCOL §10.4) with
+    /// `controllers`, the controller sessions the platform prepared (1 to
+    /// 8, each with its own address: each serves one contact). Each contact
+    /// on the local network that can be pointed at and accepts comes as a
+    /// `CoreEvent::PointTarget` naming the controller to range with.
     ///
     /// # Errors
     ///
-    /// [`TodokeError::Invalid`] for an address, channel, or preamble out of
-    /// range.
-    pub fn point_start(
-        &self,
-        controller: u16,
-        channel: u8,
-        preamble: u8,
-    ) -> Result<(), TodokeError> {
+    /// [`TodokeError::Invalid`] for no, too many, or repeated controllers,
+    /// or an address, channel, or preamble out of range.
+    pub fn point_start(&self, controllers: Vec<UwbController>) -> Result<(), TodokeError> {
         self.shared.done(Request::PointStart {
-            controller,
-            channel,
-            preamble,
+            controllers: controllers
+                .into_iter()
+                .map(|controller| todoke_core::api::UwbController {
+                    address: controller.address,
+                    channel: controller.channel,
+                    preamble: controller.preamble,
+                })
+                .collect(),
+        })
+    }
+
+    /// Accepts the ranging `contact` requested (`CoreEvent::RangingRequested`)
+    /// at `controlee`, the address of a controlee session the platform
+    /// prepared for it (never one used before): range with it next.
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::Invalid`] for an address out of range or the
+    /// controller's; [`TodokeError::State`] when that ranging no longer
+    /// runs; [`TodokeError::Unreachable`] when the session ended.
+    pub fn accept_ranging(
+        &self,
+        contact: String,
+        session_id: u32,
+        controlee: u16,
+    ) -> Result<(), TodokeError> {
+        self.shared.done(Request::RangingAnswer {
+            contact,
+            session_id,
+            controlee: Some(controlee),
+        })
+    }
+
+    /// Refuses the ranging `contact` requested (or stops one accepted).
+    ///
+    /// # Errors
+    ///
+    /// [`TodokeError::State`] when that ranging no longer runs;
+    /// [`TodokeError::Unreachable`] when the session ended.
+    pub fn refuse_ranging(&self, contact: String, session_id: u32) -> Result<(), TodokeError> {
+        self.shared.done(Request::RangingAnswer {
+            contact,
+            session_id,
+            controlee: None,
         })
     }
 

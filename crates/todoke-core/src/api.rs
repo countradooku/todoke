@@ -100,27 +100,35 @@ pub enum Request {
         /// Whether the app is in the background.
         background: bool,
     },
-    /// This device can be pointed at with ultra-wideband now (§10.4): its
-    /// controlee address and configurations, told to contacts in sessions;
-    /// `None` when it cannot (UWB off, app in the background).
+    /// This device can be pointed at with ultra-wideband now (§10.4): the
+    /// configurations it supports, told to contacts in sessions; `None`
+    /// when it cannot (UWB off, app in the background).
     SetRangingReady {
         /// The controlee's readiness, or none.
         ready: Option<RangingAbility>,
     },
     /// Point at nearby contacts (§10.4): sessions open to the contacts on
     /// the local network, and each that can be pointed at is sent ranging
-    /// parameters (a [`Event::PointTarget`] each). Ends with
-    /// [`Request::PointStop`] or after 120 seconds.
+    /// parameters, one controller from `controllers` each (every UWB
+    /// address serves one ranging); an [`Event::PointTarget`] follows each
+    /// that accepts. Ends with [`Request::PointStop`] or after 120 seconds.
     PointStart {
-        /// This device's controller address.
-        controller: u16,
-        /// The channel: 5 or 9.
-        channel: u8,
-        /// The preamble index: 9..12 or 25..32.
-        preamble: u8,
+        /// This device's controllers for this pointing: 1 to 8, each with
+        /// its own address.
+        controllers: Vec<UwbController>,
     },
     /// Stop pointing: every ranging this device started stops.
     PointStop,
+    /// The answer to an [`Event::RangingRequested`]: range at `controlee`,
+    /// this device's fresh address for it, or refuse (`None`).
+    RangingAnswer {
+        /// The contact that points, hex.
+        contact: String,
+        /// The ranging session ID.
+        session_id: u32,
+        /// This device's controlee address for the ranging, or none.
+        controlee: Option<u16>,
+    },
     /// Finished transfers kept under the history policy
     /// (`history_days`), newest first.
     History,
@@ -196,10 +204,20 @@ pub enum Route {
 /// What a device that can be pointed at announces (§10.4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RangingAbility {
-    /// The controlee's UWB short address.
-    pub address: u16,
     /// Supported configurations (bit 0: provisioned-STS unicast DS-TWR).
     pub configs: u8,
+}
+
+/// One controller this device can range as (§10.4): a UWB session the
+/// platform prepared, with its own address.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UwbController {
+    /// Its UWB short address.
+    pub address: u16,
+    /// The channel: 5 or 9.
+    pub channel: u8,
+    /// The preamble index: 9..12 or 25..32.
+    pub preamble: u8,
 }
 
 /// One ranging between this device and a contact (§10.4).
@@ -211,8 +229,9 @@ pub struct Ranging {
     pub session_id: u32,
     /// The controller's UWB short address.
     pub controller: u16,
-    /// The controlee's UWB short address.
-    pub controlee: u16,
+    /// The controlee's UWB short address; none in a request (the
+    /// controlee answers with a fresh one).
+    pub controlee: Option<u16>,
     /// The channel.
     pub channel: u8,
     /// The preamble index.
@@ -589,10 +608,11 @@ pub enum Event {
         /// The transfer, hex.
         transfer: String,
     },
-    /// While pointing: range with this contact as the controller (§10.4).
-    /// An interface hint only. Holds the STS key.
+    /// While pointing: this contact accepted; range with it as the
+    /// controller (§10.4). An interface hint only. Holds the STS key.
     PointTarget(Ranging),
-    /// A contact points at this device: range with it as the controlee.
+    /// A contact points at this device: answer with
+    /// [`Request::RangingAnswer`], then range with it as the controlee.
     /// Holds the STS key.
     RangingRequested(Ranging),
     /// A ranging ended (stopped, its time up, or its session gone).
@@ -679,17 +699,21 @@ mod tests {
             Request::SetHidden { hidden: true },
             Request::SetBackground { background: true },
             Request::SetRangingReady {
-                ready: Some(RangingAbility {
-                    address: 0x1234,
-                    configs: 1,
-                }),
+                ready: Some(RangingAbility { configs: 1 }),
             },
             Request::PointStart {
-                controller: 7,
-                channel: 9,
-                preamble: 10,
+                controllers: vec![UwbController {
+                    address: 7,
+                    channel: 9,
+                    preamble: 10,
+                }],
             },
             Request::PointStop,
+            Request::RangingAnswer {
+                contact: "ab".into(),
+                session_id: 9,
+                controlee: Some(0x2222),
+            },
             Request::History,
             Request::ClearHistory,
         ] {
