@@ -16,6 +16,12 @@ final class CoreBackend: Backend, @unchecked Sendable {
         self.core = core
     }
 
+    /// Stops the core now and waits until it has released the profile,
+    /// whoever still holds this backend (calls then fail). Blocks.
+    func shutdown() {
+        core.shutdown()
+    }
+
     private func call<T>(_ body: @escaping (Core) throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             queue.async { [core] in

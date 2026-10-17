@@ -5,7 +5,9 @@
 // the user started runs: then it stays in its background mode, no
 // listener, no advertising, no relay presence (PROTOCOL §10.3), until that
 // task ends. A stop while a start is under way wins: the core that start
-// opens is released at once.
+// opens is released at once. A stopped core is shut down off the main
+// thread, and the next start waits for that: until then it holds the
+// profile, and screens, streams, or calls may still hold it.
 
 import Foundation
 import LocalAuthentication
@@ -29,6 +31,8 @@ final class CoreService {
     private(set) var state: CoreState
     private(set) var backend: Backend?
     private var starting: Task<Void, Never>?
+    /// The last stopped core's shutdown; a start waits for it.
+    private var stopping: Task<Void, Never>?
     /// Bumped by each stop: a start that a stop overtook drops its core.
     private var generation = 0
     /// The core runs in its background mode.
@@ -77,6 +81,7 @@ final class CoreService {
     private func open() async {
         let generation = generation
         state = .starting
+        await stopping?.value
         let settings = Settings(
             home: Paths.home.path, downloads: Paths.received.path, lan: true, allowLoopback: false,
             hidden: AppGroup.hidden, historyDays: 30, keyStorage: .platform)
@@ -95,6 +100,7 @@ final class CoreService {
         // Stopped meanwhile (the app left the screen): the core goes now,
         // closing its listener.
         guard generation == self.generation else {
+            if case .success(let core) = result { shutDown(CoreBackend(core: core)) }
             state = .locked(gated: gated)
             return
         }
@@ -121,11 +127,23 @@ final class CoreService {
         #endif
         generation += 1
         links.setAllowed(false)
+        shutDown(backend)
         backend = nil
         inBackground = false
         switch state {
         case .ready, .starting: state = .locked(gated: gated)
         default: break
+        }
+    }
+
+    /// Shuts `backend`'s core down off the main thread, after any earlier
+    /// shutdown.
+    private func shutDown(_ backend: Backend?) {
+        guard let backend = backend as? CoreBackend else { return }
+        let previous = stopping
+        stopping = Task.detached(priority: .userInitiated) {
+            await previous?.value
+            backend.shutdown()
         }
     }
 
