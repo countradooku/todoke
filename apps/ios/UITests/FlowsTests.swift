@@ -28,14 +28,18 @@ final class FlowsTests: XCTestCase {
 
     private func expect(_ app: XCUIApplication, request: String, file: StaticString = #filePath, line: UInt = #line) {
         let label = lastRequest(app)
-        // Every request so far, each after a "|": wait for it, then require
-        // it exactly ("accept " is not "accept 2").
-        let predicate = NSPredicate(format: "label CONTAINS %@", "|" + request)
-        let met = XCTNSPredicateExpectation(predicate: predicate, object: label)
-        XCTAssertEqual(XCTWaiter().wait(for: [met], timeout: 5), .completed,
-                       "requests: \(label.label)", file: file, line: line)
-        XCTAssertTrue(label.label.components(separatedBy: "|").contains(request),
-                      "requests: \(label.label)", file: file, line: line)
+        // Every request so far, each after a "|": wait until it is there
+        // exactly ("accept " is not "accept 2"). Read directly, often: a
+        // predicate expectation snapshots the whole tree each time, which a
+        // busy CI simulator closing a sheet can make outlast the wait.
+        let deadline = Date().addingTimeInterval(15)
+        var requests = label.label
+        while !requests.components(separatedBy: "|").contains(request), Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.2)
+            requests = label.label
+        }
+        XCTAssertTrue(requests.components(separatedBy: "|").contains(request),
+                      "requests: \(requests)", file: file, line: line)
     }
 
     /// The audit, minus the test-only label (it is not part of the app).
