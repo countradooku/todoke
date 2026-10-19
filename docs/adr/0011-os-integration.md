@@ -95,9 +95,10 @@ without the receive sheet.
   entropy naming the profile), wrapped first by a non-exportable RSA-2048
   key of the TPM's Platform Crypto Provider (OAEP SHA-256) where present.
 - **Linux:** the Secret Service (GNOME Keyring, KWallet, KeePassXC) over the
-  session bus, through `zbus` (in the desktop graph through GPUI, and now
-  in the daemon's and the CLI's on Linux too; `oo7` would duplicate
-  RustCrypto crates). A keyring with no default collection uses GNOME's
+  session bus, through `zbus` 6 (its async API, each call run to
+  completion by `zbus::block_on`: 6.0 has no blocking API; the desktop
+  graph also has zbus 5 through GPUI and the tray and notification crates
+  until they move to 6; `oo7` would duplicate RustCrypto crates). A keyring with no default collection uses GNOME's
   login keyring or creates one, as libsecret does. A prompt (unlocking,
   creating) waits at most two minutes, then is dismissed and the store
   counts as unavailable. Signals are matched against the service's unique
@@ -351,8 +352,15 @@ that exact version in `deny-desktop.toml` only.
   always attaches.
 - **The daemon and the CLI now link `zbus` on Linux** (the Secret Service
   and the Secret portal), about 60 crates under the stricter `deny.toml`,
-  exempted in cargo-vet pending audits. Fix: audits of `zbus` and its
-  async runtime, or a smaller D-Bus client.
+  exempted in cargo-vet pending audits. Since 2026-10-19 that is zbus 6.0.0
+  and its new runtime `zruntime` 0.2.0, released three days earlier: zbus
+  5's `zvariant`, `zvariant_derive`, and `zbus_names` became unmaintained
+  (RUSTSEC-2026-0370..0372) when they were merged into it. Fix: audits of
+  `zbus` and `zruntime`, or a smaller D-Bus client.
+- **Two zbus versions in the desktop app on Linux.** GPUI's accessibility
+  and portals, `ksni`, `notify-rust`, and `oo7` still use zbus 5.19.0;
+  `deny-desktop.toml` ignores the three advisories and skips the duplicate
+  until they move to zbus 6. Fix: upgrade them when they do.
 - **The tray, menu, and shortcut crates run in the process that holds the
   storage key** (the desktop hosts the core): `tray-icon`, `muda`, `ksni`,
   and `global-hotkey` are exempted, not audited. Fix: audit those four

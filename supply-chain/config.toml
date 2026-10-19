@@ -1972,11 +1972,6 @@ version = "0.5.3"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
-[[exemptions.objc2]]
-version = "0.6.5"
-criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
-
 [[exemptions.objc2-app-kit]]
 version = "0.2.2"
 criteria = "safe-to-deploy"
@@ -3182,11 +3177,6 @@ version = "0.1.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
-[[exemptions.unicode-xid]]
-version = "0.2.6"
-criteria = "safe-to-deploy"
-notes = "Not yet reviewed. Exempted on 2026-10-15 for the mobile and web bindings (BoltFFI 0.31.1, todoke-ffi; docs/adr/0012-bindings.md); no imported audit covers it; replace with an audit or imported audit."
-
 [[exemptions.untrusted]]
 version = "0.9.0"
 criteria = "safe-to-deploy"
@@ -3867,6 +3857,11 @@ version = "5.19.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.zbus]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-19 for todoke-sys-linux (zbus 6.0.0, released 2026-10-16: the Secret Service, portals, and NetworkManager; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.zbus-lockstep]]
 version = "0.5.2"
 criteria = "safe-to-deploy"
@@ -3882,10 +3877,20 @@ version = "5.19.0"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
 
+[[exemptions.zbus_macros]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-19 for todoke-sys-linux (zbus 6.0.0, released 2026-10-16: the Secret Service, portals, and NetworkManager; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
+
 [[exemptions.zbus_names]]
 version = "4.3.4"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI toolkit (gpui-kit 0.7.3; docs/adr/0010-desktop.md); no imported audit covers it; replace with an audit or imported audit."
+
+[[exemptions.zbus_utils]]
+version = "6.0.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-19 for todoke-sys-linux (zbus 6.0.0, released 2026-10-16: the Secret Service, portals, and NetworkManager; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.zbus_xml]]
 version = "5.2.1"
@@ -3971,6 +3976,11 @@ notes = "Not yet reviewed. Exempted on 2026-10-14 for the desktop app's GUI tool
 version = "1.0.23"
 criteria = "safe-to-deploy"
 notes = "Not yet reviewed. Exempted when cargo-vet was adopted on 2026-10-13 by maintainer decision; replace with an audit or imported audit."
+
+[[exemptions.zruntime]]
+version = "0.2.0"
+criteria = "safe-to-deploy"
+notes = "Not yet reviewed. Exempted on 2026-10-19 for todoke-sys-linux (zbus 6.0.0, released 2026-10-16: the Secret Service, portals, and NetworkManager; docs/adr/0011-os-integration.md); no imported audit covers it; replace with an audit or imported audit."
 
 [[exemptions.zune-core]]
 version = "0.4.12"

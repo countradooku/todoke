@@ -10,9 +10,10 @@
 use std::collections::HashMap;
 use std::io;
 
-use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
+use zbus::{Connection, ObjectPath, OwnedObjectPath, OwnedVariant, Proxy, Variant};
 use zeroize::Zeroizing;
+
+use crate::portal;
 
 const BUS_NAME: &str = "org.freedesktop.secrets";
 const SERVICE_PATH: &str = "/org/freedesktop/secrets";
@@ -31,16 +32,6 @@ fn bus(error: zbus::Error) -> io::Error {
     io::Error::other(format!("Secret Service: {error}"))
 }
 
-/// The unique bus name that owns `name` now: signals are matched against it
-/// on the bus and here, so another program cannot answer for the service.
-fn owner(connection: &Connection, name: &str) -> io::Result<zbus::names::OwnedUniqueName> {
-    let name = zbus::names::BusName::try_from(name).map_err(|error| bus(error.into()))?;
-    zbus::blocking::fdo::DBusProxy::new(connection)
-        .map_err(bus)?
-        .get_name_owner(name)
-        .map_err(|error| bus(error.into()))
-}
-
 /// The storage key of one profile in the Secret Service.
 #[derive(Debug)]
 pub struct SecretService {
@@ -53,16 +44,145 @@ struct Session {
     path: OwnedObjectPath,
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
+impl Session {
+    /// Opens a session, runs `work` in it, and closes it whatever the
+    /// outcome (zbus 6 has no blocking call a `Drop` could make).
+    async fn with<T>(work: impl AsyncFnOnce(&Self) -> io::Result<T>) -> io::Result<T> {
+        let connection = Connection::session().await.map_err(bus)?;
+        let service = Proxy::new(&connection, BUS_NAME, SERVICE_PATH, SERVICE)
+            .await
+            .map_err(bus)?;
+        let (_, path): (OwnedVariant, OwnedObjectPath) = service
+            .call("OpenSession", &("plain", Variant::from("")))
+            .await
+            .map_err(bus)?;
+        let session = Self { connection, path };
+        let result = work(&session).await;
+        session.close().await;
+        result
+    }
+
+    async fn close(&self) {
         if let Ok(proxy) = Proxy::new(
             &self.connection,
             BUS_NAME,
             self.path.as_str(),
             "org.freedesktop.Secret.Session",
-        ) {
-            let _: Result<(), _> = proxy.call("Close", &());
+        )
+        .await
+        {
+            let _: Result<(), _> = proxy.call("Close", &()).await;
         }
+    }
+
+    async fn service(&self) -> io::Result<Proxy<'_>> {
+        Proxy::new(&self.connection, BUS_NAME, SERVICE_PATH, SERVICE)
+            .await
+            .map_err(bus)
+    }
+
+    /// A proxy for `interface` of the object at `path`.
+    async fn object<'a>(&'a self, path: &'a str, interface: &'a str) -> io::Result<Proxy<'a>> {
+        Proxy::new(&self.connection, BUS_NAME, path, interface)
+            .await
+            .map_err(bus)
+    }
+
+    /// Unlocks `objects` (the keyring may ask the user).
+    async fn unlock(&self, objects: &[OwnedObjectPath]) -> io::Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) = self
+            .service()
+            .await?
+            .call("Unlock", &(objects,))
+            .await
+            .map_err(bus)?;
+        self.prompt(&prompt).await
+    }
+
+    /// Runs a prompt (unless there is none: "/") and waits for its answer,
+    /// at most [`PROMPT_DEADLINE`]: an unanswered prompt (a locked keyring
+    /// early in the session, a dialog no one sees) dismisses it, and the
+    /// store counts as unavailable.
+    async fn prompt(&self, prompt: &ObjectPath<'_>) -> io::Result<()> {
+        if prompt.as_str() == "/" {
+            return Ok(());
+        }
+        let proxy = self.object(prompt.as_str(), PROMPT).await?;
+        // Listen before prompting: the answer may come first. Only the
+        // service's signals: another program cannot answer for it.
+        let owner = portal::owner_of(&self.connection, BUS_NAME)
+            .await
+            .map_err(bus)?;
+        let rule = zbus::MatchRule::builder()
+            .msg_type(zbus::message::Type::Signal)
+            .sender(owner)
+            .interface(PROMPT)
+            .member("Completed")
+            .path(prompt.as_str());
+        let mut completed = portal::signals(&self.connection, rule, 4)
+            .await
+            .map_err(bus)?;
+        let _: () = proxy.call("Prompt", &("",)).await.map_err(bus)?;
+        let runtime = zruntime::Runtime::<zruntime::Shared>::current()?;
+        let message = match runtime
+            .timeout(PROMPT_DEADLINE, portal::next(&mut completed))
+            .await
+        {
+            Ok(Some(message)) => message.map_err(bus)?,
+            Ok(None) => return Err(io::Error::other("the keyring prompt went away")),
+            Err(_timed_out) => {
+                let _: Result<(), _> = proxy.call("Dismiss", &()).await;
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "the keyring prompt was not answered",
+                ));
+            }
+        };
+        let (dismissed, _): (bool, OwnedVariant) = message.body().deserialize().map_err(bus)?;
+        if dismissed {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the keyring was not unlocked",
+            ));
+        }
+        Ok(())
+    }
+
+    /// The collection new items go to: the default one, else GNOME's login
+    /// keyring, else a new default collection (as libsecret does; the
+    /// keyring asks the user for its password).
+    async fn collection(&self) -> io::Result<OwnedObjectPath> {
+        let service = self.service().await?;
+        for alias in ["default", "login"] {
+            let collection: OwnedObjectPath =
+                service.call("ReadAlias", &(alias,)).await.map_err(bus)?;
+            if collection.as_str() != "/" {
+                return Ok(collection);
+            }
+        }
+        let properties = HashMap::from([(
+            "org.freedesktop.Secret.Collection.Label",
+            Variant::from("Login"),
+        )]);
+        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) = service
+            .call("CreateCollection", &(properties, "default"))
+            .await
+            .map_err(bus)?;
+        self.prompt(&prompt).await?;
+        let collection: OwnedObjectPath = service
+            .call("ReadAlias", &("default",))
+            .await
+            .map_err(bus)?;
+        if collection.as_str() == "/" {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the keyring has no collection to keep the key in",
+            ));
+        }
+        Ok(collection)
     }
 }
 
@@ -83,119 +203,13 @@ impl SecretService {
         ])
     }
 
-    fn open() -> io::Result<Session> {
-        let connection = Connection::session().map_err(bus)?;
-        let service = Proxy::new(&connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
-        let (_, path): (OwnedValue, OwnedObjectPath) = service
-            .call("OpenSession", &("plain", Value::from("")))
-            .map_err(bus)?;
-        Ok(Session { connection, path })
-    }
-
-    /// Unlocks `objects` (the keyring may ask the user).
-    fn unlock(session: &Session, objects: &[OwnedObjectPath]) -> io::Result<()> {
-        if objects.is_empty() {
-            return Ok(());
-        }
-        let service =
-            Proxy::new(&session.connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
-        let (_, prompt): (Vec<OwnedObjectPath>, OwnedObjectPath) =
-            service.call("Unlock", &(objects,)).map_err(bus)?;
-        Self::prompt(session, &prompt)
-    }
-
-    /// Runs a prompt (unless there is none: "/") and waits for its answer,
-    /// at most [`PROMPT_DEADLINE`]: an unanswered prompt (a locked keyring
-    /// early in the session, a dialog no one sees) dismisses it, and the
-    /// store counts as unavailable.
-    fn prompt(session: &Session, prompt: &ObjectPath<'_>) -> io::Result<()> {
-        if prompt.as_str() == "/" {
-            return Ok(());
-        }
-        let proxy =
-            Proxy::new(&session.connection, BUS_NAME, prompt.as_str(), PROMPT).map_err(bus)?;
-        // Listen before prompting: the answer may come first.
-        let rule = zbus::MatchRule::builder()
-            .msg_type(zbus::message::Type::Signal)
-            .sender(owner(&session.connection, BUS_NAME)?)
-            .map_err(bus)?
-            .interface(PROMPT)
-            .map_err(bus)?
-            .member("Completed")
-            .map_err(bus)?
-            .path(prompt.as_str())
-            .map_err(bus)?
-            .build();
-        let mut completed =
-            zbus::blocking::MessageIterator::for_match_rule(rule, &session.connection, Some(4))
-                .map_err(bus)?;
-        let (answer, answered) = std::sync::mpsc::channel();
-        std::thread::Builder::new()
-            .name("todoke-keyring-prompt".into())
-            .spawn(move || {
-                let _ = answer.send(completed.next());
-            })?;
-        let _: () = proxy.call("Prompt", &("",)).map_err(bus)?;
-        let message = match answered.recv_timeout(PROMPT_DEADLINE) {
-            Ok(Some(message)) => message.map_err(bus)?,
-            Ok(None) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                return Err(io::Error::other("the keyring prompt went away"));
-            }
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                // Dismissing it also ends the waiting thread.
-                let _: Result<(), _> = proxy.call("Dismiss", &());
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "the keyring prompt was not answered",
-                ));
-            }
-        };
-        let (dismissed, _): (bool, OwnedValue) = message.body().deserialize().map_err(bus)?;
-        if dismissed {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "the keyring was not unlocked",
-            ));
-        }
-        Ok(())
-    }
-
-    /// The collection new items go to: the default one, else GNOME's login
-    /// keyring, else a new default collection (as libsecret does; the
-    /// keyring asks the user for its password).
-    fn collection(session: &Session) -> io::Result<OwnedObjectPath> {
-        let service =
-            Proxy::new(&session.connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
-        for alias in ["default", "login"] {
-            let collection: OwnedObjectPath = service.call("ReadAlias", &(alias,)).map_err(bus)?;
-            if collection.as_str() != "/" {
-                return Ok(collection);
-            }
-        }
-        let properties = HashMap::from([(
-            "org.freedesktop.Secret.Collection.Label",
-            Value::from("Login"),
-        )]);
-        let (_, prompt): (OwnedObjectPath, OwnedObjectPath) = service
-            .call("CreateCollection", &(properties, "default"))
-            .map_err(bus)?;
-        Self::prompt(session, &prompt)?;
-        let collection: OwnedObjectPath = service.call("ReadAlias", &("default",)).map_err(bus)?;
-        if collection.as_str() == "/" {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "the keyring has no collection to keep the key in",
-            ));
-        }
-        Ok(collection)
-    }
-
     /// This profile's item, unlocked; `None` if there is none.
-    fn item(&self, session: &Session) -> io::Result<Option<OwnedObjectPath>> {
-        let service =
-            Proxy::new(&session.connection, BUS_NAME, SERVICE_PATH, SERVICE).map_err(bus)?;
-        let (unlocked, locked): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) = service
+    async fn item(&self, session: &Session) -> io::Result<Option<OwnedObjectPath>> {
+        let (unlocked, locked): (Vec<OwnedObjectPath>, Vec<OwnedObjectPath>) = session
+            .service()
+            .await?
             .call("SearchItems", &(self.attributes(),))
+            .await
             .map_err(bus)?;
         if let Some(item) = unlocked.into_iter().next() {
             return Ok(Some(item));
@@ -203,7 +217,7 @@ impl SecretService {
         let Some(item) = locked.into_iter().next() else {
             return Ok(None);
         };
-        Self::unlock(session, std::slice::from_ref(&item))?;
+        session.unlock(std::slice::from_ref(&item)).await?;
         Ok(Some(item))
     }
 
@@ -213,20 +227,25 @@ impl SecretService {
     ///
     /// No Secret Service (no session bus, no keyring), or it refused.
     pub fn load(&self) -> io::Result<Option<Zeroizing<[u8; 32]>>> {
-        let session = Self::open()?;
-        let Some(item) = self.item(&session)? else {
-            return Ok(None);
-        };
-        let proxy = Proxy::new(&session.connection, BUS_NAME, item.as_str(), ITEM).map_err(bus)?;
-        let (_, _, value, _): Secret = proxy.call("GetSecret", &(&session.path,)).map_err(bus)?;
-        let value = Zeroizing::new(value);
-        let key: [u8; 32] = value.as_slice().try_into().map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "the stored key has the wrong size",
-            )
-        })?;
-        Ok(Some(Zeroizing::new(key)))
+        zbus::block_on(Session::with(async |session| {
+            let Some(item) = self.item(session).await? else {
+                return Ok(None);
+            };
+            let (_, _, value, _): Secret = session
+                .object(item.as_str(), ITEM)
+                .await?
+                .call("GetSecret", &(&session.path,))
+                .await
+                .map_err(bus)?;
+            let value = Zeroizing::new(value);
+            let key: [u8; 32] = value.as_slice().try_into().map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "the stored key has the wrong size",
+                )
+            })?;
+            Ok(Some(Zeroizing::new(key)))
+        }))
     }
 
     /// Stores `key` in the default collection; never replaces a stored one.
@@ -235,38 +254,34 @@ impl SecretService {
     ///
     /// `AlreadyExists` if a key is stored; no Secret Service, or it refused.
     pub fn store(&self, key: &[u8; 32]) -> io::Result<()> {
-        let session = Self::open()?;
-        if self.item(&session)?.is_some() {
-            return Err(io::ErrorKind::AlreadyExists.into());
-        }
-        let collection = Self::collection(&session)?;
-        Self::unlock(&session, std::slice::from_ref(&collection))?;
-        let proxy = Proxy::new(
-            &session.connection,
-            BUS_NAME,
-            collection.as_str(),
-            COLLECTION,
-        )
-        .map_err(bus)?;
-        let label = format!("todoke storage key ({})", self.profile);
-        let properties = HashMap::from([
-            ("org.freedesktop.Secret.Item.Label", Value::from(label)),
-            (
-                "org.freedesktop.Secret.Item.Attributes",
-                Value::from(self.attributes()),
-            ),
-        ]);
-        let mut secret: Secret = (
-            session.path.clone(),
-            Vec::new(),
-            key.to_vec(),
-            "application/octet-stream".to_owned(),
-        );
-        let created: Result<(OwnedObjectPath, OwnedObjectPath), _> =
-            proxy.call("CreateItem", &(properties, &secret, false));
-        zeroize::Zeroize::zeroize(&mut secret.2);
-        let (_, prompt) = created.map_err(bus)?;
-        Self::prompt(&session, &prompt)
+        zbus::block_on(Session::with(async |session| {
+            if self.item(session).await?.is_some() {
+                return Err(io::ErrorKind::AlreadyExists.into());
+            }
+            let collection = session.collection().await?;
+            session.unlock(std::slice::from_ref(&collection)).await?;
+            let proxy = session.object(collection.as_str(), COLLECTION).await?;
+            let label = format!("todoke storage key ({})", self.profile);
+            let properties = HashMap::from([
+                ("org.freedesktop.Secret.Item.Label", Variant::from(label)),
+                (
+                    "org.freedesktop.Secret.Item.Attributes",
+                    Variant::from(self.attributes()),
+                ),
+            ]);
+            let mut secret: Secret = (
+                session.path.clone(),
+                Vec::new(),
+                key.to_vec(),
+                "application/octet-stream".to_owned(),
+            );
+            let created: Result<(OwnedObjectPath, OwnedObjectPath), _> = proxy
+                .call("CreateItem", &(properties, &secret, false))
+                .await;
+            zeroize::Zeroize::zeroize(&mut secret.2);
+            let (_, prompt) = created.map_err(bus)?;
+            session.prompt(&prompt).await
+        }))
     }
 
     /// Removes this profile's item (tests; removing a profile).
@@ -275,13 +290,18 @@ impl SecretService {
     ///
     /// No Secret Service, or it refused.
     pub fn delete(&self) -> io::Result<()> {
-        let session = Self::open()?;
-        let Some(item) = self.item(&session)? else {
-            return Ok(());
-        };
-        let proxy = Proxy::new(&session.connection, BUS_NAME, item.as_str(), ITEM).map_err(bus)?;
-        let prompt: OwnedObjectPath = proxy.call("Delete", &()).map_err(bus)?;
-        Self::prompt(&session, &prompt)
+        zbus::block_on(Session::with(async |session| {
+            let Some(item) = self.item(session).await? else {
+                return Ok(());
+            };
+            let prompt: OwnedObjectPath = session
+                .object(item.as_str(), ITEM)
+                .await?
+                .call("Delete", &())
+                .await
+                .map_err(bus)?;
+            session.prompt(&prompt).await
+        }))
     }
 }
 
