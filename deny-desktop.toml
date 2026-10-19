@@ -39,6 +39,14 @@ ignore = [
     { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile 2.2.0 through gpui-kit-assets' reqwest, declared only for wasm targets; never compiled for the desktop." },
     { id = "RUSTSEC-2026-0206", reason = "rustybuzz 0.20.1: text shaping inside usvg for the bundled SVG icons; never fed peer data." },
     { id = "RUSTSEC-2026-0192", reason = "ttf-parser 0.25.1: parses system fonts (cosmic-text on Linux, usvg); never fed peer data." },
+    # zbus 5's sub-crates, merged into zbus 6.0.0 (2026-10-16), which
+    # todoke-sys-linux uses. zbus 5.19.0 stays on Linux for the toolkit and
+    # desktop crates (accesskit_unix, ashpd, atspi, ksni, notify-rust, oo7)
+    # until they move to zbus 6. Unmaintained, with no known vulnerability;
+    # they carry only the session bus's own messages, never peer data.
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5.15.0, zbus 5's wire format, through the Linux desktop crates above." },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4.3.4, zbus 5's bus names, through the Linux desktop crates above." },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5.15.0, a proc macro (build time) of zvariant 5.15.0." },
 ]
 unused-ignored-advisory = "deny"
 
@@ -213,6 +221,8 @@ skip = [
     { crate = "spin@0.9.9", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "svgtypes@0.15.3", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "thiserror@1.0.69", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
+    { crate = "zbus@5.19.0", reason = "Linux desktop crates (accesskit_unix, ashpd, atspi, ksni, notify-rust, oo7) are on zbus 5; todoke-sys-linux uses 6.0.0. Upstream must converge." },
+    { crate = "zbus_macros@5.19.0", reason = "Proc macro of zbus 5.19.0 in the same split." },
     { crate = "thiserror-impl@1.0.69", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "toml@0.8.23", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },
     { crate = "toml_datetime@0.6.11", reason = "GUI toolkit (gpui-kit 0.7.3) tree; upstream must converge." },

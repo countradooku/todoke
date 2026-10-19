@@ -6,8 +6,7 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use zbus::blocking::Connection;
-use zbus::zvariant::{OwnedValue, Value};
+use zbus::{Connection, OwnedVariant, Variant};
 
 use crate::{desktop_entry, portal};
 
@@ -104,26 +103,30 @@ impl Autostart {
     }
 
     fn request_background(on: bool) -> io::Result<()> {
-        let connection = Connection::session().map_err(portal::bus)?;
-        let background = portal::proxy(&connection, "org.freedesktop.portal.Background")?;
-        let results = portal::request(&connection, |token| {
-            let options: HashMap<&str, Value<'_>> = HashMap::from([
-                ("handle_token", Value::from(token)),
-                (
-                    "reason",
-                    Value::from("Start todoke when you log in, to receive files"),
-                ),
-                ("autostart", Value::from(on)),
-                (
-                    "commandline",
-                    Value::from(vec!["todoke-desktop", "--background"]),
-                ),
-            ]);
-            background.call("RequestBackground", &("", options))
+        let results = zbus::block_on(async {
+            let connection = Connection::session().await.map_err(portal::bus)?;
+            let background =
+                portal::proxy(&connection, "org.freedesktop.portal.Background").await?;
+            portal::request(&connection, async |token| {
+                let options: HashMap<&str, Variant<'_>> = HashMap::from([
+                    ("handle_token", Variant::from(token)),
+                    (
+                        "reason",
+                        Variant::from("Start todoke when you log in, to receive files"),
+                    ),
+                    ("autostart", Variant::from(on)),
+                    (
+                        "commandline",
+                        Variant::from(vec!["todoke-desktop", "--background"]),
+                    ),
+                ]);
+                background.call("RequestBackground", &("", options)).await
+            })
+            .await
         })?;
         let granted = results
             .get("autostart")
-            .and_then(|value: &OwnedValue| bool::try_from(value).ok())
+            .and_then(|value: &OwnedVariant| bool::try_from(value).ok())
             .unwrap_or(false);
         if on && !granted {
             return Err(io::ErrorKind::PermissionDenied.into());

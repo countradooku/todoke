@@ -36,8 +36,13 @@ broken_intra_doc_links = "deny"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zeroize.workspace = true
-# The freedesktop Secret Service over the session bus (pure Rust; already
-# in the graph for GPUI's accessibility and portals).
-zbus = "=5.19.0"
+# The freedesktop Secret Service, portals, and NetworkManager over D-Bus
+# (pure Rust). Its async API, each call run to completion by
+# `zbus::block_on`: 6.0 has no blocking API.
+zbus = "=6.0.0"
+# zbus's runtime, for the keyring prompt's deadline.
+zruntime = { version = "=0.2.0", default-features = false, features = ["helper"] }
+# The `Stream` trait, to take the next signal from a `zbus::MessageStream`.
+futures-core = { version = "=0.3.34", default-features = false }
 # Connection UUIDs for direct links.
 getrandom.workspace = true

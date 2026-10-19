@@ -9,8 +9,7 @@ use std::io::{self, Read as _};
 use std::os::fd::AsFd as _;
 use std::os::unix::net::UnixStream;
 
-use zbus::blocking::Connection;
-use zbus::zvariant::{Fd, Value};
+use zbus::{Connection, Fd, Variant};
 use zeroize::Zeroizing;
 
 use crate::portal;
@@ -24,13 +23,18 @@ const MAX_SECRET: u64 = 1024;
 ///
 /// No portal (not sandboxed, or an old desktop); it refused.
 pub fn retrieve() -> io::Result<Zeroizing<Vec<u8>>> {
-    let connection = Connection::session().map_err(portal::bus)?;
-    let secret = portal::proxy(&connection, "org.freedesktop.portal.Secret")?;
     let (mut ours, theirs) = UnixStream::pair()?;
-    portal::request(&connection, |token| {
-        let options: HashMap<&str, Value<'_>> =
-            HashMap::from([("handle_token", Value::from(token))]);
-        secret.call("RetrieveSecret", &(Fd::from(theirs.as_fd()), options))
+    zbus::block_on(async {
+        let connection = Connection::session().await.map_err(portal::bus)?;
+        let secret = portal::proxy(&connection, "org.freedesktop.portal.Secret").await?;
+        portal::request(&connection, async |token| {
+            let options: HashMap<&str, Variant<'_>> =
+                HashMap::from([("handle_token", Variant::from(token))]);
+            secret
+                .call("RetrieveSecret", &(Fd::from(theirs.as_fd()), options))
+                .await
+        })
+        .await
     })?;
     // The portal wrote the secret and closed its copy; close ours to read
     // to the end.

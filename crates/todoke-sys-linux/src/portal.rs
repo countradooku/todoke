@@ -1,13 +1,18 @@
 //! Calls to XDG desktop portals that answer through a request object
 //! (`org.freedesktop.portal.Request`): the call returns at once, and the
 //! answer (often after the user decides in a dialog) comes as a signal.
+//!
+//! Like the rest of this crate, these are zbus's async calls, run to
+//! completion by one `zbus::block_on` in each public function.
 
+use core::num::NonZeroUsize;
+use core::pin::Pin;
 use std::collections::HashMap;
 use std::io;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use zbus::blocking::{Connection, MessageIterator, Proxy};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue};
+use futures_core::Stream as _;
+use zbus::{Connection, Message, MessageStream, OwnedObjectPath, OwnedVariant, Proxy};
 
 /// The portal service.
 pub(crate) const DESKTOP: &str = "org.freedesktop.portal.Desktop";
@@ -35,34 +40,61 @@ pub(crate) fn token() -> String {
     )
 }
 
-/// The unique bus name of the portal service now: answers and signals are
+/// The unique bus name that owns `name` now: answers and signals are
 /// matched against it on the bus and here, so another program cannot
-/// answer for the portal.
-pub(crate) fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
-    let name = zbus::names::BusName::try_from(DESKTOP).map_err(|error| bus(error.into()))?;
-    zbus::blocking::fdo::DBusProxy::new(connection)
-        .map_err(bus)?
+/// answer for that service.
+pub(crate) async fn owner_of(
+    connection: &Connection,
+    name: &str,
+) -> zbus::Result<zbus::names::OwnedUniqueName> {
+    let name = zbus::names::BusName::try_from(name)?;
+    zbus::fdo::DBusProxy::new(connection)
+        .await?
         .get_name_owner(name)
-        .map_err(|error| bus(error.into()))
+        .await
+        .map_err(zbus::Error::from)
+}
+
+/// The unique bus name of the portal service now.
+pub(crate) async fn owner(connection: &Connection) -> io::Result<zbus::names::OwnedUniqueName> {
+    owner_of(connection, DESKTOP).await.map_err(bus)
 }
 
 /// A proxy for `interface` of the portal.
-pub(crate) fn proxy<'a>(connection: &'a Connection, interface: &'a str) -> io::Result<Proxy<'a>> {
-    Proxy::new(connection, DESKTOP, PATH, interface).map_err(bus)
+pub(crate) async fn proxy<'a>(
+    connection: &'a Connection,
+    interface: &'a str,
+) -> io::Result<Proxy<'a>> {
+    Proxy::new(connection, DESKTOP, PATH, interface)
+        .await
+        .map_err(bus)
 }
 
-/// Calls `call` with a handle token and waits for the request's answer.
-/// Blocks until the portal answers (maybe after a dialog): call it off the
-/// UI thread.
+/// The signals that match `rule`, at most `queued` waiting.
+pub(crate) async fn signals(
+    connection: &Connection,
+    rule: zbus::match_rule::Builder<'_>,
+    queued: usize,
+) -> zbus::Result<MessageStream> {
+    MessageStream::for_match_rule(rule.build()?, connection, NonZeroUsize::new(queued)).await
+}
+
+/// The next message of `stream`; `None` once it ends.
+pub(crate) async fn next(stream: &mut MessageStream) -> Option<zbus::Result<Message>> {
+    core::future::poll_fn(|cx| Pin::new(&mut *stream).poll_next(cx)).await
+}
+
+/// Calls `call` with a handle token and waits for the request's answer,
+/// which may come after a dialog.
 ///
 /// # Errors
 ///
 /// The bus's error; `PermissionDenied` when the user (or the portal)
 /// refused; `Interrupted` when the request ended another way.
-pub(crate) fn request(
+pub(crate) async fn request(
     connection: &Connection,
-    call: impl FnOnce(&str) -> zbus::Result<OwnedObjectPath>,
-) -> io::Result<HashMap<String, OwnedValue>> {
+    call: impl AsyncFnOnce(&str) -> zbus::Result<OwnedObjectPath>,
+) -> io::Result<HashMap<String, OwnedVariant>> {
     let token = token();
     let sender = connection
         .unique_name()
@@ -73,17 +105,12 @@ pub(crate) fn request(
     // Listen before calling: the answer may come before the call returns.
     let rule = zbus::MatchRule::builder()
         .msg_type(zbus::message::Type::Signal)
-        .sender(owner(connection)?)
-        .map_err(bus)?
+        .sender(owner(connection).await?)
         .interface("org.freedesktop.portal.Request")
-        .map_err(bus)?
         .member("Response")
-        .map_err(bus)?
-        .path(path.as_str())
-        .map_err(bus)?
-        .build();
-    let answers = MessageIterator::for_match_rule(rule, connection, Some(4)).map_err(bus)?;
-    let handle = call(&token).map_err(bus)?;
+        .path(path.as_str());
+    let mut answers = signals(connection, rule, 4).await.map_err(bus)?;
+    let handle = call(&token).await.map_err(bus)?;
     if handle.as_str() != path {
         // A portal older than the handle_token option: the answer comes on
         // the path it returned, which this does not follow.
@@ -91,12 +118,11 @@ pub(crate) fn request(
             "portal: the request path is not the one asked for",
         ));
     }
-    let mut answers = answers;
-    let message = answers
-        .next()
+    let message = next(&mut answers)
+        .await
         .ok_or_else(|| io::Error::from(io::ErrorKind::UnexpectedEof))?
         .map_err(bus)?;
-    let (code, results): (u32, HashMap<String, OwnedValue>) =
+    let (code, results): (u32, HashMap<String, OwnedVariant>) =
         message.body().deserialize().map_err(bus)?;
     match code {
         0 => Ok(results),

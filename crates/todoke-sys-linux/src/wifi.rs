@@ -23,8 +23,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use zbus::blocking::{Connection, Proxy};
-use zbus::zvariant::{OwnedObjectPath, OwnedValue, Value};
+use zbus::{Connection, OwnedObjectPath, OwnedVariant, Proxy, Variant};
 use zeroize::Zeroizing;
 
 const NM: &str = "org.freedesktop.NetworkManager";
@@ -75,43 +74,57 @@ pub struct WifiDevice {
 /// `NetworkManager`, no system bus, or no Wi-Fi: `None`).
 #[must_use]
 pub fn probe() -> Option<WifiDevice> {
-    let connection = Connection::system().ok()?;
-    let manager = Proxy::new(&connection, NM, NM_PATH, NM).ok()?;
-    let devices: Vec<OwnedObjectPath> = manager.call("GetDevices", &()).ok()?;
-    devices.into_iter().find_map(|path| {
-        let device = Proxy::new(&connection, NM, path.clone(), DEVICE).ok()?;
-        let kind: u32 = device.get_property("DeviceType").ok()?;
-        let state: u32 = device.get_property("State").ok()?;
-        if kind != TYPE_WIFI || state <= STATE_UNAVAILABLE {
-            return None;
+    zbus::block_on(async {
+        let connection = Connection::system().await.ok()?;
+        let manager = Proxy::new(&connection, NM, NM_PATH, NM).await.ok()?;
+        let devices: Vec<OwnedObjectPath> = manager.call("GetDevices", &()).await.ok()?;
+        for path in devices {
+            if let Some(found) = wifi_device(&connection, path).await {
+                return Some(found);
+            }
         }
-        let interface: String = device.get_property("Interface").ok()?;
-        let sae = supports_sae(&connection, &interface);
-        Some(WifiDevice {
-            path,
-            interface,
-            sae,
-        })
+        None
+    })
+}
+
+/// The device at `path`, if it is a managed Wi-Fi device.
+async fn wifi_device(connection: &Connection, path: OwnedObjectPath) -> Option<WifiDevice> {
+    let device = Proxy::new(connection, NM, path.clone(), DEVICE)
+        .await
+        .ok()?;
+    let kind: u32 = device.get_property("DeviceType").await.ok()?;
+    let state: u32 = device.get_property("State").await.ok()?;
+    if kind != TYPE_WIFI || state <= STATE_UNAVAILABLE {
+        return None;
+    }
+    let interface: String = device.get_property("Interface").await.ok()?;
+    let sae = supports_sae(connection, &interface).await;
+    Some(WifiDevice {
+        path,
+        interface,
+        sae,
     })
 }
 
 /// Whether `wpa_supplicant` reports SAE for `interface` (`NetworkManager`'s
 /// own capabilities do not say); `None` if it would not answer.
-fn supports_sae(connection: &Connection, interface: &str) -> Option<bool> {
-    let check = || -> Option<bool> {
-        let supplicant = Proxy::new(connection, SUPPLICANT, SUPPLICANT_PATH, SUPPLICANT).ok()?;
-        let path: OwnedObjectPath = supplicant.call("GetInterface", &(interface,)).ok()?;
-        let iface = Proxy::new(connection, SUPPLICANT, path.as_str(), SUPPLICANT_INTERFACE).ok()?;
-        let capabilities: HashMap<String, OwnedValue> = iface.get_property("Capabilities").ok()?;
-        let key_mgmt: Vec<String> = capabilities
-            .get("KeyMgmt")?
-            .try_clone()
-            .ok()?
-            .try_into()
-            .ok()?;
-        Some(key_mgmt.iter().any(|value| value == "sae"))
-    };
-    check()
+async fn supports_sae(connection: &Connection, interface: &str) -> Option<bool> {
+    let supplicant = Proxy::new(connection, SUPPLICANT, SUPPLICANT_PATH, SUPPLICANT)
+        .await
+        .ok()?;
+    let path: OwnedObjectPath = supplicant.call("GetInterface", &(interface,)).await.ok()?;
+    let iface = Proxy::new(connection, SUPPLICANT, path.as_str(), SUPPLICANT_INTERFACE)
+        .await
+        .ok()?;
+    let capabilities: HashMap<String, OwnedVariant> =
+        iface.get_property("Capabilities").await.ok()?;
+    let key_mgmt: Vec<String> = capabilities
+        .get("KeyMgmt")?
+        .try_clone()
+        .ok()?
+        .try_into()
+        .ok()?;
+    Some(key_mgmt.iter().any(|value| value == "sae"))
 }
 
 /// A joined network: taken down (and, being volatile, deleted) when
@@ -139,9 +152,12 @@ impl core::fmt::Debug for Joined {
 
 impl Drop for Joined {
     fn drop(&mut self) {
-        if let Ok(manager) = Proxy::new(&self.connection, NM, NM_PATH, NM) {
-            let _: zbus::Result<()> = manager.call("DeactivateConnection", &(&self.active,));
-        }
+        zbus::block_on(async {
+            if let Ok(manager) = Proxy::new(&self.connection, NM, NM_PATH, NM).await {
+                let _: zbus::Result<()> =
+                    manager.call("DeactivateConnection", &(&self.active,)).await;
+            }
+        });
     }
 }
 
@@ -165,57 +181,78 @@ pub fn join(
     let user = std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .map_err(|_| io::Error::other("no user name for the connection's permissions"))?;
-    let connection = Connection::system().map_err(bus)?;
-    let manager = Proxy::new(&connection, NM, NM_PATH, NM).map_err(bus)?;
     let id = uuid()?;
+    let interface = interface_index(&device.interface)?;
     let settings = settings(&device.interface, ssid, passphrase, security, &user, &id);
-    let options: HashMap<&str, Value<'_>> = HashMap::from([
-        ("persist", Value::from("volatile")),
-        ("bind-activation", Value::from("dbus-client")),
+    let options: HashMap<&str, Variant<'_>> = HashMap::from([
+        ("persist", Variant::from("volatile")),
+        ("bind-activation", Variant::from("dbus-client")),
     ]);
-    let root = OwnedObjectPath::try_from("/").map_err(|error| bus(error.into()))?;
-    let (_, active, _): (
-        OwnedObjectPath,
-        OwnedObjectPath,
-        HashMap<String, OwnedValue>,
-    ) = manager
-        .call(
-            "AddAndActivateConnection2",
-            &(settings, &device.path, &root, options),
-        )
-        .map_err(bus)?;
-    // From here the connection is ours to take down, whatever happens.
-    let mut joined = Joined {
-        connection,
-        active,
-        local: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
-        interface: interface_index(&device.interface)?,
-    };
-    let active = Proxy::new(&joined.connection, NM, joined.active.clone(), ACTIVE).map_err(bus)?;
-    loop {
-        let state: u32 = active.get_property("State").map_err(bus)?;
-        match state {
-            ACTIVATED => break,
-            DEACTIVATED => return Err(io::Error::other("the network did not come up")),
-            _ if Instant::now() >= deadline => return Err(io::ErrorKind::TimedOut.into()),
-            _ if cancel.load(Ordering::SeqCst) => return Err(io::ErrorKind::Interrupted.into()),
-            _ => std::thread::sleep(POLL),
-        }
-    }
-    let (local, host) = addresses(&joined.connection, &active)?;
-    drop(active);
+    let root = OwnedObjectPath::try_from("/").map_err(bus)?;
+    let mut joined = zbus::block_on(async {
+        let connection = Connection::system().await.map_err(bus)?;
+        let manager = Proxy::new(&connection, NM, NM_PATH, NM)
+            .await
+            .map_err(bus)?;
+        let (_, active, _): (
+            OwnedObjectPath,
+            OwnedObjectPath,
+            HashMap<String, OwnedVariant>,
+        ) = manager
+            .call(
+                "AddAndActivateConnection2",
+                &(settings, &device.path, &root, options),
+            )
+            .await
+            .map_err(bus)?;
+        // From here the connection is ours to take down, whatever happens.
+        Ok::<_, io::Error>(Joined {
+            connection,
+            active,
+            local: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            host: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+            interface,
+        })
+    })?;
+    // Dropped outside `block_on` on an error: `Joined`'s `Drop` runs its own.
+    let (local, host) = zbus::block_on(activated(&joined, deadline, cancel))?;
     joined.local = local;
     joined.host = host;
     Ok(joined)
 }
 
+/// Waits for `joined` to come up and returns its addresses.
+async fn activated(
+    joined: &Joined,
+    deadline: Instant,
+    cancel: &AtomicBool,
+) -> io::Result<(IpAddr, IpAddr)> {
+    let runtime = zruntime::Runtime::<zruntime::Shared>::current()?;
+    let active = Proxy::new(&joined.connection, NM, joined.active.clone(), ACTIVE)
+        .await
+        .map_err(bus)?;
+    loop {
+        let state: u32 = active.get_property("State").await.map_err(bus)?;
+        match state {
+            ACTIVATED => break,
+            DEACTIVATED => return Err(io::Error::other("the network did not come up")),
+            _ if Instant::now() >= deadline => return Err(io::ErrorKind::TimedOut.into()),
+            _ if cancel.load(Ordering::SeqCst) => return Err(io::ErrorKind::Interrupted.into()),
+            _ => runtime.sleep(POLL).await,
+        }
+    }
+    addresses(&joined.connection, &active).await
+}
+
 /// This machine's IPv4 address on the activated connection and the host's
 /// (the DHCP router, else the IPv4 gateway).
-fn addresses(connection: &Connection, active: &Proxy<'_>) -> io::Result<(IpAddr, IpAddr)> {
-    let ip4: OwnedObjectPath = active.get_property("Ip4Config").map_err(bus)?;
-    let config = Proxy::new(connection, NM, ip4.as_str(), IP4).map_err(bus)?;
-    let data: Vec<HashMap<String, OwnedValue>> = config.get_property("AddressData").map_err(bus)?;
+async fn addresses(connection: &Connection, active: &Proxy<'_>) -> io::Result<(IpAddr, IpAddr)> {
+    let ip4: OwnedObjectPath = active.get_property("Ip4Config").await.map_err(bus)?;
+    let config = Proxy::new(connection, NM, ip4.as_str(), IP4)
+        .await
+        .map_err(bus)?;
+    let data: Vec<HashMap<String, OwnedVariant>> =
+        config.get_property("AddressData").await.map_err(bus)?;
     let (local, prefix) = data
         .iter()
         .find_map(|entry| {
@@ -224,19 +261,26 @@ fn addresses(connection: &Connection, active: &Proxy<'_>) -> io::Result<(IpAddr,
             Some((address.parse::<Ipv4Addr>().ok()?, prefix))
         })
         .ok_or_else(|| io::Error::other("the network gave no address"))?;
-    let dhcp: Option<Ipv4Addr> = (|| {
-        let path: OwnedObjectPath = active.get_property("Dhcp4Config").ok()?;
-        let dhcp = Proxy::new(connection, NM, path.as_str(), DHCP4).ok()?;
-        let options: HashMap<String, OwnedValue> = dhcp.get_property("Options").ok()?;
+    let dhcp: Option<Ipv4Addr> = async {
+        let path: OwnedObjectPath = active.get_property("Dhcp4Config").await.ok()?;
+        let dhcp = Proxy::new(connection, NM, path.as_str(), DHCP4)
+            .await
+            .ok()?;
+        let options: HashMap<String, OwnedVariant> = dhcp.get_property("Options").await.ok()?;
         let routers: String = options.get("routers")?.try_clone().ok()?.try_into().ok()?;
         routers.split_whitespace().next()?.parse().ok()
-    })();
-    let host = dhcp
-        .or_else(|| {
-            let gateway: String = config.get_property("Gateway").ok()?;
-            gateway.parse().ok()
-        })
-        .ok_or_else(|| io::Error::other("the network named no host"))?;
+    }
+    .await;
+    let gateway = async {
+        let gateway: String = config.get_property("Gateway").await.ok()?;
+        gateway.parse().ok()
+    };
+    let host = match dhcp {
+        Some(host) => host,
+        None => gateway
+            .await
+            .ok_or_else(|| io::Error::other("the network named no host"))?,
+    };
     // The host is on the link: its address within ours, never one that
     // only a route would reach.
     if host == local || !on_link(local, prefix, host) {
@@ -263,9 +307,9 @@ fn settings<'a>(
     security: Security,
     user: &str,
     uuid: &'a str,
-) -> HashMap<&'static str, HashMap<&'static str, Value<'a>>> {
+) -> HashMap<&'static str, HashMap<&'static str, Variant<'a>>> {
     let strings = |values: &[&str]| {
-        Value::from(
+        Variant::from(
             values
                 .iter()
                 .map(|value| (*value).to_owned())
@@ -273,45 +317,45 @@ fn settings<'a>(
         )
     };
     let connection = HashMap::from([
-        ("id", Value::from("todoke direct link")),
-        ("uuid", Value::from(uuid)),
-        ("type", Value::from("802-11-wireless")),
-        ("interface-name", Value::from(interface)),
-        ("autoconnect", Value::from(false)),
+        ("id", Variant::from("todoke direct link")),
+        ("uuid", Variant::from(uuid)),
+        ("type", Variant::from("802-11-wireless")),
+        ("interface-name", Variant::from(interface)),
+        ("autoconnect", Variant::from(false)),
         ("permissions", strings(&[&format!("user:{user}")])),
     ]);
     let wireless = HashMap::from([
-        ("ssid", Value::from(ssid.as_bytes().to_vec())),
-        ("mode", Value::from("infrastructure")),
+        ("ssid", Variant::from(ssid.as_bytes().to_vec())),
+        ("mode", Variant::from("infrastructure")),
         // A random address for this network: the host learns nothing that
         // identifies this machine elsewhere.
-        ("cloned-mac-address", Value::from("random")),
+        ("cloned-mac-address", Variant::from("random")),
     ]);
     let mut wireless_security = HashMap::from([
         (
             "key-mgmt",
-            Value::from(match security {
+            Variant::from(match security {
                 Security::Wpa3 => "sae",
                 Security::Wpa2 => "wpa-psk",
             }),
         ),
-        ("psk", Value::from(passphrase)),
+        ("psk", Variant::from(passphrase)),
         ("proto", strings(&["rsn"])),
         ("pairwise", strings(&["ccmp"])),
         ("group", strings(&["ccmp"])),
     ]);
     if security == Security::Wpa3 {
         // Protected management frames: required.
-        wireless_security.insert("pmf", Value::from(3_i32));
+        wireless_security.insert("pmf", Variant::from(3_i32));
     }
     let ipv4 = HashMap::from([
-        ("method", Value::from("auto")),
-        ("never-default", Value::from(true)),
-        ("dhcp-send-hostname", Value::from(false)),
-        ("ignore-auto-dns", Value::from(true)),
-        ("ignore-auto-routes", Value::from(true)),
+        ("method", Variant::from("auto")),
+        ("never-default", Variant::from(true)),
+        ("dhcp-send-hostname", Variant::from(false)),
+        ("ignore-auto-dns", Variant::from(true)),
+        ("ignore-auto-routes", Variant::from(true)),
     ]);
-    let ipv6 = HashMap::from([("method", Value::from("link-local"))]);
+    let ipv6 = HashMap::from([("method", Variant::from("link-local"))]);
     HashMap::from([
         ("connection", connection),
         ("802-11-wireless", wireless),
@@ -359,7 +403,7 @@ fn interface_index(name: &str) -> io::Result<u32> {
 mod tests {
     use super::*;
 
-    fn string(value: &Value<'_>) -> Option<String> {
+    fn string(value: &Variant<'_>) -> Option<String> {
         value.try_clone().ok()?.try_into().ok()
     }
 
@@ -377,26 +421,29 @@ mod tests {
         );
         let ipv4 = &wpa3["ipv4"];
         for key in ["never-default", "ignore-auto-dns", "ignore-auto-routes"] {
-            assert_eq!(ipv4[key], Value::from(true), "{key}");
+            assert_eq!(ipv4[key], Variant::from(true), "{key}");
         }
-        assert_eq!(wpa3["connection"]["autoconnect"], Value::from(false));
-        assert_eq!(ipv4["dhcp-send-hostname"], Value::from(false));
+        assert_eq!(wpa3["connection"]["autoconnect"], Variant::from(false));
+        assert_eq!(ipv4["dhcp-send-hostname"], Variant::from(false));
         assert_eq!(
             string(&wpa3["802-11-wireless"]["cloned-mac-address"]).as_deref(),
             Some("random")
         );
         assert_eq!(
             wpa3["connection"]["permissions"],
-            Value::from(vec!["user:alice".to_owned()])
+            Variant::from(vec!["user:alice".to_owned()])
         );
         assert_eq!(
             string(&wpa3["802-11-wireless-security"]["key-mgmt"]).as_deref(),
             Some("sae")
         );
-        assert_eq!(wpa3["802-11-wireless-security"]["pmf"], Value::from(3_i32));
+        assert_eq!(
+            wpa3["802-11-wireless-security"]["pmf"],
+            Variant::from(3_i32)
+        );
         assert_eq!(
             wpa3["802-11-wireless"]["ssid"],
-            Value::from(b"todoke-0123456789abcdef".to_vec())
+            Variant::from(b"todoke-0123456789abcdef".to_vec())
         );
         let wpa2 = settings("wlan0", "s", "pass", Security::Wpa2, "alice", "u");
         assert_eq!(
