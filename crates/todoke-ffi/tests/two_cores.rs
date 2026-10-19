@@ -3,7 +3,7 @@
 //! arrive.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use todoke_ffi::types::{CoreEvent, KeyProtection, KeyStoragePolicy, Settings, UwbController};
@@ -111,7 +111,6 @@ fn wait_for<T>(
 
 #[test]
 fn two_cores_pair_offer_accept_and_receive() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("a")?, Scratch::new("b")?);
     let a = Core::new(settings(&a_home.0))?;
     let a_events = a.subscribe()?;
@@ -172,7 +171,6 @@ fn two_cores_pair_offer_accept_and_receive() -> TestResult {
 
 #[test]
 fn malformed_requests_are_typed_errors() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("errors")?;
     let core = Core::new(settings(&home.0))?;
     assert!(matches!(
@@ -200,7 +198,6 @@ fn malformed_requests_are_typed_errors() -> TestResult {
 /// key.
 #[test]
 fn key_store_policy_and_wiped_keys() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("keys")?;
     // A key store with a policy that allows a file: refused.
     for policy in [KeyStoragePolicy::File, KeyStoragePolicy::Auto] {
@@ -223,7 +220,6 @@ fn key_store_policy_and_wiped_keys() -> TestResult {
 /// Subscriptions are bounded in number, and each ends when closed.
 #[test]
 fn subscriptions_are_bounded() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("subscriptions")?;
     let core = Core::new(settings(&home.0))?;
     let mut held = Vec::new();
@@ -250,7 +246,6 @@ fn subscriptions_are_bounded() -> TestResult {
 /// A subscription ends when its core stops, even one taken just before.
 #[test]
 fn subscriptions_end_when_the_core_stops() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("stop")?;
     let core = Core::new(settings(&home.0))?;
     let events = core.subscribe()?;
@@ -322,32 +317,11 @@ impl Notifier for Panicky {
     }
 }
 
-/// Held for the whole of every test: one test's cores at a time on the
-/// LAN, as in the Swift and Kotlin suites. A scanner dials the first
-/// strangers it finds nearby, and an offer allows one attempt (PROTOCOL
-/// §3.1): tests pairing at once would dial each other's displayers and
-/// burn their offers, and cores starting and stopping beside a pairing
-/// made it fail on macOS CI.
-fn serial() -> MutexGuard<'static, ()> {
-    static SERIAL: Mutex<()> = Mutex::new(());
-    SERIAL.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// B pairs with A by QR. A scanner gives up when the first strangers it
-/// sees (perhaps a dropped core's record still cached) do not answer
-/// before A appears; that is the core's discovery, not the binding, so a
-/// refused pairing is tried again, after a moment, with a new offer.
+/// B pairs with A by QR. Tests run side by side: B's scan dials only the
+/// core advertising its QR's stranger token (PROTOCOL §9), never another
+/// test's displayer or a stopped core's cached record.
 fn pair(a: &Core, b: &Core) -> Result<ContactHandle, TodokeError> {
-    let mut attempts = 0;
-    loop {
-        attempts += 1;
-        match b.pair_scan_qr(a.pair_show_qr()?.text()) {
-            Err(TodokeError::Pairing { .. }) if attempts < 3 => {
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            result => return result,
-        }
-    }
+    b.pair_scan_qr(a.pair_show_qr()?.text())
 }
 
 /// Two cores over loopback, B paired with A by QR; B's handle to A.
@@ -366,7 +340,6 @@ fn paired(
 /// or its place.
 #[test]
 fn notifications_survive_a_panicking_notifier() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("notify-a")?, Scratch::new("notify-b")?);
     let (a, b, a_contact) = paired(&a_home, &b_home)?;
     let told = Arc::new(Told::default());
@@ -416,7 +389,6 @@ fn notifications_survive_a_panicking_notifier() -> TestResult {
 /// is not there, a path with a NUL.
 #[test]
 fn sending_checks_its_paths() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("paths-a")?, Scratch::new("paths-b")?);
     let (a, b, a_contact) = paired(&a_home, &b_home)?;
     let file = b_home.0.join("there.txt");
@@ -457,7 +429,6 @@ fn sending_checks_its_paths() -> TestResult {
 fn open_files_are_sent_under_their_names() -> TestResult {
     use std::io::Read as _;
     use std::os::fd::IntoRawFd as _;
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("fds-a")?, Scratch::new("fds-b")?);
     let (a, b, a_contact) = paired(&a_home, &b_home)?;
     let a_events = a.subscribe()?;
@@ -508,7 +479,6 @@ fn open_files_are_sent_under_their_names() -> TestResult {
 /// Handles to things the core does not know answer with typed errors.
 #[test]
 fn unknown_handles_are_typed_errors() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("unknown")?;
     let core = Core::new(settings(&home.0))?;
     let stranger = core.contact("ab".repeat(32))?;
@@ -533,7 +503,6 @@ fn unknown_handles_are_typed_errors() -> TestResult {
 /// ID; another profile in the same store gets its own ID and key.
 #[test]
 fn key_stores_hold_one_key_per_profile() -> TestResult {
-    let _serial = serial();
     let (first, second) = (Scratch::new("profile-1")?, Scratch::new("profile-2")?);
     let store = Arc::new(Memory::default());
     let start = |home: &Scratch| {
@@ -580,7 +549,6 @@ impl KeyStore for Canned {
 /// cancelled the unlock) with `Locked`; nothing falls back to a file.
 #[test]
 fn failing_key_stores_stop_the_start() -> TestResult {
-    let _serial = serial();
     let refused = KeyStoreError::Refused {
         message: "denied".into(),
     };
@@ -623,7 +591,6 @@ fn failing_key_stores_stop_the_start() -> TestResult {
 /// before anything is opened.
 #[test]
 fn presence_needs_the_platform_policy() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("presence")?;
     for policy in [KeyStoragePolicy::Auto, KeyStoragePolicy::File] {
         let mut asked = settings(&home.0);
@@ -642,7 +609,6 @@ fn presence_needs_the_platform_policy() -> TestResult {
 /// look for its key under another name).
 #[test]
 fn an_unnamed_profile_does_not_start() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("unnamed")?;
     let mut asked = settings(&home.0);
     asked.key_storage = KeyStoragePolicy::Platform;
@@ -682,7 +648,6 @@ impl WifiLinks for NoLinks {
 /// The app gives the core its links once; a second time is refused.
 #[test]
 fn links_are_given_once() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("link")?;
     let core = Core::new(settings(&home.0))?;
     core.set_links(Arc::new(NoLinks))?;
@@ -698,7 +663,6 @@ fn links_are_given_once() -> TestResult {
 /// own, and A's target names both addresses and the same key.
 #[test]
 fn pointing_between_two_cores() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("point-a")?, Scratch::new("point-b")?);
     let (a, b, _) = paired(&a_home, &b_home)?;
     let (a_events, b_events) = (a.subscribe()?, b.subscribe()?);
@@ -763,7 +727,6 @@ fn pointing_between_two_cores() -> TestResult {
 /// B's comes back, and A's target names both, as bytes.
 #[test]
 fn peer_pointing_between_two_cores() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("peer-a")?, Scratch::new("peer-b")?);
     let (a, b, _) = paired(&a_home, &b_home)?;
     let (a_events, b_events) = (a.subscribe()?, b.subscribe()?);
@@ -824,21 +787,11 @@ fn read_tag(tag: &NfcTag) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
 /// B pairs with A by tapping: A's tag serves its QR offer.
 #[test]
 fn pairing_by_nfc() -> TestResult {
-    let _serial = serial();
     let (a_home, b_home) = (Scratch::new("nfc-a")?, Scratch::new("nfc-b")?);
     let a = Core::new(settings(&a_home.0))?;
     let b = Core::new(settings(&b_home.0))?;
-    let mut attempts = 0;
-    let contact = loop {
-        attempts += 1;
-        let message = read_tag(&a.pair_show_qr()?.nfc_tag()?)?;
-        match b.pair_scan_nfc(message) {
-            Err(TodokeError::Pairing { .. }) if attempts < 3 => {
-                std::thread::sleep(Duration::from_secs(1));
-            }
-            result => break result?,
-        }
-    };
+    let message = read_tag(&a.pair_show_qr()?.nfc_tag()?)?;
+    let contact = b.pair_scan_nfc(message)?;
     assert_eq!(contact.device(), a.status()?.device);
     Ok(())
 }
@@ -846,7 +799,6 @@ fn pairing_by_nfc() -> TestResult {
 /// A tag read that is no pairing offer is refused before anything else.
 #[test]
 fn nfc_messages_that_are_no_offer_are_refused() -> TestResult {
-    let _serial = serial();
     let home = Scratch::new("nfc")?;
     let core = Core::new(settings(&home.0))?;
     for message in [Vec::new(), vec![0xd2, 0, 0], vec![0; 2048]] {
